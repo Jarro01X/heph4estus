@@ -1,0 +1,55 @@
+# Go related
+/bin/
+/pkg/
+*.exe
+*.test
+*.prof
+*.out
+/vendor/
+/Godeps/
+
+# Terraform related
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terragrunt-cache/
+crash.log
+terraform.tfplan
+.terraform.lock.hcl
+
+# Local development environment
+.env
+.envrc
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build artifacts
+/dist/
+/build/
+
+# AWS credentials
+.aws/
+credentials
+aws-credentials
+aws.json
+
+# Binaries
+/cmd/consumer/consumer
+/cmd/producer/producer
+
+# Target files (specific to this project)
+/cmd/producer/targets.txt
+
+# Log files
+*.log
+
+# Other
+*.pem
+*.key
+*.crt
+*.cer
+*.pprof
