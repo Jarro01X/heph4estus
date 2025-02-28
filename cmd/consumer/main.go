@@ -1,121 +1,116 @@
 package main
 
 import (
-	"bytes"         // Needed for handling binary data (for S3 uploads)
-	"context"       // For AWS API context management
-	"encoding/json" // For JSON marshaling/unmarshaling
-	"fmt"           // For string formatting and printing
-	"log"           // For logging messages and errors
-	"os"            // For environment variables and file operations
-	"os/exec"       // For executing nmap commands
-	"strings"       // For string manipulation functions
-	"time"          // For timestamps and delays
+	"context"
+	"encoding/json"
+	"fmt"
+	"nmap-scanner/internal/aws"
+	appconfig "nmap-scanner/internal/config"
+	"nmap-scanner/internal/logger"
+	"nmap-scanner/internal/models"
+	"nmap-scanner/internal/scanner"
+	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"         // Core AWS SDK functionality
-	"github.com/aws/aws-sdk-go-v2/config"      // AWS configuration management
-	"github.com/aws/aws-sdk-go-v2/service/s3"  // AWS S3 operations
-	"github.com/aws/aws-sdk-go-v2/service/sqs" // AWS SQS operations
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
-type ScanTask struct {
-	Target  string `json:"target"`
-	Options string `json:"options"`
-}
-
-type ScanResult struct {
-	Target    string    `json:"target"`
-	Output    string    `json:"output"`
-	Error     string    `json:"error,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
 func main() {
-	// Initialize AWS clients
-	log.Println("Scanner application starting...")
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	log := logger.NewSimpleLogger()
+	log.Info("Scanner consumer application starting...")
+
+	// Load configuration
+	cfg, err := appconfig.NewConsumerConfig()
 	if err != nil {
-		log.Fatalf("Unable to load SDK config: %v", err)
+		log.Fatal("Failed to load configuration: %v", err)
 	}
-	log.Println("AWS SDK config loaded successfully")
 
-	sqsClient := sqs.NewFromConfig(cfg)
-	s3Client := s3.NewFromConfig(cfg)
-	queueUrl := os.Getenv("QUEUE_URL")
+	log.Info("Using queue URL: %s", cfg.QueueURL)
+	log.Info("Using S3 bucket: %s", cfg.S3Bucket)
 
-	log.Printf("Using queue URL: %s", queueUrl)
-	log.Printf("Using S3 bucket: %s", os.Getenv("S3_BUCKET"))
+	// Initialize AWS clients
+	log.Info("Initializing AWS clients...")
+	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Fatal("Unable to load SDK config: %v", err)
+	}
 
-	// Set a timeout for message retrieval
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sqsClient := aws.NewSQSClient(awsCfg, log)
+	s3Client := aws.NewS3Client(awsCfg, log)
+	scannerSvc := scanner.NewScanner(log)
+
+	// Process messages
+	processMessage(log, cfg, sqsClient, s3Client, scannerSvc)
+}
+
+func processMessage(
+	log logger.Logger,
+	cfg *appconfig.ConsumerConfig,
+	sqsClient *aws.SQSClient,
+	s3Client *aws.S3Client,
+	scannerSvc *scanner.Scanner,
+) {
+	// Set a timeout for the entire processing (10 minutes)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	log.Println("Waiting for message from SQS...")
-	sqsResult, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:            &queueUrl,
-		MaxNumberOfMessages: 1,
-		WaitTimeSeconds:     20, // Long polling
-	})
+	log.Info("Waiting for message from SQS...")
+	sqsReceiveCtx, sqsReceiveCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer sqsReceiveCancel()
 
+	sqsResult, err := sqsClient.ReceiveMessage(sqsReceiveCtx, cfg.QueueURL)
 	if err != nil {
-		log.Fatalf("Error receiving message: %v", err)
+		log.Fatal("Error receiving message: %v", err)
 	}
 
 	if len(sqsResult.Messages) == 0 {
-		log.Println("No messages received within timeout period, exiting")
+		log.Info("No messages received within timeout period, exiting")
 		return
 	}
 
-	log.Printf("Received message, processing...")
+	message := sqsResult.Messages[0]
+	log.Info("Received message, processing...")
 
 	// Process the message
-	message := sqsResult.Messages[0]
-	var task ScanTask
+	var task models.ScanTask
 	if err := json.Unmarshal([]byte(*message.Body), &task); err != nil {
-		log.Fatalf("Error unmarshaling task: %v", err)
+		log.Error("Error unmarshaling task: %v", err)
+		// Delete the message anyway to prevent it from getting stuck in the queue
+		if err = sqsClient.DeleteMessage(ctx, cfg.QueueURL, message.ReceiptHandle); err != nil {
+			log.Error("Error deleting malformed message: %v", err)
+		}
+		return
 	}
 
-	// Execute nmap scan
-	log.Printf("Running nmap scan for target: %s with options: %s", task.Target, task.Options)
-	cmd := exec.Command("nmap", append([]string{task.Target}, strings.Fields(task.Options)...)...)
-	output, err := cmd.CombinedOutput()
-
-	// Prepare scan result
-	scanResult := ScanResult{
-		Target:    task.Target,
-		Output:    string(output),
-		Timestamp: time.Now(),
-	}
-	if err != nil {
-		scanResult.Error = err.Error()
-		log.Printf("Scan error: %v", err)
-	} else {
-		log.Println("Scan completed successfully")
-	}
+	log.Info("Starting scan for target: %s", task.Target)
+	scanResult := scannerSvc.RunScan(task)
+	log.Info("Scan completed for target: %s, success: %v", task.Target, scanResult.Error == "")
 
 	// Upload result to S3
-	log.Println("Uploading result to S3")
-	resultJSON, _ := json.Marshal(scanResult)
-	s3Key := fmt.Sprintf("scans/%s_%d.json", task.Target, time.Now().Unix())
-
-	_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: aws.String(os.Getenv("S3_BUCKET")),
-		Key:    aws.String(s3Key),
-		Body:   bytes.NewReader(resultJSON),
-	})
+	log.Info("Uploading result to S3 for target: %s", task.Target)
+	resultJSON, err := scannerSvc.FormatResult(scanResult)
 	if err != nil {
-		log.Fatalf("Error uploading to S3: %v", err)
-	}
-	log.Printf("Result uploaded to S3: %s", s3Key)
+		log.Error("Error formatting result for target %s: %v", task.Target, err)
+		// Continue to delete the message
+	} else {
+		s3Key := fmt.Sprintf("scans/%s_%d.json", task.Target, time.Now().Unix())
+		s3UploadCtx, s3UploadCancel := context.WithTimeout(ctx, 1*time.Minute)
+		defer s3UploadCancel()
 
-	// Delete processed message
-	log.Println("Deleting message from SQS")
-	_, err = sqsClient.DeleteMessage(context.TODO(), &sqs.DeleteMessageInput{
-		QueueUrl:      &queueUrl,
-		ReceiptHandle: message.ReceiptHandle,
-	})
-	if err != nil {
-		log.Fatalf("Error deleting message: %v", err)
+		if err = s3Client.PutObject(s3UploadCtx, cfg.S3Bucket, s3Key, resultJSON); err != nil {
+			log.Error("Error uploading to S3 for target %s: %v", task.Target, err)
+			// Continue to delete the message
+		} else {
+			log.Info("Result uploaded to S3: %s", s3Key)
+		}
 	}
 
-	log.Println("Message processing complete, exiting")
+	// Delete processed message regardless of scan outcome
+	log.Info("Deleting message from SQS for target: %s", task.Target)
+	if err = sqsClient.DeleteMessage(ctx, cfg.QueueURL, message.ReceiptHandle); err != nil {
+		log.Error("Error deleting message for target %s: %v", task.Target, err)
+	} else {
+		log.Info("Message deleted from SQS for target: %s", task.Target)
+	}
+
+	log.Info("Message processing complete for target: %s", task.Target)
 }
