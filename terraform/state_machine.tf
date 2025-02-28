@@ -54,6 +54,8 @@ resource "aws_sfn_state_machine" "nmap_scanner" {
                   }
                 }
               }
+              # Add timeout for ECS task - 8 minutes
+              TimeoutSeconds = 480
               Retry = [
                 {
                   ErrorEquals = ["States.ALL"]
