@@ -56,7 +56,7 @@ docker build -t nmap-scanner .
 ECR_REPO=repo.url.example
 
 # Please copy everything that comes before the / in the ecr_repository_url output and overwrite repo.url.example with it
-ECR_REGISTRY=$(echo $ECR_REPO | cut -d/ -f1)
+ECR_REGISTRY=registtry.repo.com
 
 # Login to ECR
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
