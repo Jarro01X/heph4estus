@@ -1,0 +1,17 @@
+run:
+  timeout: 3m
+  skip-dirs:
+    - vendor
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosimple
+
+issues:
+  exclude-generated-strict: true
