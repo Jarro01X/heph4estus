@@ -10,7 +10,6 @@ linters:
     - unused
     - ineffassign
     - gosimple
-    - gomod
 
 issues:
   exclude-dirs:
