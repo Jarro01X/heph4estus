@@ -37,12 +37,8 @@ credentials
 aws-credentials
 aws.json
 
-# Binaries
-/cmd/consumer/consumer
-/cmd/producer/producer
-
-# Target files (specific to this project)
-/cmd/producer/targets.txt
+# Target files
+targets.txt
 
 # Log files
 *.log

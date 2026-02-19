@@ -1,10 +1,9 @@
-package scanner
+package nmap
 
 import (
 	"context"
 	"encoding/json"
-	"nmap-scanner/internal/logger"
-	"nmap-scanner/internal/models"
+	"heph4estus/internal/logger"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,7 +22,7 @@ func NewScanner(logger logger.Logger) *Scanner {
 }
 
 // RunScan runs an nmap scan for the given task
-func (s *Scanner) RunScan(task models.ScanTask) models.ScanResult {
+func (s *Scanner) RunScan(task ScanTask) ScanResult {
 	s.logger.Info("Running nmap scan for target: %s with options: %s", task.Target, task.Options)
 
 	args := append([]string{task.Target}, strings.Fields(task.Options)...)
@@ -37,7 +36,7 @@ func (s *Scanner) RunScan(task models.ScanTask) models.ScanResult {
 	cmd := exec.CommandContext(ctx, "nmap", args...)
 	output, err := cmd.CombinedOutput()
 
-	result := models.ScanResult{
+	result := ScanResult{
 		Target:    task.Target,
 		Output:    string(output),
 		Timestamp: time.Now(),
@@ -59,9 +58,9 @@ func (s *Scanner) RunScan(task models.ScanTask) models.ScanResult {
 }
 
 // ParseTargets parses targets from a file content
-func (s *Scanner) ParseTargets(content string, defaultOptions string) []models.ScanTask {
+func (s *Scanner) ParseTargets(content string, defaultOptions string) []ScanTask {
 	lines := strings.Split(strings.TrimSpace(content), "\n")
-	targets := make([]models.ScanTask, 0, len(lines))
+	targets := make([]ScanTask, 0, len(lines))
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -74,7 +73,7 @@ func (s *Scanner) ParseTargets(content string, defaultOptions string) []models.S
 			continue
 		}
 
-		target := models.ScanTask{
+		target := ScanTask{
 			Target:  parts[0],
 			Options: defaultOptions,
 		}
@@ -88,6 +87,6 @@ func (s *Scanner) ParseTargets(content string, defaultOptions string) []models.S
 }
 
 // FormatResult formats a scan result as JSON
-func (s *Scanner) FormatResult(result models.ScanResult) ([]byte, error) {
+func (s *Scanner) FormatResult(result ScanResult) ([]byte, error) {
 	return json.Marshal(result)
 }

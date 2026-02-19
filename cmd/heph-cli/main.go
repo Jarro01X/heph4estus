@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"nmap-scanner/internal/aws"
-	appconfig "nmap-scanner/internal/config"
-	"nmap-scanner/internal/logger"
-	"nmap-scanner/internal/models"
-	"nmap-scanner/internal/scanner"
+	"heph4estus/internal/cloud/aws"
+	appconfig "heph4estus/internal/config"
+	"heph4estus/internal/logger"
+	"heph4estus/internal/tools/nmap"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -51,14 +50,14 @@ func main() {
 	}
 
 	sfnClient := aws.NewSFNClient(awsCfg, log)
-	scannerSvc := scanner.NewScanner(log)
+	scannerSvc := nmap.NewScanner(log)
 
 	// Parse targets and prepare Step Functions input
 	targets := scannerSvc.ParseTargets(string(content), *defaultOptions)
 	log.Info("Parsed %d targets from file", len(targets))
 
 	// Start Step Functions execution
-	input := models.StepFunctionInput{Targets: targets}
+	input := nmap.StepFunctionInput{Targets: targets}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
 		log.Fatal("Error marshaling input: %v", err)

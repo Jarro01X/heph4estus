@@ -9,66 +9,39 @@
 
 ## Project Overview
 
-Heph4estus is a CLI app that takes care of creating cloud infrastructure and handling data for red team tools. For an in-depth explanation of the architecture, roadmap, and the project as a whole please check [hephaestus.tools](https://www.hephaestus.tools).
+Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and distributed execution of red team tools. For an in-depth explanation of the architecture, roadmap, and the project as a whole please check [hephaestus.tools](https://www.hephaestus.tools).
+
+**You provide:** cloud credentials + input files (targets, hashes). **Heph4estus handles:** infrastructure provisioning, container builds, job orchestration, result collection, and teardown.
+
+**Planned tools:** Hashcat (distributed GPU cracking across EC2 spot instances, with rules support), Naabu+Nmap pipeline (fast port discovery then deep scan). See `ARCHITECTURE.md` for the full roadmap.
 
 ## Requirements
 
-### Software Requirements
-
-- **Go 1.21+**: For building and running the producer/consumer applications
-- **Docker**: For building and pushing container images
-- **Terraform 1.0+**: For deploying the infrastructure
+- **Go 1.21+**: For building the application
+- **Docker**: For building container images (managed by heph4estus)
+- **Terraform 1.0+**: For infrastructure provisioning (managed by heph4estus)
 - **AWS CLI**: Configured with appropriate credentials and permissions
-- **Nmap**: Already included in the container image for scanning
 
-## Setup Instructions
+## Quick Start
 
-### 1. Clone the Repository
+### 1. Clone and Build
 
 ```bash
 git clone <repository-url>
 cd heph4estus
+go build -o bin/heph-cli cmd/heph-cli/main.go
 ```
 
-### 2. Deploy Infrastructure with Terraform
+### 2. Authenticate with AWS
 
 ```bash
-# Initialize Terraform
-cd terraform/environments/dev
-terraform init
-
-# Review the planned changes
-terraform plan
-
-# Apply the changes
-terraform apply
+aws sso login
+# or configure credentials via env vars / ~/.aws/credentials
 ```
 
-### 3. Build and Push the Container Image
+### 3. Create a Targets File
 
-Once Terraform finish instatiating the necessary infrastructure it will output specific arns and urls that will be crucial for the following steps
-
-```bash
-# Build the Docker image
-docker build -t nmap-scanner .
-
-# Please copy the ecr_repositopry_url output and paste it here
-ECR_REPO=repo.url.example
-
-# Please copy everything that comes before the / in the ecr_repository_url output and overwrite repo.url.example with it
-ECR_REGISTRY=registtry.repo.com
-
-# Login to ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
-
-# Tag and push the image
-docker tag nmap-scanner:latest $ECR_REPO:latest
-docker push $ECR_REPO:latest
-```
-
-### 4. Create a Targets File
-
-Create a file named `targets.txt` with a list of targets to scan, one per line:
+Create a file named `targets.txt` with one target per line:
 
 ```
 example.com -sV -p 80,443
@@ -76,48 +49,55 @@ example.com -sV -p 80,443
 192.168.1.1 -A
 ```
 
-Format: `<target> [nmap options]`
+Format: `<target> [nmap options]`. Default options are `-sS` if none specified.
 
-If no options are specified, the default options (`-sS`) will be used. Currently the project only has support for scanning targets that are open to the internet.
-
-### 5. Build the Producer Application
+### 4. Run
 
 ```bash
-# Build the producer
-go build -o bin/producer cmd/producer/main.go
+# CLI (handles deploy → scan → results automatically)
+./bin/heph-cli nmap --file targets.txt
+
+# Or launch the TUI for interactive use
+./bin/heph4estus
 ```
 
-## Running the Scanner
+The tool will:
+1. Show you a Terraform plan for the required infrastructure
+2. Wait for your approval
+3. Deploy the infrastructure and push container images
+4. Submit your scan job and monitor progress
+5. Collect and display results
 
-### Start Scanning
+### 5. Clean Up
+
+Cleanup is prompted from within the TUI/CLI after results are collected, or can be run manually:
 
 ```bash
-# Please copy the state_machine_arn and paste it here
-export STATE_MACHINE_ARN=arn.example.aws
-
-# Run the producer with your targets file
-./bin/producer -file targets.txt
+./bin/heph-cli infra destroy --tool nmap
 ```
 
-### Viewing Results
+## Development
 
-Scan results are stored in JSON format in the S3 bucket created by Terraform:
-
-```bash
-# Please copy the s3_bucket_name in the output and paste it below
-S3_BUCKET=s3.bucketname.holder
-
-# List scan results
-aws s3 ls s3://$S3_BUCKET/scans/
-
-# Download a specific result
-aws s3 cp s3://$S3_BUCKET/scans/example.com_1646347520.json .
-```
-
-## Clean Up
-Go to your S3 and delete the files currently inside, then run the following:
+For manual infrastructure management during development:
 
 ```bash
-cd terraform/environments/dev
+# Deploy infrastructure manually
+cd deployments/aws/nmap/environments/dev
+terraform init && terraform plan && terraform apply
+
+# Build and push container image manually
+docker build -t nmap-scanner -f containers/nmap/Dockerfile .
+ECR_REPO=<ecr_repository_url from terraform output>
+ECR_REGISTRY=<registry portion of ECR_REPO>
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
+docker tag nmap-scanner:latest $ECR_REPO:latest
+docker push $ECR_REPO:latest
+
+# Run CLI directly with a state machine ARN
+export STATE_MACHINE_ARN=<state_machine_arn from terraform output>
+./bin/heph-cli -file targets.txt
+
+# Tear down (empty S3 bucket first)
+cd deployments/aws/nmap/environments/dev
 terraform destroy
 ```

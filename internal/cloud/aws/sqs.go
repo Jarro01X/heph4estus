@@ -2,7 +2,7 @@ package aws
 
 import (
 	"context"
-	"nmap-scanner/internal/logger"
+	"heph4estus/internal/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"

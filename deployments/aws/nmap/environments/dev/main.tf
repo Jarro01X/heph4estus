@@ -8,8 +8,8 @@ locals {
 
 # Create network infrastructure
 module "networking" {
-  source = "../../modules/networking"
-  
+  source = "../../../shared/networking"
+
   vpc_cidr     = var.vpc_cidr
   az_count     = var.az_count
   name_prefix  = var.name_prefix
@@ -18,8 +18,8 @@ module "networking" {
 
 # Create storage for scan results
 module "storage" {
-  source = "../../modules/storage"
-  
+  source = "../storage"
+
   name_prefix           = var.name_prefix
   environment           = local.environment
   force_destroy_bucket  = true  # Make it easier to clean up in dev
@@ -28,16 +28,16 @@ module "storage" {
 
 # Create messaging infrastructure
 module "messaging" {
-  source = "../../modules/messaging"
-  
+  source = "../messaging"
+
   name_prefix  = var.name_prefix
   environment  = local.environment
 }
 
 # Create security roles and policies
 module "security" {
-  source = "../../modules/security"
-  
+  source = "../../../shared/security"
+
   name_prefix    = var.name_prefix
   environment    = local.environment
   sqs_queue_arn  = module.messaging.queue_arn
@@ -46,8 +46,8 @@ module "security" {
 
 # Create compute resources
 module "compute" {
-  source = "../../modules/compute"
-  
+  source = "../compute"
+
   name_prefix            = var.name_prefix
   environment            = local.environment
   aws_region             = var.aws_region
@@ -62,8 +62,8 @@ module "compute" {
 
 # Create workflow orchestration
 module "orchestration" {
-  source = "../../modules/orchestration"
-  
+  source = "../orchestration"
+
   name_prefix              = var.name_prefix
   environment              = local.environment
   step_functions_role_arn  = module.security.step_functions_role_arn

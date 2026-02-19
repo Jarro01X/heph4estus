@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"nmap-scanner/internal/aws"
-	appconfig "nmap-scanner/internal/config"
-	"nmap-scanner/internal/logger"
-	"nmap-scanner/internal/models"
-	"nmap-scanner/internal/scanner"
+	"heph4estus/internal/cloud/aws"
+	appconfig "heph4estus/internal/config"
+	"heph4estus/internal/logger"
+	"heph4estus/internal/tools/nmap"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -36,7 +35,7 @@ func main() {
 
 	sqsClient := aws.NewSQSClient(awsCfg, log)
 	s3Client := aws.NewS3Client(awsCfg, log)
-	scannerSvc := scanner.NewScanner(log)
+	scannerSvc := nmap.NewScanner(log)
 
 	// Process messages
 	processMessage(log, cfg, sqsClient, s3Client, scannerSvc)
@@ -47,7 +46,7 @@ func processMessage(
 	cfg *appconfig.ConsumerConfig,
 	sqsClient *aws.SQSClient,
 	s3Client *aws.S3Client,
-	scannerSvc *scanner.Scanner,
+	scannerSvc *nmap.Scanner,
 ) {
 	// Set a timeout for the entire processing (10 minutes)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -71,7 +70,7 @@ func processMessage(
 	log.Info("Received message, processing...")
 
 	// Process the message
-	var task models.ScanTask
+	var task nmap.ScanTask
 	if err := json.Unmarshal([]byte(*message.Body), &task); err != nil {
 		log.Error("Error unmarshaling task: %v", err)
 		// Delete the message anyway to prevent it from getting stuck in the queue

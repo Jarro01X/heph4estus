@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 # Build the consumer application
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/scanner ./cmd/consumer
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/scanner ./cmd/workers/nmap
 
 # Create a minimal production image
 FROM alpine:3.19
