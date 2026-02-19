@@ -18,7 +18,7 @@ module "networking" {
 
 # Create storage for scan results
 module "storage" {
-  source = "../storage"
+  source = "../../storage"
 
   name_prefix           = var.name_prefix
   environment           = local.environment
@@ -28,7 +28,7 @@ module "storage" {
 
 # Create messaging infrastructure
 module "messaging" {
-  source = "../messaging"
+  source = "../../messaging"
 
   name_prefix  = var.name_prefix
   environment  = local.environment
@@ -46,7 +46,7 @@ module "security" {
 
 # Create compute resources
 module "compute" {
-  source = "../compute"
+  source = "../../compute"
 
   name_prefix            = var.name_prefix
   environment            = local.environment
@@ -62,7 +62,7 @@ module "compute" {
 
 # Create workflow orchestration
 module "orchestration" {
-  source = "../orchestration"
+  source = "../../orchestration"
 
   name_prefix              = var.name_prefix
   environment              = local.environment
