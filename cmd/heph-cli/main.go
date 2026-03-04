@@ -1,72 +1,60 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
+	"errors"
 	"flag"
-	"heph4estus/internal/cloud/aws"
-	appconfig "heph4estus/internal/config"
-	"heph4estus/internal/logger"
-	"heph4estus/internal/tools/nmap"
+	"fmt"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/config"
+	"heph4estus/internal/logger"
 )
+
+const usage = `Usage: heph-cli <command> [options]
+
+Commands:
+  nmap     Run an nmap scan via AWS Step Functions
+  scan     Run a generic tool scan (planned)
+  infra    Manage cloud infrastructure (deploy/destroy)
+  status   Check job status
+
+Run 'heph-cli <command> --help' for command-specific usage.`
+
+func run(args []string, log logger.Logger) error {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, usage)
+		return fmt.Errorf("no command specified")
+	}
+
+	cmd := args[0]
+	cmdArgs := args[1:]
+
+	switch cmd {
+	case "nmap":
+		return runNmap(cmdArgs, log)
+	case "scan":
+		return runScan(cmdArgs, log)
+	case "infra":
+		return runInfra(cmdArgs, log)
+	case "status":
+		return runStatus(cmdArgs, log)
+	case "--help", "-help", "-h":
+		fmt.Fprintln(os.Stderr, usage)
+		return nil
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		return fmt.Errorf("unknown command: %s", cmd)
+	}
+}
 
 func main() {
 	log := logger.NewSimpleLogger()
-	log.Info("Scanner producer application starting...")
 
-	// Command line flags for input file and default options
-	inputFile := flag.String("file", "", "Path to file containing targets")
-	defaultOptions := flag.String("default-options", "-sS", "Default Nmap options")
-	flag.Parse()
-
-	if *inputFile == "" {
-		log.Fatal("Please provide an input file with -file flag")
-	}
-
-	// Load configuration
-	cfg, err := appconfig.NewProducerConfig()
+	err := run(os.Args[1:], log)
 	if err != nil {
-		log.Fatal("Failed to load configuration: %v", err)
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		log.Error("%v", err)
+		os.Exit(1)
 	}
-
-	log.Info("Using state machine ARN: %s", cfg.StateMachineARN)
-	log.Info("Using input file: %s", *inputFile)
-	log.Info("Using default options: %s", *defaultOptions)
-
-	// Read targets from file
-	content, err := os.ReadFile(*inputFile)
-	if err != nil {
-		log.Fatal("Error reading file: %v", err)
-	}
-
-	// Initialize services
-	log.Info("Initializing AWS client...")
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		log.Fatal("Unable to load SDK config: %v", err)
-	}
-
-	sfnClient := aws.NewSFNClient(awsCfg, log)
-	scannerSvc := nmap.NewScanner(log)
-
-	// Parse targets and prepare Step Functions input
-	targets := scannerSvc.ParseTargets(string(content), *defaultOptions)
-	log.Info("Parsed %d targets from file", len(targets))
-
-	// Start Step Functions execution
-	input := nmap.StepFunctionInput{Targets: targets}
-	inputJSON, err := json.Marshal(input)
-	if err != nil {
-		log.Fatal("Error marshaling input: %v", err)
-	}
-
-	_, err = sfnClient.StartExecution(context.TODO(), cfg.StateMachineARN, string(inputJSON))
-	if err != nil {
-		log.Fatal("Error starting execution: %v", err)
-	}
-
-	log.Info("Successfully started scan for %d targets", len(targets))
 }
