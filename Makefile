@@ -6,6 +6,7 @@ build:
 	@mkdir -p bin
 	go build -o bin/heph-cli ./cmd/heph-cli
 	go build -o bin/nmap-worker ./cmd/workers/nmap
+	go build -o bin/heph4estus ./cmd/heph4estus
 
 test:
 	go test ./...
