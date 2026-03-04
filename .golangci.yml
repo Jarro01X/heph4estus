@@ -11,8 +11,3 @@ linters:
     - staticcheck
     - unused
     - ineffassign
-
-issues:
-  exclude-dirs:
-    - vendor
-  exclude-generated: strict
