@@ -16,8 +16,8 @@ func TestAppInitializesToMenu(t *testing.T) {
 	if v.Content == "" {
 		t.Fatal("expected non-empty view content after Init")
 	}
-	if !strings.Contains(v.Content, "HEPH") {
-		t.Fatal("expected menu view to contain HEPH title")
+	if !strings.Contains(v.Content, "Nmap Scanner") {
+		t.Fatal("expected menu view to contain menu items")
 	}
 }
 
@@ -54,8 +54,8 @@ func TestNavigateBackToMenu(t *testing.T) {
 	_, _ = app.Update(core.NavigateMsg{Target: core.ViewMenu})
 
 	v := app.View()
-	if !strings.Contains(v.Content, "HEPH") {
-		t.Fatal("expected menu view after navigating back")
+	if !strings.Contains(v.Content, "Nmap Scanner") {
+		t.Fatal("expected menu view to contain menu items after navigating back")
 	}
 }
 
@@ -86,8 +86,8 @@ func TestEnterOnDisabledItemDoesNotNavigate(t *testing.T) {
 
 	// Should remain on menu view — no NavigateMsg emitted
 	v := app.View()
-	if !strings.Contains(v.Content, "HEPH") {
-		t.Fatal("expected to still be on menu after enter on disabled item")
+	if !strings.Contains(v.Content, "Nmap Scanner") {
+		t.Fatal("expected menu view to still contain menu items after enter on disabled item")
 	}
 
 	// The cmd, if any, should not produce a NavigateMsg

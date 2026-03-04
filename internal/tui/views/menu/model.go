@@ -13,14 +13,16 @@ import (
 	"heph4estus/internal/tui/core"
 )
 
-var anvil = strings.TrimRight(`
-          ╔═══╗
-         ╔╝   ╚╗
-         ║     ║
-    ╔════╩═════╩════╗
-    ║               ║
-    ╚═══╗       ╔═══╝
-   ═════╩═══════╩═════`, "\n")
+// Block-letter title art — "HEPH4ESTUS" in ANSI Shadow style.
+// Rune columns 0-31 = "HEPH", 32-39 = "4", 40+ = "ESTUS".
+var titleArt = [6]string{
+	"██╗  ██╗███████╗██████╗ ██╗  ██╗██╗  ██╗███████╗███████╗████████╗██╗   ██╗███████╗",
+	"██║  ██║██╔════╝██╔══██╗██║  ██║██║  ██║██╔════╝██╔════╝╚══██╔══╝██║   ██║██╔════╝",
+	"███████║█████╗  ██████╔╝███████║███████║█████╗  ███████╗   ██║   ██║   ██║███████╗",
+	"██╔══██║██╔══╝  ██╔═══╝ ██╔══██║╚════██║██╔══╝  ╚════██║   ██║   ██║   ██║╚════██║",
+	"██║  ██║███████╗██║     ██║  ██║     ██║███████╗███████║   ██║   ╚██████╔╝███████║",
+	"╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝  ╚═╝     ╚═╝╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚══════╝",
+}
 
 type menuItem struct {
 	title   string
@@ -173,17 +175,23 @@ func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
 func (m *Model) View() string {
 	var b strings.Builder
 
-	// Anvil in Ember
-	art := lipgloss.NewStyle().Foreground(core.Ember).Render(anvil)
-	b.WriteString(art)
-	b.WriteString("\n\n")
-
-	// HEPH4ESTUS title — "4" in Ember, rest in Gold
-	title := core.TitleStyle.Render("HEPH") +
-		lipgloss.NewStyle().Foreground(core.Ember).Bold(true).Render("4") +
-		core.TitleStyle.Render("ESTUS")
-	b.WriteString(title)
-	b.WriteString("\n\n")
+	// HEPH4ESTUS title — block art when wide enough, plain text fallback
+	goldStyle := lipgloss.NewStyle().Foreground(core.Gold).Bold(true)
+	emberStyle := lipgloss.NewStyle().Foreground(core.Ember).Bold(true)
+	if m.width == 0 || m.width >= 84 {
+		for _, line := range titleArt {
+			runes := []rune(line)
+			heph := string(runes[:32])
+			four := string(runes[32:40])
+			estus := string(runes[40:])
+			b.WriteString(goldStyle.Render(heph) + emberStyle.Render(four) + goldStyle.Render(estus))
+			b.WriteString("\n")
+		}
+	} else {
+		title := goldStyle.Render("HEPH") + emberStyle.Render("4") + goldStyle.Render("ESTUS")
+		b.WriteString(title + "\n")
+	}
+	b.WriteString("\n")
 
 	// Menu list
 	b.WriteString(m.list.View())
@@ -193,7 +201,7 @@ func (m *Model) View() string {
 	helpBar := core.StatusBarStyle.Render(m.help.View(keys))
 	b.WriteString(helpBar)
 
-	// Center the whole block
+	// Center when wide enough, left-align for small terminals
 	content := b.String()
 	if m.width > 0 && m.height > 0 {
 		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
