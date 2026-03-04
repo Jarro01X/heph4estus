@@ -47,7 +47,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if newView != nil {
 			a.activeView = newView
-			return a, newView.Init()
+			initCmd := newView.Init()
+			// Forward current terminal size so the new view can center itself.
+			a.activeView, _ = a.activeView.Update(tea.WindowSizeMsg{
+				Width:  a.width,
+				Height: a.height,
+			})
+			return a, initCmd
 		}
 	}
 
