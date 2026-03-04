@@ -8,9 +8,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 )
 
+// SFNAPI is the subset of the Step Functions SDK we use.
+type SFNAPI interface {
+	StartExecution(ctx context.Context, params *sfn.StartExecutionInput, optFns ...func(*sfn.Options)) (*sfn.StartExecutionOutput, error)
+}
+
 // SFNClient is a wrapper around the Step Functions client
 type SFNClient struct {
-	client *sfn.Client
+	client SFNAPI
 	logger logger.Logger
 }
 
