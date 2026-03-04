@@ -105,9 +105,9 @@ func (m *Model) View() string {
 	}
 	credStatus := detectCredentials()
 
-	b.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render("AWS Region:"), valueStyle.Render(region)))
-	b.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render("AWS Profile:"), valueStyle.Render(profile)))
-	b.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render("Credentials:"), valueStyle.Render(credStatus)))
+	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("AWS Region:"), valueStyle.Render(region))
+	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("AWS Profile:"), valueStyle.Render(profile))
+	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Credentials:"), valueStyle.Render(credStatus))
 
 	b.WriteString("\n")
 

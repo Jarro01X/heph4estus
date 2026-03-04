@@ -61,7 +61,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		line = core.MutedStyle.Render(label)
 	}
 
-	fmt.Fprint(w, line)
+	fmt.Fprint(w, line) //nolint:errcheck // bubbles list delegate signature doesn't support error returns
 }
 
 type keyMap struct {
