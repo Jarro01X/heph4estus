@@ -52,7 +52,7 @@ func (c *S3Client) Download(ctx context.Context, bucket, key string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	defer out.Body.Close()
+	defer out.Body.Close() //nolint:errcheck // best-effort close on read path
 	return io.ReadAll(out.Body)
 }
 
