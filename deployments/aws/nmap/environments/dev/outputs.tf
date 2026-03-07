@@ -27,3 +27,13 @@ output "ecs_cluster_name" {
   description = "Name of the ECS cluster"
   value       = module.compute.ecs_cluster_name
 }
+
+output "instance_profile_arn" {
+  description = "ARN of the IAM instance profile for spot workers"
+  value       = module.spot.instance_profile_arn
+}
+
+output "ami_id" {
+  description = "AMI ID for spot instances"
+  value       = module.spot.ami_id
+}
