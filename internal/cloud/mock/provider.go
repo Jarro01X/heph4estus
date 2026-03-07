@@ -7,10 +7,11 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cloud.Provider = (*Provider)(nil)
-	_ cloud.Storage  = (*Storage)(nil)
-	_ cloud.Queue    = (*Queue)(nil)
-	_ cloud.Compute  = (*Compute)(nil)
+	_ cloud.Provider        = (*Provider)(nil)
+	_ cloud.Storage         = (*Storage)(nil)
+	_ cloud.Queue           = (*Queue)(nil)
+	_ cloud.Compute         = (*Compute)(nil)
+	_ cloud.ProgressCounter = (*ProgressCounter)(nil)
 )
 
 // Provider is a test double for cloud.Provider.
@@ -29,6 +30,7 @@ type Storage struct {
 	UploadFunc   func(ctx context.Context, bucket, key string, data []byte) error
 	DownloadFunc func(ctx context.Context, bucket, key string) ([]byte, error)
 	ListFunc     func(ctx context.Context, bucket, prefix string) ([]string, error)
+	CountFunc    func(ctx context.Context, bucket, prefix string) (int, error)
 }
 
 func (s *Storage) Upload(ctx context.Context, bucket, key string, data []byte) error {
@@ -43,15 +45,24 @@ func (s *Storage) List(ctx context.Context, bucket, prefix string) ([]string, er
 	return s.ListFunc(ctx, bucket, prefix)
 }
 
+func (s *Storage) Count(ctx context.Context, bucket, prefix string) (int, error) {
+	return s.CountFunc(ctx, bucket, prefix)
+}
+
 // Queue is a test double for cloud.Queue.
 type Queue struct {
-	SendFunc    func(ctx context.Context, queueID, body string) error
-	ReceiveFunc func(ctx context.Context, queueID string) (*cloud.Message, error)
-	DeleteFunc  func(ctx context.Context, queueID, receiptHandle string) error
+	SendFunc      func(ctx context.Context, queueID, body string) error
+	SendBatchFunc func(ctx context.Context, queueID string, bodies []string) error
+	ReceiveFunc   func(ctx context.Context, queueID string) (*cloud.Message, error)
+	DeleteFunc    func(ctx context.Context, queueID, receiptHandle string) error
 }
 
 func (q *Queue) Send(ctx context.Context, queueID, body string) error {
 	return q.SendFunc(ctx, queueID, body)
+}
+
+func (q *Queue) SendBatch(ctx context.Context, queueID string, bodies []string) error {
+	return q.SendBatchFunc(ctx, queueID, bodies)
 }
 
 func (q *Queue) Receive(ctx context.Context, queueID string) (*cloud.Message, error) {
@@ -79,4 +90,18 @@ func (c *Compute) RunSpotInstances(ctx context.Context, opts cloud.SpotOpts) ([]
 
 func (c *Compute) GetSpotStatus(ctx context.Context, instanceIDs []string) ([]cloud.SpotStatus, error) {
 	return c.GetSpotStatusFunc(ctx, instanceIDs)
+}
+
+// ProgressCounter is a test double for cloud.ProgressCounter.
+type ProgressCounter struct {
+	IncrementFunc func(ctx context.Context, counterID string) error
+	GetFunc       func(ctx context.Context, counterID string) (int, error)
+}
+
+func (p *ProgressCounter) Increment(ctx context.Context, counterID string) error {
+	return p.IncrementFunc(ctx, counterID)
+}
+
+func (p *ProgressCounter) Get(ctx context.Context, counterID string) (int, error) {
+	return p.GetFunc(ctx, counterID)
 }
