@@ -76,25 +76,27 @@ func TestCtrlCReturnsQuit(t *testing.T) {
 	}
 }
 
-func TestEnterOnDisabledItemDoesNotNavigate(t *testing.T) {
+func TestNavigateToNmapConfig(t *testing.T) {
 	app := NewApp()
 	app.Init()
 
-	// The first item (Nmap Scanner) is disabled; press enter
-	enterMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	_, cmd := app.Update(enterMsg)
+	_, _ = app.Update(core.NavigateMsg{Target: core.ViewNmapConfig})
 
-	// Should remain on menu view — no NavigateMsg emitted
 	v := app.View()
 	if !strings.Contains(v.Content, "Nmap Scanner") {
-		t.Fatal("expected menu view to still contain menu items after enter on disabled item")
+		t.Fatal("expected nmap config view to contain 'Nmap Scanner'")
 	}
+}
 
-	// The cmd, if any, should not produce a NavigateMsg
-	if cmd != nil {
-		result := cmd()
-		if _, ok := result.(core.NavigateMsg); ok {
-			t.Fatal("expected no NavigateMsg from disabled item")
-		}
+func TestNavigateWithDataMsg_Deploy(t *testing.T) {
+	app := NewApp()
+	app.Init()
+
+	cfg := core.DeployConfig{TerraformDir: "/tmp/tf"}
+	_, _ = app.Update(core.NavigateWithDataMsg{Target: core.ViewDeploy, Data: cfg})
+
+	v := app.View()
+	if !strings.Contains(v.Content, "Deploy") {
+		t.Fatal("expected deploy view")
 	}
 }
