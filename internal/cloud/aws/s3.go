@@ -56,22 +56,50 @@ func (c *S3Client) Download(ctx context.Context, bucket, key string) ([]byte, er
 	return io.ReadAll(out.Body)
 }
 
-// List returns object keys matching a prefix.
-// TODO: paginate for large result sets.
+// List returns all object keys matching a prefix, paginating as needed.
 func (c *S3Client) List(ctx context.Context, bucket, prefix string) ([]string, error) {
 	c.logger.Info("Listing objects in S3: %s/%s", bucket, prefix)
-	out, err := c.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	var keys []string
+	input := &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
-	})
-	if err != nil {
-		return nil, err
 	}
-	keys := make([]string, len(out.Contents))
-	for i, obj := range out.Contents {
-		keys[i] = aws.ToString(obj.Key)
+	for {
+		out, err := c.client.ListObjectsV2(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range out.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		input.ContinuationToken = out.NextContinuationToken
 	}
 	return keys, nil
+}
+
+// Count returns the number of objects matching a prefix without fetching all keys.
+func (c *S3Client) Count(ctx context.Context, bucket, prefix string) (int, error) {
+	c.logger.Info("Counting objects in S3: %s/%s", bucket, prefix)
+	count := 0
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(prefix),
+	}
+	for {
+		out, err := c.client.ListObjectsV2(ctx, input)
+		if err != nil {
+			return 0, err
+		}
+		count += len(out.Contents)
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		input.ContinuationToken = out.NextContinuationToken
+	}
+	return count, nil
 }
 
 // PutObject uploads an object to S3 (backward-compat alias for Upload).

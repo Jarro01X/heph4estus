@@ -2,16 +2,19 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
 
 // SQSAPI is the subset of the SQS SDK we use.
 type SQSAPI interface {
 	SendMessage(ctx context.Context, params *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
+	SendMessageBatch(ctx context.Context, params *sqs.SendMessageBatchInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageBatchOutput, error)
 	ReceiveMessage(ctx context.Context, params *sqs.ReceiveMessageInput, optFns ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	DeleteMessage(ctx context.Context, params *sqs.DeleteMessageInput, optFns ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
 }
@@ -38,6 +41,38 @@ func (c *SQSClient) Send(ctx context.Context, queueID, body string) error {
 		MessageBody: &body,
 	})
 	return err
+}
+
+// SendBatch publishes messages in batches of up to 10 (SQS limit).
+func (c *SQSClient) SendBatch(ctx context.Context, queueID string, bodies []string) error {
+	const maxBatch = 10
+	for i := 0; i < len(bodies); i += maxBatch {
+		end := i + maxBatch
+		if end > len(bodies) {
+			end = len(bodies)
+		}
+		chunk := bodies[i:end]
+
+		entries := make([]sqstypes.SendMessageBatchRequestEntry, len(chunk))
+		for j, body := range chunk {
+			id := fmt.Sprintf("%d", i+j)
+			b := body
+			entries[j] = sqstypes.SendMessageBatchRequestEntry{
+				Id:          &id,
+				MessageBody: &b,
+			}
+		}
+
+		q := queueID
+		_, err := c.client.SendMessageBatch(ctx, &sqs.SendMessageBatchInput{
+			QueueUrl: &q,
+			Entries:  entries,
+		})
+		if err != nil {
+			return fmt.Errorf("SendMessageBatch (offset %d): %w", i, err)
+		}
+	}
+	return nil
 }
 
 // Receive polls for a single message. Returns (nil, nil) when the queue is empty.
