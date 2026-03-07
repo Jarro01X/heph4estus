@@ -109,7 +109,7 @@ type Model struct {
 // New creates a new menu view.
 func New() *Model {
 	items := []list.Item{
-		menuItem{title: "Nmap Scanner", enabled: false, target: core.ViewNmapConfig},
+		menuItem{title: "Nmap Scanner", enabled: true, target: core.ViewNmapConfig},
 		menuItem{title: "Naabu + Nmap", enabled: false, target: core.ViewNaabuConfig},
 		menuItem{title: "Settings", enabled: true, target: core.ViewSettings},
 	}

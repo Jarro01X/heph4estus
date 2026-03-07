@@ -1,0 +1,280 @@
+package nmap
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"heph4estus/internal/tui/core"
+)
+
+// fileReadMsg carries the result of reading a target file from disk.
+type fileReadMsg struct {
+	content string
+	err     error
+}
+
+type configKeyMap struct {
+	Tab   key.Binding
+	Enter key.Binding
+	Back  key.Binding
+	Quit  key.Binding
+}
+
+func (k configKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Tab, k.Enter, k.Back, k.Quit}
+}
+
+func (k configKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Tab, k.Enter, k.Back, k.Quit}}
+}
+
+var configKeys = configKeyMap{
+	Tab: key.NewBinding(
+		key.WithKeys("tab", "shift+tab"),
+		key.WithHelp("tab", "next field"),
+	),
+	Enter: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "submit"),
+	),
+	Back: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back"),
+	),
+	Quit: key.NewBinding(
+		key.WithKeys("ctrl+c"),
+		key.WithHelp("ctrl+c", "quit"),
+	),
+}
+
+const (
+	fieldTargetFile = iota
+	fieldNmapOptions
+	fieldWorkerCount
+	fieldComputeMode
+	fieldSubmit
+	fieldCount
+)
+
+// ConfigModel is the nmap configuration form view.
+type ConfigModel struct {
+	inputs     [4]textinput.Model
+	focusIndex int
+	help       help.Model
+	width      int
+	height     int
+	errMsg     string
+}
+
+// NewConfig creates a new nmap config view.
+func NewConfig() *ConfigModel {
+	targetInput := textinput.New()
+	targetInput.Placeholder = "/path/to/targets.txt"
+	targetInput.Focus()
+	targetInput.CharLimit = 256
+
+	optsInput := textinput.New()
+	optsInput.Placeholder = "-sS"
+	optsInput.SetValue("-sS")
+	optsInput.CharLimit = 256
+
+	workerInput := textinput.New()
+	workerInput.Placeholder = "10"
+	workerInput.SetValue("10")
+	workerInput.CharLimit = 6
+
+	modeInput := textinput.New()
+	modeInput.Placeholder = "auto"
+	modeInput.SetValue("auto")
+	modeInput.CharLimit = 7
+
+	h := help.New()
+	h.Styles = help.Styles{
+		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
+		ShortDesc:      lipgloss.NewStyle().Foreground(core.Steel),
+		ShortSeparator: lipgloss.NewStyle().Foreground(core.Steel),
+		FullKey:        lipgloss.NewStyle().Foreground(core.Steel),
+		FullDesc:       lipgloss.NewStyle().Foreground(core.Steel),
+		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
+		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
+	}
+
+	return &ConfigModel{
+		inputs: [4]textinput.Model{targetInput, optsInput, workerInput, modeInput},
+		help:   h,
+	}
+}
+
+func (m *ConfigModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.help.SetWidth(msg.Width)
+
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc":
+			return m, func() tea.Msg {
+				return core.NavigateMsg{Target: core.ViewMenu}
+			}
+		case "tab", "down":
+			m.focusIndex = (m.focusIndex + 1) % fieldCount
+			return m, m.updateFocus()
+		case "shift+tab", "up":
+			m.focusIndex = (m.focusIndex - 1 + fieldCount) % fieldCount
+			return m, m.updateFocus()
+		case "enter":
+			if m.focusIndex == fieldSubmit {
+				return m, m.submit()
+			}
+			// Move to next field on enter in input fields
+			m.focusIndex = (m.focusIndex + 1) % fieldCount
+			return m, m.updateFocus()
+		}
+
+	case fileReadMsg:
+		if msg.err != nil {
+			m.errMsg = fmt.Sprintf("Error reading file: %v", msg.err)
+			return m, nil
+		}
+		workerCount, _ := strconv.Atoi(m.inputs[fieldWorkerCount].Value())
+		if workerCount <= 0 {
+			workerCount = 10
+		}
+		computeMode := strings.TrimSpace(m.inputs[fieldComputeMode].Value())
+		if computeMode == "" {
+			computeMode = "auto"
+		}
+		if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
+			m.errMsg = "Compute mode must be auto, fargate, or spot"
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			return core.NavigateWithDataMsg{
+				Target: core.ViewDeploy,
+				Data: core.DeployConfig{
+					TerraformDir:   "deployments/aws/nmap/environments/dev",
+					Dockerfile:     "containers/nmap/Dockerfile",
+					DockerContext:   ".",
+					DockerTag:      "nmap-scanner:latest",
+					ECRRepoName:    "nmap-scanner",
+					AWSRegion:      awsRegion(),
+					TargetsContent: msg.content,
+					NmapOptions:    m.inputs[fieldNmapOptions].Value(),
+					WorkerCount:    workerCount,
+					ComputeMode:    computeMode,
+				},
+			}
+		}
+	}
+
+	// Forward to focused textinput
+	if m.focusIndex < len(m.inputs) {
+		var cmd tea.Cmd
+		m.inputs[m.focusIndex], cmd = m.inputs[m.focusIndex].Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *ConfigModel) View() string {
+	var b strings.Builder
+
+	titleBar := core.TitleBarStyle.Render("  Nmap Scanner  ")
+	b.WriteString(titleBar)
+	b.WriteString("\n\n")
+
+	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(18)
+	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
+
+	labels := []string{"Target File:", "Nmap Options:", "Worker Count:", "Compute Mode:"}
+	for i, label := range labels {
+		ls := labelStyle
+		if m.focusIndex == i {
+			ls = focusedLabel
+		}
+		fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.inputs[i].View())
+	}
+
+	b.WriteString("\n")
+
+	// Submit button
+	submitStyle := core.MutedStyle
+	if m.focusIndex == fieldSubmit {
+		submitStyle = core.SelectedStyle
+	}
+	b.WriteString("  " + submitStyle.Render("[ Submit ]"))
+	b.WriteString("\n")
+
+	if m.errMsg != "" {
+		b.WriteString("\n")
+		b.WriteString("  " + core.ErrorStyle.Render(m.errMsg))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	helpBar := core.StatusBarStyle.Render(m.help.View(configKeys))
+	b.WriteString(helpBar)
+
+	content := b.String()
+	if m.width > 0 && m.height > 0 {
+		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return content
+}
+
+func (m *ConfigModel) updateFocus() tea.Cmd {
+	var cmds []tea.Cmd
+	for i := range m.inputs {
+		if i == m.focusIndex {
+			cmds = append(cmds, m.inputs[i].Focus())
+		} else {
+			m.inputs[i].Blur()
+		}
+	}
+	if len(cmds) == 0 {
+		// Focus is on submit button — blur all
+		for i := range m.inputs {
+			m.inputs[i].Blur()
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *ConfigModel) submit() tea.Cmd {
+	path := strings.TrimSpace(m.inputs[fieldTargetFile].Value())
+	if path == "" {
+		m.errMsg = "Target file is required"
+		return nil
+	}
+	m.errMsg = ""
+	return func() tea.Msg {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fileReadMsg{err: err}
+		}
+		return fileReadMsg{content: string(data)}
+	}
+}
+
+func awsRegion() string {
+	if r := os.Getenv("AWS_REGION"); r != "" {
+		return r
+	}
+	if r := os.Getenv("AWS_DEFAULT_REGION"); r != "" {
+		return r
+	}
+	return "us-east-1"
+}
