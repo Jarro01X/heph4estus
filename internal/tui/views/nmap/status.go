@@ -70,7 +70,6 @@ type realSubmitter struct {
 }
 
 func (s *realSubmitter) EnqueueTargets(ctx context.Context, queueURL string, tasks []nmaptool.ScanTask) error {
-	const batchSize = 10
 	bodies := make([]string, len(tasks))
 	for i, t := range tasks {
 		b, err := json.Marshal(t)

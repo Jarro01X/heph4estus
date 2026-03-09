@@ -117,7 +117,7 @@ func TestDeployModel_FullPipeline(t *testing.T) {
 
 	// Plan
 	msg = cmd()
-	_, cmd = m.Update(msg) // plan complete → await approval
+	_, _ = m.Update(msg) // plan complete → await approval
 	if m.stage != stageAwaitApproval {
 		t.Fatalf("expected await-approval, got %s", m.stage)
 	}
