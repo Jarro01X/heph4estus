@@ -72,7 +72,7 @@ func TestStatusModel_EnqueueSuccess(t *testing.T) {
 	cmd := m.Init()
 
 	msg := cmd()
-	_, cmd = m.Update(msg)
+	_, _ = m.Update(msg)
 	if m.phase != phaseLaunching {
 		t.Fatalf("expected phaseLaunching, got %d", m.phase)
 	}
@@ -83,7 +83,7 @@ func TestStatusModel_EnqueueError(t *testing.T) {
 	m := NewStatusWithDeps(testInfra(), sub, &mockTracker{})
 	cmd := m.Init()
 	msg := cmd()
-	m.Update(msg)
+	_, _ = m.Update(msg)
 
 	if m.errMsg == "" {
 		t.Fatal("expected error message")
@@ -102,7 +102,7 @@ func TestStatusModel_LaunchAndScan(t *testing.T) {
 
 	// Launch
 	msg = cmd()
-	_, cmd = m.Update(msg)
+	_, _ = m.Update(msg)
 	if m.phase != phaseScanning {
 		t.Fatalf("expected phaseScanning, got %d", m.phase)
 	}

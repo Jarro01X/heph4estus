@@ -136,9 +136,7 @@ func (c *EC2Client) RunSpotInstances(ctx context.Context, opts cloud.SpotOpts) (
 
 	var instanceIDs []string
 	for _, inst := range fleetOut.Instances {
-		for _, id := range inst.InstanceIds {
-			instanceIDs = append(instanceIDs, id)
-		}
+		instanceIDs = append(instanceIDs, inst.InstanceIds...)
 	}
 
 	c.logger.Info("Launched %d spot instances", len(instanceIDs))

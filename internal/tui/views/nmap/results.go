@@ -31,11 +31,6 @@ type resultLoadedMsg struct {
 	err    error
 }
 
-// destroyDoneMsg signals terraform destroy completed.
-type destroyDoneMsg struct {
-	err error
-}
-
 type resultsKeyMap struct {
 	Up      key.Binding
 	Down    key.Binding
