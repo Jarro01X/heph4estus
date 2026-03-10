@@ -12,10 +12,10 @@ import (
 const usage = `Usage: heph-cli <command> [options]
 
 Commands:
-  nmap     Run an nmap scan via AWS Step Functions
-  scan     Run a generic tool scan (planned)
+  nmap     Run an nmap scan (enqueue targets, launch workers, poll progress)
   infra    Manage cloud infrastructure (deploy/destroy)
-  status   Check job status
+  scan     Run a generic tool scan (planned)
+  status   Check job status (planned)
 
 Run 'heph-cli <command> --help' for command-specific usage.`
 
