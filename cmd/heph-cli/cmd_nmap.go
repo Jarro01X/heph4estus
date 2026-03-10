@@ -205,7 +205,9 @@ func outputResults(ctx context.Context, storage cloud.Storage, bucket, format st
 				logStatus("Warning: failed to parse %s: %v", key, err)
 				continue
 			}
-			encoder.Encode(result)
+			if err := encoder.Encode(result); err != nil {
+				return fmt.Errorf("encoding result: %w", err)
+			}
 		}
 	} else {
 		fmt.Printf("\n%-40s %s\n", "TARGET", "STATUS")
