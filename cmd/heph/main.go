@@ -9,7 +9,7 @@ import (
 	"heph4estus/internal/logger"
 )
 
-const usage = `Usage: heph-cli <command> [options]
+const usage = `Usage: heph <command> [options]
 
 Commands:
   nmap     Run an nmap scan (enqueue targets, launch workers, poll progress)
@@ -17,7 +17,7 @@ Commands:
   scan     Run a generic tool scan (planned)
   status   Check job status (planned)
 
-Run 'heph-cli <command> --help' for command-specific usage.`
+Run 'heph <command> --help' for command-specific usage.`
 
 func run(args []string, log logger.Logger) error {
 	if len(args) < 1 {
