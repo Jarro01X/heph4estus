@@ -37,6 +37,7 @@ func runNmap(args []string, log logger.Logger) error {
 	dnsServers := fs.String("dns-servers", "", "DNS servers for nmap (comma-separated)")
 	timingTemplate := fs.String("timing-template", "", "Nmap timing template (0-5)")
 	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
+	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
 	terraformDir := fs.String("terraform-dir", "deployments/aws/nmap/environments/dev", "Terraform working directory")
 
@@ -71,6 +72,11 @@ func runNmap(args []string, log logger.Logger) error {
 	// Parse targets.
 	scanner := nmap.NewScanner(log)
 	tasks := scanner.ParseTargetsWithMode(string(content), *defaultOptions, *mode, *portChunks)
+	if *noRDNS {
+		for i := range tasks {
+			tasks[i].Options = "-n " + tasks[i].Options
+		}
+	}
 	if len(tasks) == 0 {
 		return fmt.Errorf("no targets found in %s", *inputFile)
 	}
