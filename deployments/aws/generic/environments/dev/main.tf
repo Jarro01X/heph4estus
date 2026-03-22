@@ -62,3 +62,13 @@ module "compute" {
   jitter_max_seconds     = var.jitter_max_seconds
   container_env_vars     = var.container_env_vars
 }
+
+# Create spot instance prerequisites (IAM + AMI lookup)
+module "spot" {
+  source = "../../spot"
+
+  name_prefix   = var.name_prefix
+  environment   = local.environment
+  sqs_queue_arn = module.messaging.queue_arn
+  s3_bucket_arn = module.storage.bucket_arn
+}
