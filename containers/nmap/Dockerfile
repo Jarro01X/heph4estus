@@ -34,6 +34,7 @@ ENV S3_BUCKET=""
 ENV JITTER_MAX_SECONDS=""
 ENV NMAP_TIMING_TEMPLATE=""
 ENV DNS_SERVERS=""
+ENV NO_RDNS=""
 
 # Add non-root user for security
 RUN addgroup -S scanner && adduser -S scanner -G scanner

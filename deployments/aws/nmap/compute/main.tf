@@ -99,6 +99,10 @@ resource "aws_ecs_task_definition" "scanner" {
         {
           name  = "DNS_SERVERS"
           value = var.dns_servers
+        },
+        {
+          name  = "NO_RDNS"
+          value = var.no_rdns
         }
       ]
       logConfiguration = {

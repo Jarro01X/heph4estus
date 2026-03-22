@@ -332,6 +332,21 @@ func TestProcessMessage_TimingInjection(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_NoRDNS(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "ok"}}
+
+	cfg := testConfig()
+	cfg.NoRDNS = true
+
+	_, _ = processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+
+	if !strings.HasPrefix(sc.capturedTask.Options, "-n ") {
+		t.Errorf("expected -n prefix in options, got %q", sc.capturedTask.Options)
+	}
+}
+
 func TestProcessMessage_BothDNSAndTiming(t *testing.T) {
 	q := &mockQueue{msg: validTaskMessage()}
 	s := &mockStorage{}

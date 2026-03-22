@@ -102,6 +102,9 @@ func processMessage(
 	if cfg.DNSServers != "" {
 		task.Options = fmt.Sprintf("--dns-servers %s %s", cfg.DNSServers, task.Options)
 	}
+	if cfg.NoRDNS {
+		task.Options = "-n " + task.Options
+	}
 
 	log.Info("Starting scan for target: %s", task.Target)
 	scanResult := scanner.RunScan(task)
