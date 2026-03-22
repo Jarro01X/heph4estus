@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -375,8 +376,11 @@ func (m *StatusModel) launchWorkers() tea.Cmd {
 			Subnets:        infra.SubnetIDs,
 			SecurityGroups: []string{infra.SecurityGroupID},
 			Env: map[string]string{
-				"QUEUE_URL": infra.SQSQueueURL,
-				"S3_BUCKET": infra.S3BucketName,
+				"QUEUE_URL":            infra.SQSQueueURL,
+				"S3_BUCKET":            infra.S3BucketName,
+				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
+				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
+				"DNS_SERVERS":          infra.DNSServers,
 			},
 			Count: infra.WorkerCount,
 		})
@@ -393,8 +397,11 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 			ImageTag:   "latest",
 			Region:     regionFromECR(infra.ECRRepoURL),
 			EnvVars: map[string]string{
-				"QUEUE_URL": infra.SQSQueueURL,
-				"S3_BUCKET": infra.S3BucketName,
+				"QUEUE_URL":            infra.SQSQueueURL,
+				"S3_BUCKET":            infra.S3BucketName,
+				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
+				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
+				"DNS_SERVERS":          infra.DNSServers,
 			},
 		})
 		ids, err := sub.LaunchSpotWorkers(context.Background(), cloud.SpotOpts{

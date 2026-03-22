@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,9 @@ func runNmap(args []string, log logger.Logger) error {
 	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
 	mode := fs.String("mode", "target-only", "Distribution mode: target-only or target-ports")
 	portChunks := fs.Int("port-chunks", 5, "Number of port chunks per target (target-ports mode only)")
+	dnsServers := fs.String("dns-servers", "", "DNS servers for nmap (comma-separated)")
+	timingTemplate := fs.String("timing-template", "", "Nmap timing template (0-5)")
+	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
 	format := fs.String("format", "text", "Output format: text or json")
 	terraformDir := fs.String("terraform-dir", "deployments/aws/nmap/environments/dev", "Terraform working directory")
 
@@ -136,8 +140,11 @@ func runNmap(args []string, log logger.Logger) error {
 			ImageTag:   "latest",
 			Region:     regionFromECR(ecrURL),
 			EnvVars: map[string]string{
-				"QUEUE_URL": queueURL,
-				"S3_BUCKET": bucket,
+				"QUEUE_URL":            queueURL,
+				"S3_BUCKET":            bucket,
+				"JITTER_MAX_SECONDS":   strconv.Itoa(*jitterMax),
+				"NMAP_TIMING_TEMPLATE": *timingTemplate,
+				"DNS_SERVERS":          *dnsServers,
 			},
 		})
 		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
@@ -164,8 +171,11 @@ func runNmap(args []string, log logger.Logger) error {
 			Subnets:        splitOutputList(outputs["subnet_ids"]),
 			SecurityGroups: []string{outputs["security_group_id"]},
 			Env: map[string]string{
-				"QUEUE_URL": queueURL,
-				"S3_BUCKET": bucket,
+				"QUEUE_URL":            queueURL,
+				"S3_BUCKET":            bucket,
+				"JITTER_MAX_SECONDS":   strconv.Itoa(*jitterMax),
+				"NMAP_TIMING_TEMPLATE": *timingTemplate,
+				"DNS_SERVERS":          *dnsServers,
 			},
 			Count: *workers,
 		})
