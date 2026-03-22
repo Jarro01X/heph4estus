@@ -1,0 +1,10 @@
+name: httpx
+description: HTTP probe and technology detection
+command: "httpx -l {{input}} -o {{output}} -j -silent"
+input_type: target_list
+output_ext: jsonl
+install_cmd: "go install github.com/projectdiscovery/httpx/cmd/httpx@latest"
+default_cpu: 256
+default_memory: 512
+timeout: 10m
+tags: [recon, web]
