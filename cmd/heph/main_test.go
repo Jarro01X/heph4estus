@@ -242,6 +242,10 @@ func TestExtractTargetFromKey(t *testing.T) {
 		{"scans/192.168.1.1_1709913600.json", "192.168.1.1"},
 		{"scans/example.com_1709913600.json", "example.com"},
 		{"scans/10.0.0.1.json", "10.0.0.1"},
+		// Group-prefixed (port-splitting) keys
+		{"scans/example.com_line1/example.com_chunk0_of_5_1700000000.json", "example.com"},
+		{"scans/10.0.0.1_line1/10.0.0.1_chunk2_of_5_1700000000.json", "10.0.0.1"},
+		{"scans/example.com_line3/example.com_chunk4_of_5_1700000000.json", "example.com"},
 	}
 	for _, tt := range tests {
 		got := extractTargetFromKey(tt.key)

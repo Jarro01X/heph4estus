@@ -31,6 +31,8 @@ func runNmap(args []string, log logger.Logger) error {
 	defaultOptions := fs.String("default-options", "-sS", "Default nmap options")
 	workers := fs.Int("workers", 10, "Number of worker tasks to launch")
 	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
+	mode := fs.String("mode", "target-only", "Distribution mode: target-only or target-ports")
+	portChunks := fs.Int("port-chunks", 5, "Number of port chunks per target (target-ports mode only)")
 	format := fs.String("format", "text", "Output format: text or json")
 	terraformDir := fs.String("terraform-dir", "deployments/aws/nmap/environments/dev", "Terraform working directory")
 
@@ -50,6 +52,12 @@ func runNmap(args []string, log logger.Logger) error {
 	if *workers <= 0 {
 		return fmt.Errorf("--workers must be positive")
 	}
+	if *mode != "target-only" && *mode != "target-ports" {
+		return fmt.Errorf("--mode must be target-only or target-ports")
+	}
+	if *portChunks <= 0 {
+		return fmt.Errorf("--port-chunks must be positive")
+	}
 
 	content, err := os.ReadFile(*inputFile)
 	if err != nil {
@@ -58,11 +66,16 @@ func runNmap(args []string, log logger.Logger) error {
 
 	// Parse targets.
 	scanner := nmap.NewScanner(log)
-	tasks := scanner.ParseTargets(string(content), *defaultOptions)
+	tasks := scanner.ParseTargetsWithMode(string(content), *defaultOptions, *mode, *portChunks)
 	if len(tasks) == 0 {
 		return fmt.Errorf("no targets found in %s", *inputFile)
 	}
-	logStatus("Parsed %d targets from %s", len(tasks), *inputFile)
+	if *mode == "target-ports" {
+		groups := countGroups(tasks)
+		logStatus("Mode: target-ports — %d target groups, %d total tasks (%d chunks/target)", groups, len(tasks), *portChunks)
+	} else {
+		logStatus("Parsed %d targets from %s", len(tasks), *inputFile)
+	}
 
 	// Read terraform outputs.
 	tf := infra.NewTerraformClient(log)
@@ -93,11 +106,15 @@ func runNmap(args []string, log logger.Logger) error {
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
 
+	const sqsMaxPayload = 256 * 1024 // 256 KB SQS message size limit
 	bodies := make([]string, len(tasks))
 	for i, t := range tasks {
 		b, err := json.Marshal(t)
 		if err != nil {
 			return fmt.Errorf("marshaling task %d: %w", i, err)
+		}
+		if len(b) > sqsMaxPayload {
+			return fmt.Errorf("task %d exceeds SQS 256KB limit (%d bytes)", i, len(b))
 		}
 		bodies[i] = string(b)
 	}
@@ -245,12 +262,30 @@ func regionFromECR(url string) string {
 
 func extractTargetFromKey(key string) string {
 	key = strings.TrimPrefix(key, "scans/")
+	// Handle group-prefixed paths: {group_id}/{target}_chunk{N}_of_{total}_{ts}.json
+	if idx := strings.Index(key, "/"); idx >= 0 {
+		key = key[idx+1:]
+	}
 	key = strings.TrimSuffix(key, ".json")
-	idx := strings.LastIndex(key, "_")
-	if idx > 0 {
+	// Chunked result: {target}_chunk{N}_of_{total}_{timestamp}
+	if chunkIdx := strings.Index(key, "_chunk"); chunkIdx > 0 {
+		return key[:chunkIdx]
+	}
+	// Non-chunked: {target}_{timestamp}
+	if idx := strings.LastIndex(key, "_"); idx > 0 {
 		return key[:idx]
 	}
 	return key
+}
+
+func countGroups(tasks []nmap.ScanTask) int {
+	seen := make(map[string]bool)
+	for _, t := range tasks {
+		if t.GroupID != "" {
+			seen[t.GroupID] = true
+		}
+	}
+	return len(seen)
 }
 
 func splitOutputList(s string) []string {
