@@ -223,7 +223,7 @@ func (m *ConfigModel) View() string {
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(18)
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
-	labels := []string{"Target File:", "Nmap Options:", "Worker Count:", "Compute Mode:", "Jitter Max (s):", "Timing (-T):", "DNS Servers:"}
+	labels := []string{"Target File:*", "Nmap Options:", "Worker Count:", "Compute Mode:", "Jitter Max (s):", "Timing (-T):", "DNS Servers:"}
 	for i, label := range labels {
 		ls := labelStyle
 		if m.focusIndex == i {
