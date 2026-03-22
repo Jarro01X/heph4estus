@@ -31,6 +31,9 @@ COPY --from=builder /app/bin/scanner /app/scanner
 # Set environment variables (defaults will be verified by entrypoint)
 ENV QUEUE_URL=""
 ENV S3_BUCKET=""
+ENV JITTER_MAX_SECONDS=""
+ENV NMAP_TIMING_TEMPLATE=""
+ENV DNS_SERVERS=""
 
 # Add non-root user for security
 RUN addgroup -S scanner && adduser -S scanner -G scanner

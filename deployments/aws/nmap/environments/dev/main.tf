@@ -58,6 +58,9 @@ module "compute" {
   ecs_task_role_arn      = module.security.ecs_task_role_arn
   sqs_queue_url          = module.messaging.queue_url
   s3_bucket_id           = module.storage.bucket_id
+  jitter_max_seconds     = var.jitter_max_seconds
+  nmap_timing_template   = var.nmap_timing_template
+  dns_servers            = var.dns_servers
 }
 
 # Create spot instance prerequisites (IAM + AMI lookup)

@@ -87,6 +87,18 @@ resource "aws_ecs_task_definition" "scanner" {
         {
           name  = "S3_BUCKET"
           value = var.s3_bucket_id
+        },
+        {
+          name  = "JITTER_MAX_SECONDS"
+          value = tostring(var.jitter_max_seconds)
+        },
+        {
+          name  = "NMAP_TIMING_TEMPLATE"
+          value = var.nmap_timing_template
+        },
+        {
+          name  = "DNS_SERVERS"
+          value = var.dns_servers
         }
       ]
       logConfiguration = {

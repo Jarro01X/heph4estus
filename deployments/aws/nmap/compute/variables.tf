@@ -52,3 +52,21 @@ variable "s3_bucket_id" {
   description = "ID of the S3 bucket for results"
   type        = string
 }
+
+variable "jitter_max_seconds" {
+  description = "Maximum jitter delay before each scan (0 = disabled)"
+  type        = number
+  default     = 0
+}
+
+variable "nmap_timing_template" {
+  description = "Nmap timing template (0-5, empty = use task default)"
+  type        = string
+  default     = ""
+}
+
+variable "dns_servers" {
+  description = "Comma-separated DNS servers for nmap (empty = system default)"
+  type        = string
+  default     = ""
+}
