@@ -87,7 +87,13 @@ func processMessage(
 		return true, fmt.Errorf("formatting result for %s: %w", task.Target, err)
 	}
 
-	s3Key := fmt.Sprintf("scans/%s_%d.json", task.Target, time.Now().Unix())
+	var s3Key string
+	if task.GroupID != "" {
+		s3Key = fmt.Sprintf("scans/%s/%s_chunk%d_of_%d_%d.json",
+			task.GroupID, task.Target, task.ChunkIdx, task.TotalChunks, time.Now().Unix())
+	} else {
+		s3Key = fmt.Sprintf("scans/%s_%d.json", task.Target, time.Now().Unix())
+	}
 	uploadCtx, uploadCancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer uploadCancel()
 
