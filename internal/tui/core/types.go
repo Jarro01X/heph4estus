@@ -47,6 +47,11 @@ type DeployConfig struct {
 	NmapOptions    string
 	WorkerCount    int
 	ComputeMode    string // "auto", "fargate", "spot" — default "auto"
+
+	// Scan hardening settings.
+	JitterMaxSeconds   int
+	NmapTimingTemplate string
+	DNSServers         string
 }
 
 // InfraOutputs holds terraform outputs needed by downstream views.

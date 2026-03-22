@@ -59,13 +59,16 @@ const (
 	fieldNmapOptions
 	fieldWorkerCount
 	fieldComputeMode
+	fieldJitterMax
+	fieldTimingTemplate
+	fieldDNSServers
 	fieldSubmit
 	fieldCount
 )
 
 // ConfigModel is the nmap configuration form view.
 type ConfigModel struct {
-	inputs     [4]textinput.Model
+	inputs     [7]textinput.Model
 	focusIndex int
 	help       help.Model
 	width      int
@@ -95,6 +98,19 @@ func NewConfig() *ConfigModel {
 	modeInput.SetValue("auto")
 	modeInput.CharLimit = 7
 
+	jitterInput := textinput.New()
+	jitterInput.Placeholder = "0"
+	jitterInput.SetValue("0")
+	jitterInput.CharLimit = 4
+
+	timingInput := textinput.New()
+	timingInput.Placeholder = ""
+	timingInput.CharLimit = 1
+
+	dnsInput := textinput.New()
+	dnsInput.Placeholder = ""
+	dnsInput.CharLimit = 128
+
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -107,7 +123,7 @@ func NewConfig() *ConfigModel {
 	}
 
 	return &ConfigModel{
-		inputs: [4]textinput.Model{targetInput, optsInput, workerInput, modeInput},
+		inputs: [7]textinput.Model{targetInput, optsInput, workerInput, modeInput, jitterInput, timingInput, dnsInput},
 		help:   h,
 	}
 }
@@ -161,20 +177,28 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.errMsg = "Compute mode must be auto, fargate, or spot"
 			return m, nil
 		}
+		jitterMax, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldJitterMax].Value()))
+		if jitterMax < 0 {
+			jitterMax = 0
+		}
+
 		return m, func() tea.Msg {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
 				Data: core.DeployConfig{
-					TerraformDir:   "deployments/aws/nmap/environments/dev",
-					Dockerfile:     "containers/nmap/Dockerfile",
-					DockerContext:   ".",
-					DockerTag:      "nmap-scanner:latest",
-					ECRRepoName:    "nmap-scanner",
-					AWSRegion:      awsRegion(),
-					TargetsContent: msg.content,
-					NmapOptions:    m.inputs[fieldNmapOptions].Value(),
-					WorkerCount:    workerCount,
-					ComputeMode:    computeMode,
+					TerraformDir:       "deployments/aws/nmap/environments/dev",
+					Dockerfile:         "containers/nmap/Dockerfile",
+					DockerContext:       ".",
+					DockerTag:          "nmap-scanner:latest",
+					ECRRepoName:        "nmap-scanner",
+					AWSRegion:          awsRegion(),
+					TargetsContent:     msg.content,
+					NmapOptions:        m.inputs[fieldNmapOptions].Value(),
+					WorkerCount:        workerCount,
+					ComputeMode:        computeMode,
+					JitterMaxSeconds:   jitterMax,
+					NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
+					DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
 				},
 			}
 		}
@@ -199,7 +223,7 @@ func (m *ConfigModel) View() string {
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(18)
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
-	labels := []string{"Target File:", "Nmap Options:", "Worker Count:", "Compute Mode:"}
+	labels := []string{"Target File:", "Nmap Options:", "Worker Count:", "Compute Mode:", "Jitter Max (s):", "Timing (-T):", "DNS Servers:"}
 	for i, label := range labels {
 		ls := labelStyle
 		if m.focusIndex == i {
