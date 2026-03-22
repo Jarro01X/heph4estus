@@ -61,6 +61,7 @@ module "compute" {
   jitter_max_seconds     = var.jitter_max_seconds
   nmap_timing_template   = var.nmap_timing_template
   dns_servers            = var.dns_servers
+  no_rdns                = var.no_rdns
 }
 
 # Create spot instance prerequisites (IAM + AMI lookup)

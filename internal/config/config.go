@@ -13,6 +13,7 @@ type ConsumerConfig struct {
 	JitterMaxSeconds   int    // JITTER_MAX_SECONDS; 0 = disabled
 	NmapTimingTemplate string // NMAP_TIMING_TEMPLATE; e.g. "3" for -T3
 	DNSServers         string // DNS_SERVERS; e.g. "8.8.8.8,8.8.4.4"
+	NoRDNS             bool   // NO_RDNS; disable reverse DNS resolution
 }
 
 // NewConsumerConfig creates a new consumer configuration from environment variables
@@ -34,12 +35,15 @@ func NewConsumerConfig() (*ConsumerConfig, error) {
 		}
 	}
 
+	noRDNS := os.Getenv("NO_RDNS")
+
 	return &ConsumerConfig{
 		QueueURL:           queueURL,
 		S3Bucket:           s3Bucket,
 		JitterMaxSeconds:   jitterMax,
 		NmapTimingTemplate: os.Getenv("NMAP_TIMING_TEMPLATE"),
 		DNSServers:         os.Getenv("DNS_SERVERS"),
+		NoRDNS:             noRDNS == "true" || noRDNS == "1",
 	}, nil
 }
 

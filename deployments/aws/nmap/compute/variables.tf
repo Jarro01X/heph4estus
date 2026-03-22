@@ -70,3 +70,9 @@ variable "dns_servers" {
   type        = string
   default     = ""
 }
+
+variable "no_rdns" {
+  description = "Disable reverse DNS resolution (empty = enabled, 'true' = disabled)"
+  type        = string
+  default     = ""
+}
