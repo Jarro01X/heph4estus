@@ -14,6 +14,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
+// scanRunner abstracts scan execution so tests can inject mock results.
+type scanRunner interface {
+	RunScan(task nmap.ScanTask) nmap.ScanResult
+	FormatResult(result nmap.ScanResult) ([]byte, error)
+}
+
 func main() {
 	log := logger.NewSimpleLogger()
 	log.Info("Scanner consumer application starting...")
@@ -49,13 +55,19 @@ func main() {
 
 // processMessage polls for one message, scans the target, uploads the result,
 // and deletes the message. Returns true if a message was processed.
+//
+// Error handling:
+//   - Malformed messages: deleted immediately (poison-pill prevention)
+//   - Transient scan errors: no upload, no delete (SQS visibility timeout retries)
+//   - Permanent scan errors: upload error result, delete message
+//   - Upload failures: no delete (SQS visibility timeout retries)
 func processMessage(
 	ctx context.Context,
 	log logger.Logger,
 	cfg *appconfig.ConsumerConfig,
 	queue cloud.Queue,
 	storage cloud.Storage,
-	scannerSvc *nmap.Scanner,
+	scanner scanRunner,
 ) (bool, error) {
 	msg, err := queue.Receive(ctx, cfg.QueueURL)
 	if err != nil {
@@ -65,7 +77,7 @@ func processMessage(
 		return false, nil
 	}
 
-	log.Info("Received message, processing...")
+	log.Info("Received message (attempt %d), processing...", msg.ReceiveCount)
 
 	var task nmap.ScanTask
 	if err := json.Unmarshal([]byte(msg.Body), &task); err != nil {
@@ -77,12 +89,37 @@ func processMessage(
 		return true, fmt.Errorf("unmarshaling task: %w", err)
 	}
 
+	// Apply pre-scan jitter to spread worker timing.
+	if cfg.JitterMaxSeconds > 0 {
+		d := nmap.ApplyJitter(cfg.JitterMaxSeconds)
+		log.Info("Applied jitter: %v", d)
+	}
+
+	// Inject timing template and DNS servers into nmap options.
+	if cfg.NmapTimingTemplate != "" {
+		task.Options = fmt.Sprintf("-T%s %s", cfg.NmapTimingTemplate, task.Options)
+	}
+	if cfg.DNSServers != "" {
+		task.Options = fmt.Sprintf("--dns-servers %s %s", cfg.DNSServers, task.Options)
+	}
+
 	log.Info("Starting scan for target: %s", task.Target)
-	scanResult := scannerSvc.RunScan(task)
+	scanResult := scanner.RunScan(task)
 	log.Info("Scan completed for target: %s, success: %v", task.Target, scanResult.Error == "")
 
-	// Upload result to S3 — even if scan errored, we record the failure.
-	resultJSON, err := scannerSvc.FormatResult(scanResult)
+	// Classify scan errors for retry decisions.
+	if scanResult.Error != "" {
+		kind := nmap.ClassifyError(scanResult.Output, scanResult.Error)
+		if kind == nmap.ErrorTransient {
+			log.Info("Transient error for %s (attempt %d), will retry via SQS: %s",
+				task.Target, msg.ReceiveCount, scanResult.Error)
+			return true, nil
+		}
+		log.Info("Permanent error for %s, recording failure: %s", task.Target, scanResult.Error)
+	}
+
+	// Upload result to S3 — success or permanent error.
+	resultJSON, err := scanner.FormatResult(scanResult)
 	if err != nil {
 		return true, fmt.Errorf("formatting result for %s: %w", task.Target, err)
 	}

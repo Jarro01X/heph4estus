@@ -7,7 +7,9 @@ import (
 	"heph4estus/internal/cloud"
 	appconfig "heph4estus/internal/config"
 	"heph4estus/internal/tools/nmap"
+	"strings"
 	"testing"
+	"time"
 )
 
 // mockQueue records which methods were called and returns configured values.
@@ -59,6 +61,28 @@ func (l *mockLogger) Info(format string, args ...interface{})  {}
 func (l *mockLogger) Error(format string, args ...interface{}) {}
 func (l *mockLogger) Fatal(format string, args ...interface{}) {}
 
+// mockScanner returns preconfigured results and captures the task it received.
+type mockScanner struct {
+	result      nmap.ScanResult
+	capturedTask nmap.ScanTask
+}
+
+func (s *mockScanner) RunScan(task nmap.ScanTask) nmap.ScanResult {
+	s.capturedTask = task
+	r := s.result
+	if r.Target == "" {
+		r.Target = task.Target
+	}
+	if r.Timestamp.IsZero() {
+		r.Timestamp = time.Now()
+	}
+	return r
+}
+
+func (s *mockScanner) FormatResult(result nmap.ScanResult) ([]byte, error) {
+	return json.Marshal(result)
+}
+
 func validTaskMessage() *cloud.Message {
 	task := nmap.ScanTask{Target: "127.0.0.1", Options: "-sn"}
 	body, _ := json.Marshal(task)
@@ -66,6 +90,7 @@ func validTaskMessage() *cloud.Message {
 		ID:            "msg-1",
 		Body:          string(body),
 		ReceiptHandle: "receipt-1",
+		ReceiveCount:  1,
 	}
 }
 
@@ -79,6 +104,7 @@ func testConfig() *appconfig.ConsumerConfig {
 func TestProcessMessage_NoDeleteOnUploadFailure(t *testing.T) {
 	q := &mockQueue{msg: validTaskMessage()}
 	s := &mockStorage{uploadErr: errors.New("S3 unavailable")}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "scan output"}}
 
 	processed, err := processMessage(
 		context.Background(),
@@ -86,7 +112,7 @@ func TestProcessMessage_NoDeleteOnUploadFailure(t *testing.T) {
 		testConfig(),
 		q,
 		s,
-		nmap.NewScanner(&mockLogger{}),
+		sc,
 	)
 
 	if !processed {
@@ -103,6 +129,7 @@ func TestProcessMessage_NoDeleteOnUploadFailure(t *testing.T) {
 func TestProcessMessage_DeleteAfterSuccessfulUpload(t *testing.T) {
 	q := &mockQueue{msg: validTaskMessage()}
 	s := &mockStorage{}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "scan output"}}
 
 	processed, err := processMessage(
 		context.Background(),
@@ -110,7 +137,7 @@ func TestProcessMessage_DeleteAfterSuccessfulUpload(t *testing.T) {
 		testConfig(),
 		q,
 		s,
-		nmap.NewScanner(&mockLogger{}),
+		sc,
 	)
 
 	if !processed {
@@ -130,6 +157,7 @@ func TestProcessMessage_DeleteAfterSuccessfulUpload(t *testing.T) {
 func TestProcessMessage_EmptyQueue(t *testing.T) {
 	q := &mockQueue{msg: nil}
 	s := &mockStorage{}
+	sc := &mockScanner{}
 
 	processed, _ := processMessage(
 		context.Background(),
@@ -137,7 +165,7 @@ func TestProcessMessage_EmptyQueue(t *testing.T) {
 		testConfig(),
 		q,
 		s,
-		nmap.NewScanner(&mockLogger{}),
+		sc,
 	)
 
 	if processed {
@@ -154,6 +182,7 @@ func TestProcessMessage_MalformedMessageDeleted(t *testing.T) {
 		},
 	}
 	s := &mockStorage{}
+	sc := &mockScanner{}
 
 	processed, err := processMessage(
 		context.Background(),
@@ -161,7 +190,7 @@ func TestProcessMessage_MalformedMessageDeleted(t *testing.T) {
 		testConfig(),
 		q,
 		s,
-		nmap.NewScanner(&mockLogger{}),
+		sc,
 	)
 
 	if !processed {
@@ -172,5 +201,153 @@ func TestProcessMessage_MalformedMessageDeleted(t *testing.T) {
 	}
 	if !q.deleted {
 		t.Fatal("malformed messages should be deleted to prevent poison-pill loop")
+	}
+}
+
+func TestProcessMessage_TransientError_NoUploadNoDelete(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{
+		result: nmap.ScanResult{
+			Output: "Temporary failure in name resolution",
+			Error:  "exit status 1",
+		},
+	}
+
+	processed, err := processMessage(
+		context.Background(),
+		&mockLogger{},
+		testConfig(),
+		q,
+		s,
+		sc,
+	)
+
+	if !processed {
+		t.Fatal("expected message to be processed")
+	}
+	if err != nil {
+		t.Fatalf("transient errors should not return error: %v", err)
+	}
+	if s.uploaded {
+		t.Fatal("transient errors should NOT upload results")
+	}
+	if q.deleted {
+		t.Fatal("transient errors should NOT delete message — SQS retries")
+	}
+}
+
+func TestProcessMessage_TransientTimeout_NoUploadNoDelete(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{
+		result: nmap.ScanResult{
+			Error: "scan timed out after 5 minutes",
+		},
+	}
+
+	processed, err := processMessage(
+		context.Background(),
+		&mockLogger{},
+		testConfig(),
+		q,
+		s,
+		sc,
+	)
+
+	if !processed {
+		t.Fatal("expected message to be processed")
+	}
+	if err != nil {
+		t.Fatalf("transient errors should not return error: %v", err)
+	}
+	if s.uploaded {
+		t.Fatal("transient timeout should NOT upload")
+	}
+	if q.deleted {
+		t.Fatal("transient timeout should NOT delete")
+	}
+}
+
+func TestProcessMessage_PermanentError_UploadsAndDeletes(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{
+		result: nmap.ScanResult{
+			Output: "Failed to resolve \"notahost\".",
+			Error:  "exit status 1",
+		},
+	}
+
+	processed, err := processMessage(
+		context.Background(),
+		&mockLogger{},
+		testConfig(),
+		q,
+		s,
+		sc,
+	)
+
+	if !processed {
+		t.Fatal("expected message to be processed")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !s.uploaded {
+		t.Fatal("permanent errors should upload error result")
+	}
+	if !q.deleted {
+		t.Fatal("permanent errors should delete message")
+	}
+}
+
+func TestProcessMessage_DNSInjection(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "ok"}}
+
+	cfg := testConfig()
+	cfg.DNSServers = "8.8.8.8,8.8.4.4"
+
+	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+
+	if !strings.Contains(sc.capturedTask.Options, "--dns-servers 8.8.8.8,8.8.4.4") {
+		t.Errorf("expected --dns-servers in options, got %q", sc.capturedTask.Options)
+	}
+}
+
+func TestProcessMessage_TimingInjection(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "ok"}}
+
+	cfg := testConfig()
+	cfg.NmapTimingTemplate = "3"
+
+	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+
+	if !strings.Contains(sc.capturedTask.Options, "-T3") {
+		t.Errorf("expected -T3 in options, got %q", sc.capturedTask.Options)
+	}
+}
+
+func TestProcessMessage_BothDNSAndTiming(t *testing.T) {
+	q := &mockQueue{msg: validTaskMessage()}
+	s := &mockStorage{}
+	sc := &mockScanner{result: nmap.ScanResult{Output: "ok"}}
+
+	cfg := testConfig()
+	cfg.DNSServers = "1.1.1.1"
+	cfg.NmapTimingTemplate = "2"
+
+	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+
+	opts := sc.capturedTask.Options
+	if !strings.Contains(opts, "--dns-servers 1.1.1.1") {
+		t.Errorf("expected --dns-servers in options, got %q", opts)
+	}
+	if !strings.Contains(opts, "-T2") {
+		t.Errorf("expected -T2 in options, got %q", opts)
 	}
 }
