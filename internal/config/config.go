@@ -3,12 +3,16 @@ package config
 import (
 	"errors"
 	"os"
+	"strconv"
 )
 
 // ConsumerConfig represents the configuration for the consumer application
 type ConsumerConfig struct {
-	QueueURL string
-	S3Bucket string
+	QueueURL           string
+	S3Bucket           string
+	JitterMaxSeconds   int    // JITTER_MAX_SECONDS; 0 = disabled
+	NmapTimingTemplate string // NMAP_TIMING_TEMPLATE; e.g. "3" for -T3
+	DNSServers         string // DNS_SERVERS; e.g. "8.8.8.8,8.8.4.4"
 }
 
 // NewConsumerConfig creates a new consumer configuration from environment variables
@@ -23,9 +27,19 @@ func NewConsumerConfig() (*ConsumerConfig, error) {
 		return nil, errors.New("S3_BUCKET environment variable is required")
 	}
 
+	jitterMax := 0
+	if v := os.Getenv("JITTER_MAX_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			jitterMax = n
+		}
+	}
+
 	return &ConsumerConfig{
-		QueueURL: queueURL,
-		S3Bucket: s3Bucket,
+		QueueURL:           queueURL,
+		S3Bucket:           s3Bucket,
+		JitterMaxSeconds:   jitterMax,
+		NmapTimingTemplate: os.Getenv("NMAP_TIMING_TEMPLATE"),
+		DNSServers:         os.Getenv("DNS_SERVERS"),
 	}, nil
 }
 
