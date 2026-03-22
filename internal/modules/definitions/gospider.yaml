@@ -1,0 +1,10 @@
+name: gospider
+description: Fast web spider for crawling and link extraction
+command: "gospider -S {{input}} -o {{output}} -q"
+input_type: target_list
+output_ext: txt
+install_cmd: "go install github.com/jaeles-project/gospider@latest"
+default_cpu: 256
+default_memory: 512
+timeout: 15m
+tags: [recon, web]

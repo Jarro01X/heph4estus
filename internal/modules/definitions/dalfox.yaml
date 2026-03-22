@@ -1,0 +1,10 @@
+name: dalfox
+description: XSS vulnerability scanner and parameter analysis
+command: "dalfox file {{input}} -o {{output}} --format json"
+input_type: target_list
+output_ext: json
+install_cmd: "go install github.com/hahwul/dalfox/v2@latest"
+default_cpu: 256
+default_memory: 512
+timeout: 15m
+tags: [scanner, xss]
