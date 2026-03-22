@@ -27,5 +27,8 @@ docker-build-generic:
 tf-validate:
 	cd deployments/aws/nmap/environments/dev && terraform init -backend=false && terraform validate
 
+tf-validate-generic:
+	cd deployments/aws/generic/environments/dev && terraform init -backend=false && terraform validate
+
 clean:
 	rm -rf bin/
