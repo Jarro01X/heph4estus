@@ -367,6 +367,7 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				JitterMaxSeconds:   cfg.JitterMaxSeconds,
 				NmapTimingTemplate: cfg.NmapTimingTemplate,
 				DNSServers:         cfg.DNSServers,
+				NoRDNS:             cfg.NoRDNS,
 				InstanceProfileARN: outputs["instance_profile_arn"],
 				AMIID:              outputs["ami_id"],
 			},

@@ -62,6 +62,7 @@ const (
 	fieldJitterMax
 	fieldTimingTemplate
 	fieldDNSServers
+	fieldNoRDNS
 	fieldSubmit
 	fieldCount
 )
@@ -69,6 +70,7 @@ const (
 // ConfigModel is the nmap configuration form view.
 type ConfigModel struct {
 	inputs     [7]textinput.Model
+	noRDNS     bool
 	focusIndex int
 	help       help.Model
 	width      int
@@ -155,9 +157,18 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			if m.focusIndex == fieldSubmit {
 				return m, m.submit()
 			}
+			if m.focusIndex == fieldNoRDNS {
+				m.noRDNS = !m.noRDNS
+				return m, nil
+			}
 			// Move to next field on enter in input fields
 			m.focusIndex = (m.focusIndex + 1) % fieldCount
 			return m, m.updateFocus()
+		case " ":
+			if m.focusIndex == fieldNoRDNS {
+				m.noRDNS = !m.noRDNS
+				return m, nil
+			}
 		}
 
 	case fileReadMsg:
@@ -199,6 +210,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 					JitterMaxSeconds:   jitterMax,
 					NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
 					DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
+				NoRDNS:             m.noRDNS,
 				},
 			}
 		}
@@ -231,6 +243,17 @@ func (m *ConfigModel) View() string {
 		}
 		fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.inputs[i].View())
 	}
+
+	// Disable rDNS toggle
+	rdnsLabel := labelStyle
+	if m.focusIndex == fieldNoRDNS {
+		rdnsLabel = focusedLabel
+	}
+	check := "[ ]"
+	if m.noRDNS {
+		check = "[x]"
+	}
+	fmt.Fprintf(&b, "  %s%s Disable rDNS (-n)\n", rdnsLabel.Render(""), check)
 
 	b.WriteString("\n")
 

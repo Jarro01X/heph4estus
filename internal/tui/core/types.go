@@ -52,6 +52,7 @@ type DeployConfig struct {
 	JitterMaxSeconds   int
 	NmapTimingTemplate string
 	DNSServers         string
+	NoRDNS             bool // Disable reverse DNS resolution (-n)
 }
 
 // InfraOutputs holds terraform outputs needed by downstream views.
@@ -74,6 +75,7 @@ type InfraOutputs struct {
 	JitterMaxSeconds   int
 	NmapTimingTemplate string
 	DNSServers         string
+	NoRDNS             bool
 
 	// Spot instance fields (populated when spot module is deployed).
 	InstanceProfileARN string
