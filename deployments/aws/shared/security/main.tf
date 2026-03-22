@@ -201,7 +201,8 @@ resource "aws_iam_policy" "ecs_task_custom" {
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject"
+          "s3:PutObject",
+          "s3:GetObject"
         ]
         Resource = "${var.s3_bucket_arn}/*"
       }
