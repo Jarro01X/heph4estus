@@ -255,7 +255,7 @@ func TestExecute_TempDirCleanup(t *testing.T) {
 	executor := NewExecutor(&mockLogger{}, &mockStorage{data: map[string][]byte{}}, "test-bucket")
 	task := Task{ToolName: "cleanup", Target: "example.com"}
 
-	executor.Execute(context.Background(), mod, task)
+	_, _, _ = executor.Execute(context.Background(), mod, task)
 
 	// Verify temp dirs are cleaned up by checking no heph-worker dirs remain.
 	matches, _ := filepath.Glob(os.TempDir() + "/heph-worker-*")

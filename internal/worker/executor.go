@@ -43,7 +43,7 @@ func (e *Executor) Execute(ctx context.Context, mod *modules.ModuleDefinition, t
 	if err != nil {
 		return result, nil, fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	inputPath := filepath.Join(tempDir, "input")
 	outputPath := filepath.Join(tempDir, "output."+mod.OutputExt)
