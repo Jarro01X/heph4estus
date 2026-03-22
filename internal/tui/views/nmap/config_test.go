@@ -16,8 +16,8 @@ func TestConfigModel_InitialView(t *testing.T) {
 	if !strings.Contains(v, "Nmap Scanner") {
 		t.Fatal("expected title")
 	}
-	if !strings.Contains(v, "Target File") {
-		t.Fatal("expected target file label")
+	if !strings.Contains(v, "Target File:*") {
+		t.Fatal("expected target file label with required marker")
 	}
 	if !strings.Contains(v, "Worker Count") {
 		t.Fatal("expected worker count label")
