@@ -310,7 +310,7 @@ func TestProcessMessage_DNSInjection(t *testing.T) {
 	cfg := testConfig()
 	cfg.DNSServers = "8.8.8.8,8.8.4.4"
 
-	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+	_, _ = processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
 
 	if !strings.Contains(sc.capturedTask.Options, "--dns-servers 8.8.8.8,8.8.4.4") {
 		t.Errorf("expected --dns-servers in options, got %q", sc.capturedTask.Options)
@@ -325,7 +325,7 @@ func TestProcessMessage_TimingInjection(t *testing.T) {
 	cfg := testConfig()
 	cfg.NmapTimingTemplate = "3"
 
-	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+	_, _ = processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
 
 	if !strings.Contains(sc.capturedTask.Options, "-T3") {
 		t.Errorf("expected -T3 in options, got %q", sc.capturedTask.Options)
@@ -341,7 +341,7 @@ func TestProcessMessage_BothDNSAndTiming(t *testing.T) {
 	cfg.DNSServers = "1.1.1.1"
 	cfg.NmapTimingTemplate = "2"
 
-	processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
+	_, _ = processMessage(context.Background(), &mockLogger{}, cfg, q, s, sc)
 
 	opts := sc.capturedTask.Options
 	if !strings.Contains(opts, "--dns-servers 1.1.1.1") {
