@@ -65,6 +65,11 @@ type InfraOutputs struct {
 	WorkerCount    int
 	ComputeMode    string // Resolved compute mode
 
+	// Scan hardening settings (passed as env vars to workers).
+	JitterMaxSeconds   int
+	NmapTimingTemplate string
+	DNSServers         string
+
 	// Spot instance fields (populated when spot module is deployed).
 	InstanceProfileARN string
 	AMIID              string
