@@ -381,6 +381,7 @@ func (m *StatusModel) launchWorkers() tea.Cmd {
 				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
 				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
 				"DNS_SERVERS":          infra.DNSServers,
+				"NO_RDNS":              formatBool(infra.NoRDNS),
 			},
 			Count: infra.WorkerCount,
 		})
@@ -402,6 +403,7 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
 				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
 				"DNS_SERVERS":          infra.DNSServers,
+				"NO_RDNS":              formatBool(infra.NoRDNS),
 			},
 		})
 		ids, err := sub.LaunchSpotWorkers(context.Background(), cloud.SpotOpts{
@@ -429,6 +431,13 @@ type spotLaunchMsg struct {
 
 // regionFromECR extracts the AWS region from an ECR repo URL like
 // "123456789.dkr.ecr.us-east-1.amazonaws.com/repo".
+func formatBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return ""
+}
+
 func regionFromECR(url string) string {
 	parts := strings.Split(url, ".")
 	for i, p := range parts {
