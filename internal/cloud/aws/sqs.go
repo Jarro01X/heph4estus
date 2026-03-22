@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -82,6 +83,7 @@ func (c *SQSClient) Receive(ctx context.Context, queueID string) (*cloud.Message
 		QueueUrl:            &queueID,
 		MaxNumberOfMessages: 1,
 		WaitTimeSeconds:     20,
+		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameAll},
 	})
 	if err != nil {
 		return nil, err
@@ -90,10 +92,15 @@ func (c *SQSClient) Receive(ctx context.Context, queueID string) (*cloud.Message
 		return nil, nil
 	}
 	msg := out.Messages[0]
+	receiveCount := 0
+	if rc, ok := msg.Attributes["ApproximateReceiveCount"]; ok {
+		receiveCount, _ = strconv.Atoi(rc)
+	}
 	return &cloud.Message{
 		ID:            aws.ToString(msg.MessageId),
 		Body:          aws.ToString(msg.Body),
 		ReceiptHandle: aws.ToString(msg.ReceiptHandle),
+		ReceiveCount:  receiveCount,
 	}, nil
 }
 

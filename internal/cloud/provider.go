@@ -36,6 +36,7 @@ type Message struct {
 	ID            string
 	Body          string
 	ReceiptHandle string
+	ReceiveCount  int // ApproximateReceiveCount from SQS; 0 if unavailable
 }
 
 // Compute abstracts container and spot-instance operations.
