@@ -1,4 +1,4 @@
-package nmap
+package worker
 
 import "strings"
 
@@ -20,15 +20,18 @@ const (
 // (e.g., DNS timeout vs permanent DNS failure) default to retry.
 var transientPatterns = []string{
 	"scan timed out",
+	"command timed out",
 	"Temporary failure in name resolution",
 	"sendto: Network is unreachable",
 	"Host seems down",
 	"QUITTING!",
 	"connection timed out",
 	"No route to host",
+	"i/o timeout",
+	"connection refused",
 }
 
-// ClassifyError examines nmap output and error text to determine retry behavior.
+// ClassifyError examines command output and error text to determine retry behavior.
 // Transient patterns are checked first. If no transient pattern matches, the
 // error is classified as permanent. Unknown errors default to permanent to
 // avoid infinite retry loops — SQS maxReceiveCount + DLQ handles the case

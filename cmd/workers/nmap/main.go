@@ -9,6 +9,7 @@ import (
 	appconfig "heph4estus/internal/config"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/tools/nmap"
+	"heph4estus/internal/worker"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -91,7 +92,7 @@ func processMessage(
 
 	// Apply pre-scan jitter to spread worker timing.
 	if cfg.JitterMaxSeconds > 0 {
-		d := nmap.ApplyJitter(cfg.JitterMaxSeconds)
+		d := worker.ApplyJitter(cfg.JitterMaxSeconds)
 		log.Info("Applied jitter: %v", d)
 	}
 
@@ -112,8 +113,8 @@ func processMessage(
 
 	// Classify scan errors for retry decisions.
 	if scanResult.Error != "" {
-		kind := nmap.ClassifyError(scanResult.Output, scanResult.Error)
-		if kind == nmap.ErrorTransient {
+		kind := worker.ClassifyError(scanResult.Output, scanResult.Error)
+		if kind == worker.ErrorTransient {
 			log.Info("Transient error for %s (attempt %d), will retry via SQS: %s",
 				task.Target, msg.ReceiveCount, scanResult.Error)
 			return true, nil

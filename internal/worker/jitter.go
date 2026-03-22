@@ -1,4 +1,4 @@
-package nmap
+package worker
 
 import (
 	"crypto/rand"

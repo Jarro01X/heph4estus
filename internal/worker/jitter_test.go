@@ -1,4 +1,4 @@
-package nmap
+package worker
 
 import (
 	"testing"
@@ -28,7 +28,6 @@ func TestJitterDuration_BoundedRange(t *testing.T) {
 }
 
 func TestJitterDuration_NonZeroForLargeMax(t *testing.T) {
-	// With maxSeconds=60, it's astronomically unlikely all 100 iterations return 0.
 	nonZero := 0
 	for i := 0; i < 100; i++ {
 		if JitterDuration(60) > 0 {
