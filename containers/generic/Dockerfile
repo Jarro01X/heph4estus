@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -43,4 +43,4 @@ RUN addgroup -S worker && adduser -S worker -G worker
 RUN chown -R worker:worker /app
 USER worker
 
-ENTRYPOINT ["sh", "-c", "exec /app/bin/worker"]
+ENTRYPOINT ["/app/bin/worker"]
