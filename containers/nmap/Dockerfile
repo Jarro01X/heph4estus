@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -41,20 +41,4 @@ RUN addgroup -S scanner && adduser -S scanner -G scanner
 RUN chown -R scanner:scanner /app
 USER scanner
 
-# Use a direct shell command as entrypoint instead of a separate script
-ENTRYPOINT [ "sh", "-c", "\
-echo \"Starting nmap scanner container...\" && \
-echo \"Environment variables:\" && \
-echo \"QUEUE_URL: ${QUEUE_URL:-not set}\" && \
-echo \"S3_BUCKET: ${S3_BUCKET:-not set}\" && \
-if [ -z \"$QUEUE_URL\" ]; then \
-    echo \"Error: QUEUE_URL environment variable is not set\" && \
-    exit 1; \
-fi && \
-if [ -z \"$S3_BUCKET\" ]; then \
-    echo \"Error: S3_BUCKET environment variable is not set\" && \
-    exit 1; \
-fi && \
-echo \"Starting scanner application...\" && \
-exec /app/scanner \
-" ]
+ENTRYPOINT ["/app/scanner"]
