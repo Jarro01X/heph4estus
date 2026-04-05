@@ -10,6 +10,7 @@ import (
 
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/modules"
 )
 
 // toolPaths maps tool names to their infrastructure paths.
@@ -24,23 +25,8 @@ type toolPaths struct {
 }
 
 func resolveToolPaths(tool, backend string) (*toolPaths, error) {
-	switch tool {
-	case "nmap":
-		if backend == "generic" {
-			return &toolPaths{
-				TerraformDir: "deployments/aws/generic/environments/dev",
-				Dockerfile:   "containers/generic/Dockerfile",
-				DockerCtx:    ".",
-				DockerTag:    "heph-nmap-worker:latest",
-				ECRRepoName:  "heph-dev-nmap",
-				BuildArgs: map[string]string{
-					"RUNTIME_INSTALL_CMD": "apk add --no-cache nmap nmap-scripts",
-				},
-				TerraformVars: map[string]string{
-					"tool_name": "nmap",
-				},
-			}, nil
-		}
+	// Nmap dedicated backend is a special case with its own infra.
+	if tool == "nmap" && backend == "dedicated" {
 		return &toolPaths{
 			TerraformDir: "deployments/aws/nmap/environments/dev",
 			Dockerfile:   "containers/nmap/Dockerfile",
@@ -48,8 +34,56 @@ func resolveToolPaths(tool, backend string) (*toolPaths, error) {
 			DockerTag:    "nmap-scanner:latest",
 			ECRRepoName:  "nmap-scanner",
 		}, nil
-	default:
-		return nil, fmt.Errorf("unknown tool: %q (supported: nmap)", tool)
+	}
+
+	// Only nmap has a dedicated backend; all other tools must use generic.
+	if backend == "dedicated" && tool != "nmap" {
+		return nil, fmt.Errorf("--backend dedicated is only supported for nmap; use --backend generic for %q", tool)
+	}
+
+	// All other tools (and nmap with generic backend) resolve from the registry.
+	return resolveGenericToolPaths(tool)
+}
+
+// resolveGenericToolPaths derives Docker/Terraform configuration from a module definition.
+func resolveGenericToolPaths(tool string) (*toolPaths, error) {
+	reg, err := modules.NewDefaultRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("loading module registry: %w", err)
+	}
+	mod, err := reg.Get(tool)
+	if err != nil {
+		names := reg.Names()
+		return nil, fmt.Errorf("unknown tool: %q (available: %s)", tool, strings.Join(names, ", "))
+	}
+
+	buildArgs := installCmdToBuildArgs(mod.InstallCmd)
+
+	return &toolPaths{
+		TerraformDir: "deployments/aws/generic/environments/dev",
+		Dockerfile:   "containers/generic/Dockerfile",
+		DockerCtx:    ".",
+		DockerTag:    fmt.Sprintf("heph-%s-worker:latest", tool),
+		ECRRepoName:  fmt.Sprintf("heph-dev-%s", tool),
+		BuildArgs:    buildArgs,
+		TerraformVars: map[string]string{
+			"tool_name":   tool,
+			"task_cpu":    fmt.Sprintf("%d", mod.DefaultCPU),
+			"task_memory": fmt.Sprintf("%d", mod.DefaultMemory),
+		},
+	}, nil
+}
+
+// installCmdToBuildArgs maps a module's install_cmd to the correct Docker build arg.
+// "go install ..." → GO_INSTALL_CMD; everything else → RUNTIME_INSTALL_CMD.
+func installCmdToBuildArgs(installCmd string) map[string]string {
+	if strings.HasPrefix(installCmd, "go install ") {
+		return map[string]string{
+			"GO_INSTALL_CMD": installCmd,
+		}
+	}
+	return map[string]string{
+		"RUNTIME_INSTALL_CMD": installCmd,
 	}
 }
 
