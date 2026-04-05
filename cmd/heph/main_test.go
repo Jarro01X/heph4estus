@@ -114,10 +114,73 @@ func TestScanMissingTool(t *testing.T) {
 	}
 }
 
-func TestScanPlaceholder(t *testing.T) {
-	err := run([]string{"scan", "--tool", "nuclei"}, testLogger())
-	if err != nil {
-		t.Fatalf("scan placeholder returned error: %v", err)
+func TestScanMissingFile(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for scan without --file")
+	}
+	if !strings.Contains(err.Error(), "--file flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanUnknownTool(t *testing.T) {
+	err := run([]string{"scan", "--tool", "nonexistent", "--file", "targets.txt"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanWordlistRejection(t *testing.T) {
+	err := run([]string{"scan", "--tool", "ffuf", "--file", "targets.txt"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for wordlist tool")
+	}
+	if !strings.Contains(err.Error(), "PR 5.7") {
+		t.Fatalf("expected PR 5.7 message, got: %v", err)
+	}
+}
+
+func TestScanNonexistentFile(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !strings.Contains(err.Error(), "reading target file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanInvalidFormat(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--format", "xml"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid format")
+	}
+	if !strings.Contains(err.Error(), "--format must be") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanInvalidComputeMode(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--compute-mode", "gpu"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid compute mode")
+	}
+	if !strings.Contains(err.Error(), "--compute-mode must be") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanInvalidWorkers(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--workers", "0"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for zero workers")
+	}
+	if !strings.Contains(err.Error(), "--workers must be positive") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -154,11 +217,21 @@ func TestInfraDeployMissingTool(t *testing.T) {
 }
 
 func TestInfraDeployUnknownTool(t *testing.T) {
-	err := run([]string{"infra", "deploy", "--tool", "hashcat"}, testLogger())
+	err := run([]string{"infra", "deploy", "--tool", "hashcat", "--backend", "generic"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
 	if !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraDeployDedicatedNonNmap(t *testing.T) {
+	err := run([]string{"infra", "deploy", "--tool", "httpx", "--backend", "dedicated"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for dedicated non-nmap")
+	}
+	if !strings.Contains(err.Error(), "only supported for nmap") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -174,7 +247,7 @@ func TestInfraDestroyMissingTool(t *testing.T) {
 }
 
 func TestInfraDestroyUnknownTool(t *testing.T) {
-	err := run([]string{"infra", "destroy", "--tool", "hashcat"}, testLogger())
+	err := run([]string{"infra", "destroy", "--tool", "hashcat", "--backend", "generic"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
