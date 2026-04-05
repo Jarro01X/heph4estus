@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/modules"
 	"heph4estus/internal/tui/core"
 )
 
@@ -25,9 +26,11 @@ var titleArt = [6]string{
 }
 
 type menuItem struct {
-	title   string
-	enabled bool
-	target  core.ViewID
+	title    string
+	enabled  bool
+	target   core.ViewID
+	toolName string // non-empty for generic module entries
+	hint     string // shown after title in muted style (e.g. "coming soon")
 }
 
 func (i menuItem) FilterValue() string { return i.title }
@@ -45,6 +48,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	}
 
 	selected := index == m.Index()
+	hint := mi.hint
 	var line string
 
 	if mi.enabled {
@@ -54,9 +58,12 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 			line = core.NormalStyle.Render("  " + mi.title)
 		}
 	} else {
-		label := "  " + mi.title + " (coming soon)"
+		if hint == "" {
+			hint = "coming soon"
+		}
+		label := fmt.Sprintf("  %s (%s)", mi.title, hint)
 		if selected {
-			label = "► " + mi.title + " (coming soon)"
+			label = fmt.Sprintf("► %s (%s)", mi.title, hint)
 		}
 		line = core.MutedStyle.Render(label)
 	}
@@ -106,16 +113,12 @@ type Model struct {
 	height int
 }
 
-// New creates a new menu view.
+// New creates a new menu view, populated from the module registry.
 func New() *Model {
-	items := []list.Item{
-		menuItem{title: "Nmap Scanner", enabled: true, target: core.ViewNmapConfig},
-		menuItem{title: "Naabu + Nmap", enabled: false, target: core.ViewNaabuConfig},
-		menuItem{title: "Settings", enabled: true, target: core.ViewSettings},
-	}
+	items := buildMenuItems()
 
 	delegate := itemDelegate{}
-	l := list.New(items, delegate, 40, 6)
+	l := list.New(items, delegate, 50, len(items)+1)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowFilter(false)
@@ -140,6 +143,51 @@ func New() *Model {
 	}
 }
 
+// buildMenuItems populates the menu from the module registry.
+func buildMenuItems() []list.Item {
+	reg, err := modules.NewDefaultRegistry()
+	if err != nil {
+		// Fallback to hardcoded items if registry fails.
+		return []list.Item{
+			menuItem{title: "Nmap Scanner", enabled: true, target: core.ViewNmapConfig},
+			menuItem{title: "Settings", enabled: true, target: core.ViewSettings},
+		}
+	}
+
+	var items []list.Item
+	for _, mod := range reg.List() {
+		switch {
+		case mod.Name == "nmap":
+			// Route nmap to its dedicated config view.
+			items = append(items, menuItem{
+				title:   "nmap — " + mod.Description,
+				enabled: true,
+				target:  core.ViewNmapConfig,
+			})
+		case mod.InputType == modules.InputTypeWordlist:
+			// Wordlist modules are visible but disabled until PR 5.7.
+			items = append(items, menuItem{
+				title:    mod.Name + " — " + mod.Description,
+				enabled:  false,
+				toolName: mod.Name,
+				hint:     "wordlist — PR 5.7",
+			})
+		default:
+			// target_list modules route to the generic config flow.
+			items = append(items, menuItem{
+				title:    mod.Name + " — " + mod.Description,
+				enabled:  true,
+				target:   core.ViewGenericConfig,
+				toolName: mod.Name,
+			})
+		}
+	}
+
+	// Settings is always last.
+	items = append(items, menuItem{title: "Settings", enabled: true, target: core.ViewSettings})
+	return items
+}
+
 func (m *Model) Init() tea.Cmd {
 	return nil
 }
@@ -150,7 +198,9 @@ func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.help.SetWidth(msg.Width)
-		m.list.SetSize(msg.Width, 6)
+		// Reserve space for title art (8 lines) and help bar (2 lines).
+		listHeight := max(msg.Height-10, len(m.list.Items())+1)
+		m.list.SetSize(msg.Width, listHeight)
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -159,6 +209,16 @@ func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		case "enter":
 			item, ok := m.list.SelectedItem().(menuItem)
 			if ok && item.enabled {
+				// Generic modules pass tool name via NavigateWithDataMsg.
+				if item.target == core.ViewGenericConfig && item.toolName != "" {
+					toolName := item.toolName
+					return m, func() tea.Msg {
+						return core.NavigateWithDataMsg{
+							Target: core.ViewGenericConfig,
+							Data:   toolName,
+						}
+					}
+				}
 				return m, func() tea.Msg {
 					return core.NavigateMsg{Target: item.target}
 				}
