@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/tools/nmap"
+	"heph4estus/internal/worker"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 )
@@ -40,6 +41,7 @@ func runNmap(args []string, log logger.Logger) error {
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
 	terraformDir := fs.String("terraform-dir", "deployments/aws/nmap/environments/dev", "Terraform working directory")
+	useGeneric := fs.Bool("use-generic", false, "Use generic worker infrastructure instead of nmap-specific")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -72,11 +74,26 @@ func runNmap(args []string, log logger.Logger) error {
 	// Parse targets.
 	scanner := nmap.NewScanner(log)
 	tasks := scanner.ParseTargetsWithMode(string(content), *defaultOptions, *mode, *portChunks)
+
+	// Inject nmap-specific options into each task at enqueue time (producer-side).
+	// This keeps the generic worker tool-agnostic — it just executes whatever
+	// options are in the task without needing nmap-specific env vars.
 	if *noRDNS {
 		for i := range tasks {
 			tasks[i].Options = "-n " + tasks[i].Options
 		}
 	}
+	if *timingTemplate != "" {
+		for i := range tasks {
+			tasks[i].Options = fmt.Sprintf("-T%s %s", *timingTemplate, tasks[i].Options)
+		}
+	}
+	if *dnsServers != "" {
+		for i := range tasks {
+			tasks[i].Options = fmt.Sprintf("--dns-servers %s %s", *dnsServers, tasks[i].Options)
+		}
+	}
+
 	if len(tasks) == 0 {
 		return fmt.Errorf("no targets found in %s", *inputFile)
 	}
@@ -119,7 +136,21 @@ func runNmap(args []string, log logger.Logger) error {
 	const sqsMaxPayload = 256 * 1024 // 256 KB SQS message size limit
 	bodies := make([]string, len(tasks))
 	for i, t := range tasks {
-		b, err := json.Marshal(t)
+		var b []byte
+		if *useGeneric {
+			// Generic worker expects worker.Task with ToolName set.
+			gt := worker.Task{
+				ToolName:    "nmap",
+				Target:      t.Target,
+				Options:     t.Options,
+				GroupID:     t.GroupID,
+				ChunkIdx:    t.ChunkIdx,
+				TotalChunks: t.TotalChunks,
+			}
+			b, err = json.Marshal(gt)
+		} else {
+			b, err = json.Marshal(t)
+		}
 		if err != nil {
 			return fmt.Errorf("marshaling task %d: %w", i, err)
 		}
@@ -138,6 +169,19 @@ func runNmap(args []string, log logger.Logger) error {
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
 
+	// Build env vars for workers. Option injection is done at enqueue time,
+	// so workers only need queue/storage config and jitter.
+	containerName := "nmap-scanner"
+	workerEnv := map[string]string{
+		"QUEUE_URL":          queueURL,
+		"S3_BUCKET":          bucket,
+		"JITTER_MAX_SECONDS": strconv.Itoa(*jitterMax),
+	}
+	if *useGeneric {
+		containerName = "nmap-worker"
+		workerEnv["TOOL_NAME"] = "nmap"
+	}
+
 	useSpot := resolveComputeMode(*computeMode, *workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
@@ -145,13 +189,7 @@ func runNmap(args []string, log logger.Logger) error {
 			ECRRepoURL: ecrURL,
 			ImageTag:   "latest",
 			Region:     regionFromECR(ecrURL),
-			EnvVars: map[string]string{
-				"QUEUE_URL":            queueURL,
-				"S3_BUCKET":            bucket,
-				"JITTER_MAX_SECONDS":   strconv.Itoa(*jitterMax),
-				"NMAP_TIMING_TEMPLATE": *timingTemplate,
-				"DNS_SERVERS":          *dnsServers,
-			},
+			EnvVars:    workerEnv,
 		})
 		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
 			AMI:             outputs["ami_id"],
@@ -173,17 +211,11 @@ func runNmap(args []string, log logger.Logger) error {
 		_, err := compute.RunContainer(launchCtx, cloud.ContainerOpts{
 			Cluster:        outputs["ecs_cluster_name"],
 			TaskDefinition: outputs["task_definition_arn"],
-			ContainerName:  "nmap-scanner",
+			ContainerName:  containerName,
 			Subnets:        splitOutputList(outputs["subnet_ids"]),
 			SecurityGroups: []string{outputs["security_group_id"]},
-			Env: map[string]string{
-				"QUEUE_URL":            queueURL,
-				"S3_BUCKET":            bucket,
-				"JITTER_MAX_SECONDS":   strconv.Itoa(*jitterMax),
-				"NMAP_TIMING_TEMPLATE": *timingTemplate,
-				"DNS_SERVERS":          *dnsServers,
-			},
-			Count: *workers,
+			Env:            workerEnv,
+			Count:          *workers,
 		})
 		if err != nil {
 			return fmt.Errorf("launching Fargate tasks: %w", err)
@@ -196,8 +228,14 @@ func runNmap(args []string, log logger.Logger) error {
 	startTime := time.Now()
 	totalTargets := len(tasks)
 
+	// Generic worker stores results under scans/{tool}/, dedicated under scans/.
+	scanPrefix := "scans/"
+	if *useGeneric {
+		scanPrefix = "scans/nmap/"
+	}
+
 	for {
-		count, err := storage.Count(ctx, bucket, "scans/")
+		count, err := storage.Count(ctx, bucket, scanPrefix)
 		if err != nil {
 			logStatus("Warning: progress check failed: %v", err)
 		} else {
@@ -216,11 +254,11 @@ func runNmap(args []string, log logger.Logger) error {
 	logStatus("Scan complete: %d targets in %s", totalTargets, elapsed)
 
 	// Output results.
-	return outputResults(ctx, storage, bucket, *format)
+	return outputResults(ctx, storage, bucket, scanPrefix, *format, *useGeneric)
 }
 
-func outputResults(ctx context.Context, storage cloud.Storage, bucket, format string) error {
-	keys, err := storage.List(ctx, bucket, "scans/")
+func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string, generic bool) error {
+	keys, err := storage.List(ctx, bucket, prefix)
 	if err != nil {
 		return fmt.Errorf("listing results: %w", err)
 	}
@@ -228,28 +266,46 @@ func outputResults(ctx context.Context, storage cloud.Storage, bucket, format st
 	if format == "json" {
 		encoder := json.NewEncoder(os.Stdout)
 		for _, key := range keys {
+			// Only process .json result files (skip .xml output files from generic worker).
+			if !strings.HasSuffix(key, ".json") {
+				continue
+			}
 			data, err := storage.Download(ctx, bucket, key)
 			if err != nil {
 				logStatus("Warning: failed to download %s: %v", key, err)
 				continue
 			}
-			var result nmap.ScanResult
-			if err := json.Unmarshal(data, &result); err != nil {
-				logStatus("Warning: failed to parse %s: %v", key, err)
-				continue
-			}
-			if err := encoder.Encode(result); err != nil {
-				return fmt.Errorf("encoding result: %w", err)
+			if generic {
+				var result worker.Result
+				if err := json.Unmarshal(data, &result); err != nil {
+					logStatus("Warning: failed to parse %s: %v", key, err)
+					continue
+				}
+				if err := encoder.Encode(result); err != nil {
+					return fmt.Errorf("encoding result: %w", err)
+				}
+			} else {
+				var result nmap.ScanResult
+				if err := json.Unmarshal(data, &result); err != nil {
+					logStatus("Warning: failed to parse %s: %v", key, err)
+					continue
+				}
+				if err := encoder.Encode(result); err != nil {
+					return fmt.Errorf("encoding result: %w", err)
+				}
 			}
 		}
 	} else {
 		fmt.Printf("\n%-40s %s\n", "TARGET", "STATUS")
 		fmt.Println(strings.Repeat("─", 50))
 		for _, key := range keys {
+			if !strings.HasSuffix(key, ".json") {
+				continue
+			}
 			target := extractTargetFromKey(key)
 			fmt.Printf("%-40s %s\n", target, "done")
 		}
-		fmt.Printf("\n%d results written to s3://%s/scans/\n", len(keys), bucket)
+		fmt.Printf("\n%d results written to s3://%s/%s\n", len(keys), bucket, prefix)
 	}
 	return nil
 }
@@ -278,11 +334,15 @@ func regionFromECR(url string) string {
 
 func extractTargetFromKey(key string) string {
 	key = strings.TrimPrefix(key, "scans/")
-	// Handle group-prefixed paths: {group_id}/{target}_chunk{N}_of_{total}_{ts}.json
-	if idx := strings.Index(key, "/"); idx >= 0 {
-		key = key[idx+1:]
-	}
+	// Extract just the filename — works for all path formats:
+	//   legacy:  {target}_{ts}.json
+	//   legacy:  {group}/{target}_chunk{N}_of_{total}_{ts}.json
+	//   generic: {tool}/{target}_{ts}.json
+	//   generic: {tool}/{group}/{target}_chunk{N}_of_{total}_{ts}.json
+	parts := strings.Split(key, "/")
+	key = parts[len(parts)-1]
 	key = strings.TrimSuffix(key, ".json")
+	key = strings.TrimSuffix(key, ".xml")
 	// Chunked result: {target}_chunk{N}_of_{total}_{timestamp}
 	if chunkIdx := strings.Index(key, "_chunk"); chunkIdx > 0 {
 		return key[:chunkIdx]
