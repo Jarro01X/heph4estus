@@ -9,6 +9,7 @@ import (
 	"heph4estus/internal/cloud/aws"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/tui/views/deploy"
+	genericview "heph4estus/internal/tui/views/generic"
 	"heph4estus/internal/tui/views/menu"
 	nmapview "heph4estus/internal/tui/views/nmap"
 	"heph4estus/internal/tui/views/settings"
@@ -74,6 +75,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if infra, ok := msg.Data.(core.InfraOutputs); ok {
 				newView = a.createResultsView(infra)
 			}
+		case core.ViewGenericConfig:
+			if toolName, ok := msg.Data.(string); ok {
+				newView = genericview.NewConfig(toolName)
+			}
+		case core.ViewGenericStatus:
+			if infra, ok := msg.Data.(core.InfraOutputs); ok {
+				newView = a.createGenericStatusView(infra)
+			}
+		case core.ViewGenericResults:
+			if infra, ok := msg.Data.(core.InfraOutputs); ok {
+				newView = a.createGenericResultsView(infra)
+			}
 		}
 		if newView != nil {
 			a.switchView(newView)
@@ -115,6 +128,26 @@ func (a *App) createResultsView(infra core.InfraOutputs) core.View {
 	log := nopLogger{}
 	provider := aws.NewProvider(awsCfg, log)
 	return nmapview.NewResults(infra, provider.Storage())
+}
+
+func (a *App) createGenericStatusView(infra core.InfraOutputs) core.View {
+	awsCfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return menu.New()
+	}
+	log := nopLogger{}
+	provider := aws.NewProvider(awsCfg, log)
+	return genericview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil)
+}
+
+func (a *App) createGenericResultsView(infra core.InfraOutputs) core.View {
+	awsCfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return menu.New()
+	}
+	log := nopLogger{}
+	provider := aws.NewProvider(awsCfg, log)
+	return genericview.NewResults(infra, provider.Storage())
 }
 
 // nopLogger satisfies logger.Logger for AWS provider init.

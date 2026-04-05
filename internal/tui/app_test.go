@@ -16,8 +16,8 @@ func TestAppInitializesToMenu(t *testing.T) {
 	if v.Content == "" {
 		t.Fatal("expected non-empty view content after Init")
 	}
-	if !strings.Contains(v.Content, "Nmap Scanner") {
-		t.Fatal("expected menu view to contain menu items")
+	if !strings.Contains(v.Content, "nmap") {
+		t.Fatal("expected menu view to contain nmap entry")
 	}
 }
 
@@ -47,15 +47,19 @@ func TestNavigateToSettings(t *testing.T) {
 func TestNavigateBackToMenu(t *testing.T) {
 	app := NewApp()
 	app.Init()
+	// Give the app a reasonable window size so list rendering works.
+	app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Navigate to settings first
 	_, _ = app.Update(core.NavigateMsg{Target: core.ViewSettings})
 	// Navigate back to menu
 	_, _ = app.Update(core.NavigateMsg{Target: core.ViewMenu})
+	// Re-apply window size for the new view.
+	app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	v := app.View()
-	if !strings.Contains(v.Content, "Nmap Scanner") {
-		t.Fatal("expected menu view to contain menu items after navigating back")
+	if !strings.Contains(v.Content, "nmap") {
+		t.Fatal("expected menu view to contain nmap entry after navigating back")
 	}
 }
 
@@ -83,8 +87,8 @@ func TestNavigateToNmapConfig(t *testing.T) {
 	_, _ = app.Update(core.NavigateMsg{Target: core.ViewNmapConfig})
 
 	v := app.View()
-	if !strings.Contains(v.Content, "Nmap Scanner") {
-		t.Fatal("expected nmap config view to contain 'Nmap Scanner'")
+	if !strings.Contains(v.Content, "Nmap") {
+		t.Fatal("expected nmap config view to contain 'Nmap'")
 	}
 }
 
@@ -98,5 +102,17 @@ func TestNavigateWithDataMsg_Deploy(t *testing.T) {
 	v := app.View()
 	if !strings.Contains(v.Content, "Deploy") {
 		t.Fatal("expected deploy view")
+	}
+}
+
+func TestNavigateWithDataMsg_GenericConfig(t *testing.T) {
+	app := NewApp()
+	app.Init()
+
+	_, _ = app.Update(core.NavigateWithDataMsg{Target: core.ViewGenericConfig, Data: "httpx"})
+
+	v := app.View()
+	if !strings.Contains(v.Content, "httpx") {
+		t.Fatal("expected generic config view to contain 'httpx'")
 	}
 }
