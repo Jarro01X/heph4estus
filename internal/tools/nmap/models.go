@@ -6,6 +6,7 @@ import "time"
 type ScanTask struct {
 	Target      string `json:"target"`
 	Options     string `json:"options"`
+	JobID       string `json:"job_id,omitempty"`
 	GroupID     string `json:"group_id,omitempty"`
 	ChunkIdx    int    `json:"chunk_idx,omitempty"`
 	TotalChunks int    `json:"total_chunks,omitempty"`
@@ -13,6 +14,7 @@ type ScanTask struct {
 
 // ScanResult represents the result of a scan
 type ScanResult struct {
+	JobID     string    `json:"job_id,omitempty"`
 	Target    string    `json:"target"`
 	Output    string    `json:"output"`
 	Error     string    `json:"error,omitempty"`

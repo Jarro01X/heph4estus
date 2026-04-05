@@ -38,6 +38,7 @@ func (s *Scanner) RunScan(task ScanTask) ScanResult {
 	output, err := cmd.CombinedOutput()
 
 	result := ScanResult{
+		JobID:     task.JobID,
 		Target:    task.Target,
 		Output:    string(output),
 		Timestamp: time.Now(),
