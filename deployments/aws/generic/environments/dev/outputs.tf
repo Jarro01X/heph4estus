@@ -47,3 +47,8 @@ output "ami_id" {
   description = "AMI ID for spot instances"
   value       = module.spot.ami_id
 }
+
+output "tool_name" {
+  description = "Name of the tool this infrastructure was deployed for"
+  value       = var.tool_name
+}
