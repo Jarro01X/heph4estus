@@ -10,7 +10,7 @@ func validModule() ModuleDefinition {
 	return ModuleDefinition{
 		Name:          "test",
 		Description:   "A test module",
-		Command:       "test -i {{input}} -o {{output}}",
+		Exec:          []string{"test", "-i", "{{input}}", "-o", "{{output}}"},
 		InputType:     InputTypeTargetList,
 		OutputExt:     "json",
 		InstallCmd:    "apk add --no-cache test",
@@ -34,7 +34,7 @@ func TestValidate_MissingFields(t *testing.T) {
 		modify func(*ModuleDefinition)
 	}{
 		{"missing name", func(m *ModuleDefinition) { m.Name = "" }},
-		{"missing command", func(m *ModuleDefinition) { m.Command = "" }},
+		{"missing exec", func(m *ModuleDefinition) { m.Exec = nil }},
 		{"missing input_type", func(m *ModuleDefinition) { m.InputType = "" }},
 		{"missing output_ext", func(m *ModuleDefinition) { m.OutputExt = "" }},
 		{"missing install_cmd", func(m *ModuleDefinition) { m.InstallCmd = "" }},
@@ -57,6 +57,27 @@ func TestValidate_MissingFields(t *testing.T) {
 				t.Fatalf("expected ErrInvalidModule, got %v", err)
 			}
 		})
+	}
+}
+
+func TestValidate_ShellIsValid(t *testing.T) {
+	m := validModule()
+	m.Exec = nil
+	m.Shell = "tool {{target}} > {{output}}"
+	if err := m.Validate(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_ExecAndShellMutuallyExclusive(t *testing.T) {
+	m := validModule()
+	m.Shell = "tool {{target}}"
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrInvalidModule) {
+		t.Fatalf("expected ErrInvalidModule, got %v", err)
 	}
 }
 

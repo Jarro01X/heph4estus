@@ -1,9 +1,9 @@
 name: ffuf
 description: Web fuzzer for directories, vhosts, parameters
-command: "ffuf -w {{input}} -u {{target}} -of json -o {{output}} -ac"
+exec: ["ffuf", "-w", "{{input}}", "-u", "{{target}}", "-of", "json", "-o", "{{output}}", "-ac"]
 input_type: wordlist
 output_ext: json
-install_cmd: "go install github.com/ffuf/ffuf/v2@latest"
+install_cmd: "go install github.com/ffuf/ffuf/v2@v2.1.0"
 default_cpu: 256
 default_memory: 512
 timeout: 30m

@@ -1,6 +1,6 @@
 name: feroxbuster
 description: Recursive content discovery tool
-command: "feroxbuster -w {{input}} -u {{target}} -o {{output}} --json -q"
+exec: ["feroxbuster", "-w", "{{input}}", "-u", "{{target}}", "-o", "{{output}}", "--json", "-q"]
 input_type: wordlist
 output_ext: json
 install_cmd: "apk add --no-cache feroxbuster"

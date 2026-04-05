@@ -1,6 +1,6 @@
 name: massdns
 description: High-performance DNS stub resolver
-command: "massdns -r /usr/share/massdns/lists/resolvers.txt -o J -w {{output}} {{input}}"
+exec: ["massdns", "-r", "/usr/share/massdns/lists/resolvers.txt", "-o", "J", "-w", "{{output}}", "{{input}}"]
 input_type: target_list
 output_ext: jsonl
 install_cmd: "apk add --no-cache massdns"

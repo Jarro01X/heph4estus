@@ -24,7 +24,8 @@ var validInputTypes = map[string]bool{
 type ModuleDefinition struct {
 	Name          string            `yaml:"name"`
 	Description   string            `yaml:"description"`
-	Command       string            `yaml:"command"`
+	Exec          []string          `yaml:"exec,omitempty"`
+	Shell         string            `yaml:"shell,omitempty"`
 	InputType     string            `yaml:"input_type"`
 	OutputExt     string            `yaml:"output_ext"`
 	InstallCmd    string            `yaml:"install_cmd"`
@@ -39,8 +40,16 @@ func (m *ModuleDefinition) Validate() error {
 	if m.Name == "" {
 		return fmt.Errorf("%w: name is required", ErrInvalidModule)
 	}
-	if m.Command == "" {
-		return fmt.Errorf("%w: command is required", ErrInvalidModule)
+	switch {
+	case len(m.Exec) == 0 && m.Shell == "":
+		return fmt.Errorf("%w: exec or shell is required", ErrInvalidModule)
+	case len(m.Exec) > 0 && m.Shell != "":
+		return fmt.Errorf("%w: exec and shell are mutually exclusive", ErrInvalidModule)
+	}
+	for i, arg := range m.Exec {
+		if arg == "" {
+			return fmt.Errorf("%w: exec[%d] must not be empty", ErrInvalidModule, i)
+		}
 	}
 	if m.InputType == "" {
 		return fmt.Errorf("%w: input_type is required", ErrInvalidModule)
