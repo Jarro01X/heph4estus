@@ -1,0 +1,89 @@
+package jobs
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"path"
+	"strings"
+	"time"
+)
+
+const legacyJobID = "legacy"
+
+// NewID returns a stable-enough identifier for a submitted scan job.
+func NewID(tool string) string {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Sprintf("%s-%d", sanitizeSegment(tool, "job"), time.Now().UTC().UnixNano())
+	}
+	return fmt.Sprintf("%s-%s-%s",
+		sanitizeSegment(tool, "job"),
+		time.Now().UTC().Format("20060102t150405"),
+		hex.EncodeToString(suffix[:]),
+	)
+}
+
+func ResultPrefix(toolName, jobID string) string {
+	return path.Join("scans", sanitizeSegment(toolName, "tool"), normalizeJobID(jobID), "results") + "/"
+}
+
+func ArtifactPrefix(toolName, jobID string) string {
+	return path.Join("scans", sanitizeSegment(toolName, "tool"), normalizeJobID(jobID), "artifacts") + "/"
+}
+
+func ResultKey(toolName, jobID, target, groupID string, chunkIdx, totalChunks int, ts int64, ext string) string {
+	return path.Join(ResultPrefix(toolName, jobID), resultFileName(target, groupID, chunkIdx, totalChunks, ts, ext))
+}
+
+func ArtifactKey(toolName, jobID, target, groupID string, chunkIdx, totalChunks int, ts int64, ext string) string {
+	return path.Join(ArtifactPrefix(toolName, jobID), resultFileName(target, groupID, chunkIdx, totalChunks, ts, ext))
+}
+
+// TargetFromKey extracts the original target from any result or artifact key.
+func TargetFromKey(key string) string {
+	base := path.Base(key)
+	base = strings.TrimSuffix(base, path.Ext(base))
+	if chunkIdx := strings.Index(base, "_chunk"); chunkIdx > 0 {
+		return base[:chunkIdx]
+	}
+	if idx := strings.LastIndex(base, "_"); idx > 0 {
+		return base[:idx]
+	}
+	return base
+}
+
+func normalizeJobID(jobID string) string {
+	return sanitizeSegment(jobID, legacyJobID)
+}
+
+func sanitizeSegment(segment, fallback string) string {
+	segment = strings.TrimSpace(segment)
+	segment = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			return r
+		case r == '-' || r == '_' || r == '.':
+			return r
+		default:
+			return '-'
+		}
+	}, segment)
+	segment = strings.Trim(segment, "-.")
+	if segment == "" {
+		return fallback
+	}
+	return segment
+}
+
+func resultFileName(target, groupID string, chunkIdx, totalChunks int, ts int64, ext string) string {
+	file := fmt.Sprintf("%s_%d.%s", target, ts, ext)
+	if groupID != "" {
+		file = path.Join(groupID, fmt.Sprintf("%s_chunk%d_of_%d_%d.%s", target, chunkIdx, totalChunks, ts, ext))
+	}
+	return file
+}
