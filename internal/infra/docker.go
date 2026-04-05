@@ -33,6 +33,22 @@ func (d *DockerClient) Build(ctx context.Context, dockerfile, buildContext, tag 
 	return nil
 }
 
+// BuildWithArgs builds a Docker image with additional --build-arg flags.
+func (d *DockerClient) BuildWithArgs(ctx context.Context, dockerfile, buildContext, tag string, buildArgs map[string]string, stream io.Writer) error {
+	d.logger.Info("Building Docker image %s", tag)
+	args := []string{"docker", "build", "-f", dockerfile, "-t", tag}
+	for k, v := range buildArgs {
+		args = append(args, "--build-arg", k+"="+v)
+	}
+	args = append(args, buildContext)
+	result, err := d.runCmd(ctx, "", stream, args...)
+	if err != nil {
+		d.logger.Error("docker build failed: %s", string(result.Stderr))
+		return fmt.Errorf("docker build: %w", err)
+	}
+	return nil
+}
+
 // Tag tags a Docker image.
 func (d *DockerClient) Tag(ctx context.Context, source, target string) error {
 	d.logger.Info("Tagging Docker image %s -> %s", source, target)
