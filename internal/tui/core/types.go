@@ -64,6 +64,7 @@ type InfraOutputs struct {
 	TaskDefinitionARN string
 	SubnetIDs         []string
 	SecurityGroupID   string
+	JobID             string
 
 	// Carried forward from DeployConfig for the status view.
 	TargetsContent string
