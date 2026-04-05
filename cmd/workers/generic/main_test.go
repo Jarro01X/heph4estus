@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ type mockQueue struct {
 	deleted bool
 }
 
-func (q *mockQueue) Send(ctx context.Context, queueID, body string) error      { return nil }
+func (q *mockQueue) Send(ctx context.Context, queueID, body string) error { return nil }
 func (q *mockQueue) SendBatch(ctx context.Context, queueID string, bodies []string) error {
 	return nil
 }
@@ -33,6 +34,8 @@ func (q *mockQueue) Delete(ctx context.Context, queueID, receiptHandle string) e
 type mockStorage struct {
 	uploadErr error
 	uploaded  bool
+	keys      []string
+	payloads  map[string][]byte
 }
 
 func (s *mockStorage) Upload(ctx context.Context, bucket, key string, data []byte) error {
@@ -40,6 +43,11 @@ func (s *mockStorage) Upload(ctx context.Context, bucket, key string, data []byt
 		return s.uploadErr
 	}
 	s.uploaded = true
+	s.keys = append(s.keys, key)
+	if s.payloads == nil {
+		s.payloads = make(map[string][]byte)
+	}
+	s.payloads[key] = append([]byte(nil), data...)
 	return nil
 }
 func (s *mockStorage) Download(ctx context.Context, bucket, key string) ([]byte, error) {
@@ -86,7 +94,7 @@ func testConfig() *appconfig.WorkerConfig {
 func testModule() *modules.ModuleDefinition {
 	return &modules.ModuleDefinition{
 		Name:          "nmap",
-		Command:       "nmap {{options}} -oX {{output}} {{target}}",
+		Exec:          []string{"nmap", "{{options}}", "-oX", "{{output}}", "{{target}}"},
 		InputType:     "target_list",
 		OutputExt:     "xml",
 		InstallCmd:    "apk add --no-cache nmap",
@@ -98,7 +106,7 @@ func testModule() *modules.ModuleDefinition {
 }
 
 func validTaskMessage() *cloud.Message {
-	task := worker.Task{ToolName: "nmap", Target: "127.0.0.1", Options: "-sn"}
+	task := worker.Task{ToolName: "nmap", JobID: "job-123", Target: "127.0.0.1", Options: "-sn"}
 	body, _ := json.Marshal(task)
 	return &cloud.Message{
 		ID:            "msg-1",
@@ -249,6 +257,26 @@ func TestProcessMessage_DeleteAfterSuccessfulUpload(t *testing.T) {
 	}
 	if !q.deleted {
 		t.Fatal("expected message to be deleted after successful upload")
+	}
+	if len(s.keys) != 2 {
+		t.Fatalf("expected artifact and result uploads, got %d keys", len(s.keys))
+	}
+	if !strings.HasPrefix(s.keys[0], "scans/nmap/job-123/artifacts/127.0.0.1_") || !strings.HasSuffix(s.keys[0], ".xml") {
+		t.Fatalf("unexpected artifact key %q", s.keys[0])
+	}
+	if !strings.HasPrefix(s.keys[1], "scans/nmap/job-123/results/127.0.0.1_") || !strings.HasSuffix(s.keys[1], ".json") {
+		t.Fatalf("unexpected result key %q", s.keys[1])
+	}
+
+	var stored worker.Result
+	if err := json.Unmarshal(s.payloads[s.keys[1]], &stored); err != nil {
+		t.Fatalf("failed to decode stored result: %v", err)
+	}
+	if stored.JobID != "job-123" {
+		t.Fatalf("expected stored job id, got %q", stored.JobID)
+	}
+	if stored.OutputKey != s.keys[0] {
+		t.Fatalf("expected OutputKey %q, got %q", s.keys[0], stored.OutputKey)
 	}
 }
 

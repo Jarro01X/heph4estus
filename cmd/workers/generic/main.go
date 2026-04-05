@@ -11,6 +11,7 @@ import (
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/aws"
 	appconfig "heph4estus/internal/config"
+	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/worker"
@@ -104,6 +105,15 @@ func processMessage(
 	if execErr != nil {
 		return true, fmt.Errorf("executing %s for %s: %w", mod.Name, task.Target, execErr)
 	}
+	if result.ToolName == "" {
+		result.ToolName = mod.Name
+	}
+	if result.JobID == "" {
+		result.JobID = task.JobID
+	}
+	if result.Target == "" {
+		result.Target = task.Target
+	}
 
 	log.Info("Execution completed for target: %s, success: %v", task.Target, result.Error == "")
 
@@ -118,29 +128,31 @@ func processMessage(
 		log.Info("Permanent error for %s, recording failure: %s", task.Target, result.Error)
 	}
 
+	ts := time.Now().Unix()
+	uploadCtx, uploadCancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer uploadCancel()
+
+	// Upload output file first so the structured result can point to it explicitly.
+	if len(outputBytes) > 0 {
+		outputKey := jobs.ArtifactKey(mod.Name, task.JobID, task.Target, task.GroupID, task.ChunkIdx, task.TotalChunks, ts, mod.OutputExt)
+		if err := storage.Upload(uploadCtx, cfg.S3Bucket, outputKey, outputBytes); err != nil {
+			return true, fmt.Errorf("uploading output to S3 for %s: %w", task.Target, err)
+		}
+		result.OutputKey = outputKey
+		log.Info("Output file uploaded to S3: %s", outputKey)
+	}
+
 	// Upload result JSON to S3.
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return true, fmt.Errorf("marshaling result for %s: %w", task.Target, err)
 	}
 
-	s3Key := resultS3Key(mod.Name, task, "json")
-	uploadCtx, uploadCancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer uploadCancel()
-
+	s3Key := jobs.ResultKey(mod.Name, task.JobID, task.Target, task.GroupID, task.ChunkIdx, task.TotalChunks, ts, "json")
 	if err := storage.Upload(uploadCtx, cfg.S3Bucket, s3Key, resultJSON); err != nil {
 		return true, fmt.Errorf("uploading result to S3 for %s: %w", task.Target, err)
 	}
 	log.Info("Result uploaded to S3: %s", s3Key)
-
-	// Upload output file if present.
-	if len(outputBytes) > 0 {
-		outputKey := resultS3Key(mod.Name, task, mod.OutputExt)
-		if err := storage.Upload(uploadCtx, cfg.S3Bucket, outputKey, outputBytes); err != nil {
-			return true, fmt.Errorf("uploading output to S3 for %s: %w", task.Target, err)
-		}
-		log.Info("Output file uploaded to S3: %s", outputKey)
-	}
 
 	// Delete message only after successful upload.
 	if err := queue.Delete(ctx, cfg.QueueURL, msg.ReceiptHandle); err != nil {
@@ -149,14 +161,4 @@ func processMessage(
 
 	log.Info("Message processing complete for target: %s", task.Target)
 	return true, nil
-}
-
-// resultS3Key generates the S3 key for a result or output file.
-func resultS3Key(toolName string, task worker.Task, ext string) string {
-	ts := time.Now().Unix()
-	if task.GroupID != "" {
-		return fmt.Sprintf("scans/%s/%s/%s_chunk%d_of_%d_%d.%s",
-			toolName, task.GroupID, task.Target, task.ChunkIdx, task.TotalChunks, ts, ext)
-	}
-	return fmt.Sprintf("scans/%s/%s_%d.%s", toolName, task.Target, ts, ext)
 }

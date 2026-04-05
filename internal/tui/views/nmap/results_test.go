@@ -15,9 +15,9 @@ import (
 
 func testResultsStorage() *mock.Storage {
 	keys := []string{
-		"scans/192.168.1.1_1000.json",
-		"scans/192.168.1.2_1001.json",
-		"scans/192.168.1.3_1002.json",
+		"scans/nmap/job-123/results/192.168.1.1_1000.json",
+		"scans/nmap/job-123/results/192.168.1.2_1001.json",
+		"scans/nmap/job-123/results/192.168.1.3_1002.json",
 	}
 
 	result := nmaptool.ScanResult{
@@ -143,8 +143,9 @@ func TestExtractTarget(t *testing.T) {
 		key    string
 		target string
 	}{
-		{"scans/192.168.1.1_1000.json", "192.168.1.1"},
-		{"scans/example.com_1234.json", "example.com"},
+		{"scans/nmap/job-123/results/192.168.1.1_1000.json", "192.168.1.1"},
+		{"scans/nmap/job-123/results/example.com_1234.json", "example.com"},
+		{"scans/nmap/job-123/results/example.com_line1/example.com_chunk0_of_5_1234.json", "example.com"},
 	}
 	for _, tt := range tests {
 		got := extractTarget(tt.key)
