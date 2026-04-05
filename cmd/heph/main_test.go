@@ -239,19 +239,11 @@ func TestExtractTargetFromKey(t *testing.T) {
 		key  string
 		want string
 	}{
-		// Legacy (dedicated nmap worker) paths.
-		{"scans/192.168.1.1_1709913600.json", "192.168.1.1"},
-		{"scans/example.com_1709913600.json", "example.com"},
-		{"scans/10.0.0.1.json", "10.0.0.1"},
-		// Group-prefixed (port-splitting) keys.
-		{"scans/example.com_line1/example.com_chunk0_of_5_1700000000.json", "example.com"},
-		{"scans/10.0.0.1_line1/10.0.0.1_chunk2_of_5_1700000000.json", "10.0.0.1"},
-		{"scans/example.com_line3/example.com_chunk4_of_5_1700000000.json", "example.com"},
-		// Generic worker paths (tool name prefix).
-		{"scans/nmap/10.0.0.1_1709913600.json", "10.0.0.1"},
-		{"scans/nmap/example.com_1709913600.json", "example.com"},
-		{"scans/nmap/10.0.0.1_line1/10.0.0.1_chunk0_of_5_1700000000.json", "10.0.0.1"},
-		{"scans/nmap/10.0.0.1_1709913600.xml", "10.0.0.1"},
+		{"scans/nmap/job-123/results/192.168.1.1_1709913600.json", "192.168.1.1"},
+		{"scans/nmap/job-123/results/example.com_1709913600.json", "example.com"},
+		{"scans/nmap/job-123/results/example.com_line1/example.com_chunk0_of_5_1700000000.json", "example.com"},
+		{"scans/nmap/job-123/results/10.0.0.1_line1/10.0.0.1_chunk2_of_5_1700000000.json", "10.0.0.1"},
+		{"scans/nmap/job-123/artifacts/10.0.0.1_1709913600.xml", "10.0.0.1"},
 	}
 	for _, tt := range tests {
 		got := extractTargetFromKey(tt.key)

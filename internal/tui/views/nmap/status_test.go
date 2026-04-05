@@ -49,6 +49,7 @@ func testInfra() core.InfraOutputs {
 		TaskDefinitionARN: "arn:td",
 		SubnetIDs:         []string{"subnet-a"},
 		SecurityGroupID:   "sg-1",
+		JobID:             "job-123",
 		TargetsContent:    "1.1.1.1\n2.2.2.2\n",
 		NmapOptions:       "-sS",
 		WorkerCount:       2,
@@ -181,7 +182,7 @@ func TestRealTracker_UsesCounterAboveThreshold(t *testing.T) {
 		useCounter: true,
 	}
 
-	count, err := tracker.CountResults(context.Background(), "bucket", "scans/")
+	count, err := tracker.CountResults(context.Background(), "bucket", "scans/nmap/job-123/results/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestRealTracker_UsesStorageBelowThreshold(t *testing.T) {
 		useCounter: false, // below threshold
 	}
 
-	count, err := tracker.CountResults(context.Background(), "bucket", "scans/")
+	count, err := tracker.CountResults(context.Background(), "bucket", "scans/nmap/job-123/results/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestRealTracker_NilCounterAlwaysUsesStorage(t *testing.T) {
 		useCounter: false, // nil counter means this is always false
 	}
 
-	count, err := tracker.CountResults(context.Background(), "bucket", "scans/")
+	count, err := tracker.CountResults(context.Background(), "bucket", "scans/nmap/job-123/results/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

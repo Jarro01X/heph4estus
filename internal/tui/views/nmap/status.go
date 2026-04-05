@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
+	"heph4estus/internal/jobs"
 	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
 )
@@ -100,8 +101,8 @@ const CounterThreshold = 10_000
 // job size. Below CounterThreshold it uses Storage.Count() (simple, no extra
 // infra). At or above it, uses ProgressCounter if one was provided.
 type realTracker struct {
-	counter  cloud.ProgressCounter // nil = no counter backend available
-	storage  cloud.Storage
+	counter    cloud.ProgressCounter // nil = no counter backend available
+	storage    cloud.Storage
 	useCounter bool
 }
 
@@ -136,7 +137,7 @@ type StatusModel struct {
 	tracker   ProgressTracker
 	infra     core.InfraOutputs
 
-	phase       statusPhase
+	phase        statusPhase
 	totalTargets int
 	enqueueSent  int
 	workersUp    int
@@ -199,6 +200,12 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker Progre
 func (m *StatusModel) Init() tea.Cmd {
 	scanner := nmaptool.NewScanner(nil)
 	tasks := scanner.ParseTargets(m.infra.TargetsContent, m.infra.NmapOptions)
+	if m.infra.JobID == "" {
+		m.infra.JobID = jobs.NewID("nmap")
+	}
+	for i := range tasks {
+		tasks[i].JobID = m.infra.JobID
+	}
 	m.totalTargets = len(tasks)
 
 	if m.totalTargets == 0 {
@@ -452,7 +459,7 @@ func (m *StatusModel) pollProgress() tea.Cmd {
 	infra := m.infra
 	tracker := m.tracker
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		count, err := tracker.CountResults(context.Background(), infra.S3BucketName, "scans/")
+		count, err := tracker.CountResults(context.Background(), infra.S3BucketName, jobs.ResultPrefix("nmap", infra.JobID))
 		return scanProgressMsg{completed: count, err: err}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/jobs"
 	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
 )
@@ -63,19 +64,19 @@ var resultsKeys = resultsKeyMap{
 
 // ResultsModel displays paginated scan results.
 type ResultsModel struct {
-	storage  cloud.Storage
-	infra    core.InfraOutputs
+	storage cloud.Storage
+	infra   core.InfraOutputs
 
-	allKeys   []string
-	total     int
-	page      int
-	cursor    int
-	results   map[string]*nmaptool.ScanResult // cached downloads
-	detail    bool
-	detailVP  viewport.Model
+	allKeys    []string
+	total      int
+	page       int
+	cursor     int
+	results    map[string]*nmaptool.ScanResult // cached downloads
+	detail     bool
+	detailVP   viewport.Model
 	destroying bool
 	destroyMsg string
-	errMsg    string
+	errMsg     string
 
 	help   help.Model
 	width  int
@@ -287,7 +288,7 @@ func (m *ResultsModel) loadKeys() tea.Cmd {
 	s := m.storage
 	infra := m.infra
 	return func() tea.Msg {
-		keys, err := s.List(context.Background(), infra.S3BucketName, "scans/")
+		keys, err := s.List(context.Background(), infra.S3BucketName, jobs.ResultPrefix("nmap", infra.JobID))
 		return keysLoadedMsg{keys: keys, total: len(keys), err: err}
 	}
 }
@@ -322,14 +323,7 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 }
 
 func extractTarget(key string) string {
-	// Key format: scans/{target}_{timestamp}.json
-	key = strings.TrimPrefix(key, "scans/")
-	key = strings.TrimSuffix(key, ".json")
-	idx := strings.LastIndex(key, "_")
-	if idx > 0 {
-		return key[:idx]
-	}
-	return key
+	return jobs.TargetFromKey(key)
 }
 
 func formatResult(r nmaptool.ScanResult) string {

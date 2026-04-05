@@ -36,6 +36,8 @@ func (q *mockQueue) Delete(ctx context.Context, queueID, receiptHandle string) e
 type mockStorage struct {
 	uploadErr error
 	uploaded  bool
+	keys      []string
+	payloads  map[string][]byte
 }
 
 func (s *mockStorage) Upload(ctx context.Context, bucket, key string, data []byte) error {
@@ -43,6 +45,11 @@ func (s *mockStorage) Upload(ctx context.Context, bucket, key string, data []byt
 		return s.uploadErr
 	}
 	s.uploaded = true
+	s.keys = append(s.keys, key)
+	if s.payloads == nil {
+		s.payloads = make(map[string][]byte)
+	}
+	s.payloads[key] = append([]byte(nil), data...)
 	return nil
 }
 func (s *mockStorage) Download(ctx context.Context, bucket, key string) ([]byte, error) {
@@ -63,7 +70,7 @@ func (l *mockLogger) Fatal(format string, args ...interface{}) {}
 
 // mockScanner returns preconfigured results and captures the task it received.
 type mockScanner struct {
-	result      nmap.ScanResult
+	result       nmap.ScanResult
 	capturedTask nmap.ScanTask
 }
 
@@ -84,7 +91,7 @@ func (s *mockScanner) FormatResult(result nmap.ScanResult) ([]byte, error) {
 }
 
 func validTaskMessage() *cloud.Message {
-	task := nmap.ScanTask{Target: "127.0.0.1", Options: "-sn"}
+	task := nmap.ScanTask{JobID: "job-123", Target: "127.0.0.1", Options: "-sn"}
 	body, _ := json.Marshal(task)
 	return &cloud.Message{
 		ID:            "msg-1",
@@ -151,6 +158,19 @@ func TestProcessMessage_DeleteAfterSuccessfulUpload(t *testing.T) {
 	}
 	if !q.deleted {
 		t.Fatal("expected message to be deleted after successful upload")
+	}
+	if len(s.keys) != 1 {
+		t.Fatalf("expected one uploaded result key, got %d", len(s.keys))
+	}
+	if !strings.HasPrefix(s.keys[0], "scans/nmap/job-123/results/127.0.0.1_") || !strings.HasSuffix(s.keys[0], ".json") {
+		t.Fatalf("unexpected result key %q", s.keys[0])
+	}
+	var stored nmap.ScanResult
+	if err := json.Unmarshal(s.payloads[s.keys[0]], &stored); err != nil {
+		t.Fatalf("failed to decode stored result: %v", err)
+	}
+	if stored.JobID != "job-123" {
+		t.Fatalf("expected stored job id, got %q", stored.JobID)
 	}
 }
 

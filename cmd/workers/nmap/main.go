@@ -7,6 +7,7 @@ import (
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/aws"
 	appconfig "heph4estus/internal/config"
+	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/tools/nmap"
 	"heph4estus/internal/worker"
@@ -109,6 +110,9 @@ func processMessage(
 
 	log.Info("Starting scan for target: %s", task.Target)
 	scanResult := scanner.RunScan(task)
+	if scanResult.JobID == "" {
+		scanResult.JobID = task.JobID
+	}
 	log.Info("Scan completed for target: %s, success: %v", task.Target, scanResult.Error == "")
 
 	// Classify scan errors for retry decisions.
@@ -128,13 +132,7 @@ func processMessage(
 		return true, fmt.Errorf("formatting result for %s: %w", task.Target, err)
 	}
 
-	var s3Key string
-	if task.GroupID != "" {
-		s3Key = fmt.Sprintf("scans/%s/%s_chunk%d_of_%d_%d.json",
-			task.GroupID, task.Target, task.ChunkIdx, task.TotalChunks, time.Now().Unix())
-	} else {
-		s3Key = fmt.Sprintf("scans/%s_%d.json", task.Target, time.Now().Unix())
-	}
+	s3Key := jobs.ResultKey("nmap", task.JobID, task.Target, task.GroupID, task.ChunkIdx, task.TotalChunks, time.Now().Unix(), "json")
 	uploadCtx, uploadCancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer uploadCancel()
 

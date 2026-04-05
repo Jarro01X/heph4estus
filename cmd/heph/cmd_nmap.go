@@ -13,6 +13,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/infra"
+	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/tools/nmap"
 	"heph4estus/internal/worker"
@@ -97,11 +98,15 @@ func runNmap(args []string, log logger.Logger) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("no targets found in %s", *inputFile)
 	}
+	jobID := jobs.NewID("nmap")
+	for i := range tasks {
+		tasks[i].JobID = jobID
+	}
 	if *mode == "target-ports" {
 		groups := countGroups(tasks)
-		logStatus("Mode: target-ports — %d target groups, %d total tasks (%d chunks/target)", groups, len(tasks), *portChunks)
+		logStatus("Mode: target-ports — %d target groups, %d total tasks (%d chunks/target) [job %s]", groups, len(tasks), *portChunks, jobID)
 	} else {
-		logStatus("Parsed %d targets from %s", len(tasks), *inputFile)
+		logStatus("Parsed %d targets from %s [job %s]", len(tasks), *inputFile, jobID)
 	}
 
 	// Read terraform outputs.
@@ -141,6 +146,7 @@ func runNmap(args []string, log logger.Logger) error {
 			// Generic worker expects worker.Task with ToolName set.
 			gt := worker.Task{
 				ToolName:    "nmap",
+				JobID:       t.JobID,
 				Target:      t.Target,
 				Options:     t.Options,
 				GroupID:     t.GroupID,
@@ -227,12 +233,7 @@ func runNmap(args []string, log logger.Logger) error {
 	logStatus("Scanning...")
 	startTime := time.Now()
 	totalTargets := len(tasks)
-
-	// Generic worker stores results under scans/{tool}/, dedicated under scans/.
-	scanPrefix := "scans/"
-	if *useGeneric {
-		scanPrefix = "scans/nmap/"
-	}
+	scanPrefix := jobs.ResultPrefix("nmap", jobID)
 
 	for {
 		count, err := storage.Count(ctx, bucket, scanPrefix)
@@ -333,25 +334,7 @@ func regionFromECR(url string) string {
 }
 
 func extractTargetFromKey(key string) string {
-	key = strings.TrimPrefix(key, "scans/")
-	// Extract just the filename — works for all path formats:
-	//   legacy:  {target}_{ts}.json
-	//   legacy:  {group}/{target}_chunk{N}_of_{total}_{ts}.json
-	//   generic: {tool}/{target}_{ts}.json
-	//   generic: {tool}/{group}/{target}_chunk{N}_of_{total}_{ts}.json
-	parts := strings.Split(key, "/")
-	key = parts[len(parts)-1]
-	key = strings.TrimSuffix(key, ".json")
-	key = strings.TrimSuffix(key, ".xml")
-	// Chunked result: {target}_chunk{N}_of_{total}_{timestamp}
-	if chunkIdx := strings.Index(key, "_chunk"); chunkIdx > 0 {
-		return key[:chunkIdx]
-	}
-	// Non-chunked: {target}_{timestamp}
-	if idx := strings.LastIndex(key, "_"); idx > 0 {
-		return key[:idx]
-	}
-	return key
+	return jobs.TargetFromKey(key)
 }
 
 func countGroups(tasks []nmap.ScanTask) int {
