@@ -44,7 +44,7 @@ func (l *mockLogger) Fatal(format string, args ...interface{}) {}
 func TestExecute_SimpleCommand(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "test",
-		Command:       "echo hello > {{output}}",
+		Exec:          []string{"printf", "hello"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -63,15 +63,18 @@ func TestExecute_SimpleCommand(t *testing.T) {
 	if result.Error != "" {
 		t.Fatalf("unexpected result error: %s", result.Error)
 	}
-	if !strings.Contains(string(outputBytes), "hello") {
-		t.Fatalf("expected output to contain 'hello', got %q", string(outputBytes))
+	if outputBytes != nil {
+		t.Fatalf("expected nil output bytes, got %d bytes", len(outputBytes))
+	}
+	if !strings.Contains(result.Output, "hello") {
+		t.Fatalf("expected stdout to contain 'hello', got %q", result.Output)
 	}
 }
 
 func TestExecute_Timeout(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "slow",
-		Command:       "sleep 10",
+		Exec:          []string{"sleep", "10"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -101,7 +104,7 @@ func TestExecute_Timeout(t *testing.T) {
 func TestExecute_InputFromTarget(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "reader",
-		Command:       "cat {{input}} > {{output}}",
+		Exec:          []string{"cp", "{{input}}", "{{output}}"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -134,7 +137,7 @@ func TestExecute_InputFromS3(t *testing.T) {
 
 	mod := &modules.ModuleDefinition{
 		Name:          "reader",
-		Command:       "cat {{input}} > {{output}}",
+		Exec:          []string{"cp", "{{input}}", "{{output}}"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -161,7 +164,7 @@ func TestExecute_InputFromS3(t *testing.T) {
 func TestExecute_NoOutputFile(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "noout",
-		Command:       "echo 'inline output'",
+		Exec:          []string{"printf", "inline output"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -191,7 +194,7 @@ func TestExecute_NoOutputFile(t *testing.T) {
 func TestExecute_CommandFailure(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "fail",
-		Command:       "exit 1",
+		Exec:          []string{"false"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -215,7 +218,7 @@ func TestExecute_CommandFailure(t *testing.T) {
 func TestExecute_EnvVars(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "envtest",
-		Command:       "sh -c 'echo $TEST_VAR > {{output}}'",
+		Exec:          []string{"printenv", "TEST_VAR"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -235,15 +238,18 @@ func TestExecute_EnvVars(t *testing.T) {
 	if result.Error != "" {
 		t.Fatalf("unexpected result error: %s", result.Error)
 	}
-	if !strings.Contains(string(outputBytes), "hello_from_env") {
-		t.Fatalf("expected env var in output, got %q", string(outputBytes))
+	if outputBytes != nil {
+		t.Fatalf("expected nil output bytes, got %d bytes", len(outputBytes))
+	}
+	if !strings.Contains(result.Output, "hello_from_env") {
+		t.Fatalf("expected env var in output, got %q", result.Output)
 	}
 }
 
 func TestExecute_TempDirCleanup(t *testing.T) {
 	mod := &modules.ModuleDefinition{
 		Name:          "cleanup",
-		Command:       "pwd",
+		Exec:          []string{"pwd"},
 		InputType:     "target_list",
 		OutputExt:     "txt",
 		InstallCmd:    "true",
@@ -261,5 +267,64 @@ func TestExecute_TempDirCleanup(t *testing.T) {
 	matches, _ := filepath.Glob(os.TempDir() + "/heph-worker-*")
 	for _, m := range matches {
 		t.Errorf("temp dir not cleaned up: %s", m)
+	}
+}
+
+func TestExecute_TargetIsPassedAsData(t *testing.T) {
+	ownedPath := filepath.Join(t.TempDir(), "owned")
+	mod := &modules.ModuleDefinition{
+		Name:          "safe",
+		Exec:          []string{"printf", "%s", "{{target}}"},
+		InputType:     "target_list",
+		OutputExt:     "txt",
+		InstallCmd:    "true",
+		DefaultCPU:    256,
+		DefaultMemory: 512,
+		Timeout:       "1m",
+	}
+
+	executor := NewExecutor(&mockLogger{}, &mockStorage{data: map[string][]byte{}}, "test-bucket")
+	task := Task{ToolName: "safe", Target: "example.com; touch " + ownedPath}
+
+	result, _, err := executor.Execute(context.Background(), mod, task)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("unexpected result error: %s", result.Error)
+	}
+	if result.Output != "example.com; touch "+ownedPath {
+		t.Fatalf("expected literal target output, got %q", result.Output)
+	}
+	if _, err := os.Stat(ownedPath); !os.IsNotExist(err) {
+		t.Fatalf("target should not be interpreted by a shell, stat err = %v", err)
+	}
+}
+
+func TestExecute_ExplicitShellOptIn(t *testing.T) {
+	mod := &modules.ModuleDefinition{
+		Name:          "shell",
+		Shell:         "printf '%s' \"$TEST_VAR\"",
+		InputType:     "target_list",
+		OutputExt:     "txt",
+		InstallCmd:    "true",
+		DefaultCPU:    256,
+		DefaultMemory: 512,
+		Timeout:       "1m",
+		Env:           map[string]string{"TEST_VAR": "shell-value"},
+	}
+
+	executor := NewExecutor(&mockLogger{}, &mockStorage{data: map[string][]byte{}}, "test-bucket")
+	task := Task{ToolName: "shell", Target: "example.com"}
+
+	result, _, err := executor.Execute(context.Background(), mod, task)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("unexpected result error: %s", result.Error)
+	}
+	if result.Output != "shell-value" {
+		t.Fatalf("expected shell output, got %q", result.Output)
 	}
 }

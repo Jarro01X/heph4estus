@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ func NewExecutor(log logger.Logger, storage cloud.Storage, bucket string) *Execu
 func (e *Executor) Execute(ctx context.Context, mod *modules.ModuleDefinition, task Task) (Result, []byte, error) {
 	result := Result{
 		ToolName:  mod.Name,
+		JobID:     task.JobID,
 		Target:    task.Target,
 		Timestamp: time.Now(),
 	}
@@ -57,28 +59,49 @@ func (e *Executor) Execute(ctx context.Context, mod *modules.ModuleDefinition, t
 		if err := os.WriteFile(inputPath, data, 0600); err != nil {
 			return result, nil, fmt.Errorf("writing input file: %w", err)
 		}
-	} else if CommandUsesPlaceholder(mod.Command, "input") || CommandUsesPlaceholder(mod.Command, "wordlist") {
+	} else if ArgsUsePlaceholder(mod.Exec, "input") || ArgsUsePlaceholder(mod.Exec, "wordlist") ||
+		CommandUsesPlaceholder(mod.Shell, "input") || CommandUsesPlaceholder(mod.Shell, "wordlist") {
 		if err := os.WriteFile(inputPath, []byte(task.Target+"\n"), 0600); err != nil {
 			return result, nil, fmt.Errorf("writing target to input file: %w", err)
 		}
 	}
 
-	// Render command template.
+	// Render the module command.
 	vars := TemplateVars{
 		Input:   inputPath,
 		Output:  outputPath,
 		Target:  task.Target,
 		Options: task.Options,
 	}
-	rendered := RenderCommand(mod.Command, vars)
-	e.log.Info("Executing: %s", rendered)
 
 	// Execute with module timeout.
 	timeout := mod.TimeoutDuration()
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, "sh", "-c", rendered)
+	var cmd *exec.Cmd
+	switch {
+	case len(mod.Exec) > 0:
+		args, err := RenderArgs(mod.Exec, vars)
+		if err != nil {
+			result.Error = fmt.Sprintf("rendering command args: %v", err)
+			return result, nil, nil
+		}
+		if len(args) == 0 {
+			result.Error = "rendering command args produced no executable"
+			return result, nil, nil
+		}
+		e.log.Info("Executing argv: %s", strings.Join(args, " "))
+		cmd = exec.CommandContext(execCtx, args[0], args[1:]...)
+	case mod.Shell != "":
+		rendered := RenderCommand(mod.Shell, vars)
+		e.log.Info("Executing shell: %s", rendered)
+		cmd = exec.CommandContext(execCtx, "sh", "-c", rendered)
+	default:
+		result.Error = "module has no executable definition"
+		return result, nil, nil
+	}
+
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
