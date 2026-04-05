@@ -13,8 +13,8 @@ const usage = `Usage: heph <command> [options]
 
 Commands:
   nmap     Run an nmap scan (enqueue targets, launch workers, poll progress)
+  scan     Run a generic tool scan (e.g. httpx, nuclei, subfinder)
   infra    Manage cloud infrastructure (deploy/destroy)
-  scan     Run a generic tool scan (planned)
   status   Check job status (planned)
 
 Run 'heph <command> --help' for command-specific usage.`
