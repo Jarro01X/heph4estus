@@ -254,7 +254,7 @@ func (m *Model) runStage(stage string) tea.Cmd {
 
 	case stageTerraformPlan:
 		return func() tea.Msg {
-			summary, err := deployer.TerraformPlan(ctx, cfg.TerraformDir, nil)
+			summary, err := deployer.TerraformPlan(ctx, cfg.TerraformDir, cfg.TerraformVars)
 			return core.StageCompleteMsg{
 				Stage:   stage,
 				Error:   err,
@@ -265,7 +265,7 @@ func (m *Model) runStage(stage string) tea.Cmd {
 	case stageTerraformApply:
 		return tea.Batch(
 			func() tea.Msg {
-				err := deployer.TerraformApply(ctx, cfg.TerraformDir, nil, sw)
+				err := deployer.TerraformApply(ctx, cfg.TerraformDir, cfg.TerraformVars, sw)
 				return core.StageCompleteMsg{Stage: stage, Error: err}
 			},
 			tickCmd(),
@@ -280,7 +280,12 @@ func (m *Model) runStage(stage string) tea.Cmd {
 	case stageDockerBuild:
 		return tea.Batch(
 			func() tea.Msg {
-				err := deployer.DockerBuild(ctx, cfg.Dockerfile, cfg.DockerContext, cfg.DockerTag, sw)
+				var err error
+				if len(cfg.BuildArgs) > 0 {
+					err = deployer.DockerBuildWithArgs(ctx, cfg.Dockerfile, cfg.DockerContext, cfg.DockerTag, cfg.BuildArgs, sw)
+				} else {
+					err = deployer.DockerBuild(ctx, cfg.Dockerfile, cfg.DockerContext, cfg.DockerTag, sw)
+				}
 				return core.StageCompleteMsg{Stage: stage, Error: err}
 			},
 			tickCmd(),
@@ -349,9 +354,15 @@ func (m *Model) advanceStage(completed string) tea.Cmd {
 func (m *Model) emitNavigateToStatus() tea.Cmd {
 	outputs := m.outputs
 	cfg := m.config
+
+	target := cfg.PostDeployView
+	if target == 0 {
+		target = core.ViewNmapStatus
+	}
+
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
-			Target: core.ViewNmapStatus,
+			Target: target,
 			Data: core.InfraOutputs{
 				SQSQueueURL:        outputs["sqs_queue_url"],
 				ECRRepoURL:         outputs["ecr_repo_url"],
@@ -370,6 +381,8 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				NoRDNS:             cfg.NoRDNS,
 				InstanceProfileARN: outputs["instance_profile_arn"],
 				AMIID:              outputs["ami_id"],
+				ToolName:           cfg.ToolName,
+				ToolOptions:        cfg.ToolOptions,
 			},
 		}
 	}

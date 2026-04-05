@@ -15,6 +15,7 @@ type Deployer interface {
 	TerraformApply(ctx context.Context, workDir string, vars map[string]string, stream io.Writer) error
 	TerraformReadOutputs(ctx context.Context, workDir string) (map[string]string, error)
 	DockerBuild(ctx context.Context, dockerfile, buildCtx, tag string, stream io.Writer) error
+	DockerBuildWithArgs(ctx context.Context, dockerfile, buildCtx, tag string, buildArgs map[string]string, stream io.Writer) error
 	ECRAuthenticate(ctx context.Context, region string) error
 	DockerTag(ctx context.Context, source, target string) error
 	DockerPush(ctx context.Context, tag string, stream io.Writer) error
@@ -55,6 +56,10 @@ func (d *RealDeployer) TerraformReadOutputs(ctx context.Context, workDir string)
 
 func (d *RealDeployer) DockerBuild(ctx context.Context, dockerfile, buildCtx, tag string, stream io.Writer) error {
 	return d.docker.Build(ctx, dockerfile, buildCtx, tag, stream)
+}
+
+func (d *RealDeployer) DockerBuildWithArgs(ctx context.Context, dockerfile, buildCtx, tag string, buildArgs map[string]string, stream io.Writer) error {
+	return d.docker.BuildWithArgs(ctx, dockerfile, buildCtx, tag, buildArgs, stream)
 }
 
 func (d *RealDeployer) ECRAuthenticate(ctx context.Context, region string) error {

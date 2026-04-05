@@ -21,6 +21,9 @@ const (
 	ViewDeploy
 	ViewNmapStatus
 	ViewNmapResults
+	ViewGenericConfig
+	ViewGenericStatus
+	ViewGenericResults
 )
 
 // NavigateMsg is sent by views to request navigation.
@@ -43,6 +46,11 @@ type DeployConfig struct {
 	ECRRepoName   string
 	AWSRegion     string
 
+	// Docker build args for generic containers (GO_INSTALL_CMD or RUNTIME_INSTALL_CMD).
+	BuildArgs map[string]string
+	// Terraform vars for generic infra (tool_name, etc.).
+	TerraformVars map[string]string
+
 	TargetsContent string
 	NmapOptions    string
 	WorkerCount    int
@@ -53,6 +61,13 @@ type DeployConfig struct {
 	NmapTimingTemplate string
 	DNSServers         string
 	NoRDNS             bool // Disable reverse DNS resolution (-n)
+
+	// Generic tool fields — set for non-nmap modules.
+	ToolName    string // Module name (e.g. "httpx", "nuclei")
+	ToolOptions string // Extra tool-specific CLI flags
+	// PostDeployView controls where deploy navigates on completion.
+	// Defaults to ViewNmapStatus when zero.
+	PostDeployView ViewID
 }
 
 // InfraOutputs holds terraform outputs needed by downstream views.
@@ -81,6 +96,10 @@ type InfraOutputs struct {
 	// Spot instance fields (populated when spot module is deployed).
 	InstanceProfileARN string
 	AMIID              string
+
+	// Generic tool fields — set for non-nmap modules.
+	ToolName    string // Module name (e.g. "httpx")
+	ToolOptions string // Extra tool-specific CLI flags
 }
 
 // StageCompleteMsg signals that a deploy stage finished.
