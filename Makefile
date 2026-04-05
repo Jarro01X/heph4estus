@@ -24,6 +24,11 @@ docker-build-generic:
 		--build-arg RUNTIME_INSTALL_CMD="$(RUNTIME_INSTALL_CMD)" \
 		-f containers/generic/Dockerfile .
 
+docker-build-nmap-generic:
+	docker build -t heph-nmap-worker \
+		--build-arg RUNTIME_INSTALL_CMD="apk add --no-cache nmap nmap-scripts" \
+		-f containers/generic/Dockerfile .
+
 tf-validate:
 	cd deployments/aws/nmap/environments/dev && terraform init -backend=false && terraform validate
 
