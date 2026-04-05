@@ -1,9 +1,9 @@
 name: dnsx
 description: Multi-purpose DNS toolkit
-command: "dnsx -l {{input}} -o {{output}} -j -silent"
+exec: ["dnsx", "-l", "{{input}}", "-o", "{{output}}", "-j", "-silent"]
 input_type: target_list
 output_ext: jsonl
-install_cmd: "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+install_cmd: "go install github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.3"
 default_cpu: 256
 default_memory: 512
 timeout: 10m

@@ -1,6 +1,6 @@
 name: nmap
 description: Network port scanner and service detection
-command: "nmap {{options}} -oX {{output}} {{target}}"
+exec: ["nmap", "{{options}}", "-oX", "{{output}}", "{{target}}"]
 input_type: target_list
 output_ext: xml
 install_cmd: "apk add --no-cache nmap nmap-scripts"

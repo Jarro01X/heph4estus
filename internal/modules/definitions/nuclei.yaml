@@ -1,9 +1,9 @@
 name: nuclei
 description: Template-based vulnerability scanner
-command: "nuclei -l {{input}} -o {{output}} -j"
+exec: ["nuclei", "-l", "{{input}}", "-o", "{{output}}", "-j"]
 input_type: target_list
 output_ext: jsonl
-install_cmd: "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+install_cmd: "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.7.1"
 default_cpu: 256
 default_memory: 512
 timeout: 10m

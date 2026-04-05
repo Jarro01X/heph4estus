@@ -30,8 +30,8 @@ func TestRegistry_AddAndGet(t *testing.T) {
 	if got.Name != "test" {
 		t.Fatalf("expected name %q, got %q", "test", got.Name)
 	}
-	if got.Command != m.Command {
-		t.Fatalf("expected command %q, got %q", m.Command, got.Command)
+	if len(got.Exec) != len(m.Exec) {
+		t.Fatalf("expected %d exec args, got %d", len(m.Exec), len(got.Exec))
 	}
 }
 
@@ -168,7 +168,7 @@ func TestRegistry_Names(t *testing.T) {
 func TestRegistry_LoadFS(t *testing.T) {
 	yaml := `name: testmod
 description: A test module
-command: "test -i {{input}} -o {{output}}"
+exec: ["test", "-i", "{{input}}", "-o", "{{output}}"]
 input_type: target_list
 output_ext: json
 install_cmd: "apk add test"

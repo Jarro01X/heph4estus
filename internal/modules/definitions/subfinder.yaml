@@ -1,9 +1,9 @@
 name: subfinder
 description: Passive subdomain discovery tool
-command: "subfinder -dL {{input}} -o {{output}} -silent"
+exec: ["subfinder", "-dL", "{{input}}", "-o", "{{output}}", "-silent"]
 input_type: target_list
 output_ext: txt
-install_cmd: "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+install_cmd: "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.13.0"
 default_cpu: 256
 default_memory: 512
 timeout: 10m

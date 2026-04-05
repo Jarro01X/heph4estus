@@ -1,6 +1,6 @@
 name: masscan
 description: High-speed TCP port scanner
-command: "masscan -iL {{input}} -oJ {{output}} --rate 1000"
+exec: ["masscan", "-iL", "{{input}}", "-oJ", "{{output}}", "--rate", "1000"]
 input_type: target_list
 output_ext: json
 install_cmd: "apk add --no-cache masscan"

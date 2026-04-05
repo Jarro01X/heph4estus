@@ -1,9 +1,9 @@
 name: gowitness
 description: Web screenshot tool using Chrome headless
-command: "gowitness scan file -f {{input}} --write-json --json-file {{output}}"
+exec: ["gowitness", "scan", "file", "-f", "{{input}}", "--write-json", "--json-file", "{{output}}"]
 input_type: target_list
 output_ext: json
-install_cmd: "go install github.com/sensepost/gowitness@latest"
+install_cmd: "go install github.com/sensepost/gowitness@v3.1.1"
 default_cpu: 512
 default_memory: 1024
 timeout: 15m

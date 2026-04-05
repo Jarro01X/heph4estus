@@ -1,9 +1,9 @@
 name: gobuster
 description: Directory and DNS brute-force tool
-command: "gobuster dir -w {{input}} -u {{target}} -o {{output}} -q"
+exec: ["gobuster", "dir", "-w", "{{input}}", "-u", "{{target}}", "-o", "{{output}}", "-q"]
 input_type: wordlist
 output_ext: txt
-install_cmd: "go install github.com/OJ/gobuster/v3@latest"
+install_cmd: "go install github.com/OJ/gobuster/v3@v3.8.2"
 default_cpu: 256
 default_memory: 512
 timeout: 30m
