@@ -45,6 +45,10 @@ func (d *mockDeployer) DockerBuild(_ context.Context, _, _, _ string, _ io.Write
 	return d.buildErr
 }
 
+func (d *mockDeployer) DockerBuildWithArgs(_ context.Context, _, _, _ string, _ map[string]string, _ io.Writer) error {
+	return d.buildErr
+}
+
 func (d *mockDeployer) ECRAuthenticate(context.Context, string) error {
 	return d.ecrAuthErr
 }
@@ -213,6 +217,75 @@ func TestDeployModel_ViewContainsTitle(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, "Deploy Infrastructure") {
 		t.Fatal("expected title in view")
+	}
+}
+
+func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
+	d := &mockDeployer{
+		planSummary: "Plan: 1 to add",
+		readOutputs: map[string]string{
+			"sqs_queue_url":    "https://sqs.example.com/q",
+			"ecr_repo_url":    "123.dkr.ecr.us-east-1.amazonaws.com/httpx",
+			"s3_bucket_name":  "results-bucket",
+			"ecs_cluster_name": "cluster",
+			"task_definition_arn": "arn:aws:ecs:td",
+			"subnet_ids":       "[subnet-a]",
+			"security_group_id": "sg-123",
+		},
+	}
+	cfg := core.DeployConfig{
+		TerraformDir:   "/tmp/tf",
+		DockerTag:      "heph-httpx-worker:latest",
+		TargetsContent: "example.com\n",
+		WorkerCount:    3,
+		ToolName:       "httpx",
+		PostDeployView: core.ViewGenericStatus,
+	}
+	m := NewWithDeployer(cfg, d)
+
+	// Run the full pipeline.
+	cmd := m.Init()
+	msg := cmd()
+	_, cmd = m.Update(msg)   // init complete -> plan
+	msg = cmd()
+	_, _ = m.Update(msg)     // plan complete -> approval
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'y'}) // approve
+	msgs := drainBatch(cmd)
+	for _, msg := range msgs {
+		if sc, ok := msg.(core.StageCompleteMsg); ok {
+			_, cmd = m.Update(sc)
+			break
+		}
+	}
+	// Read outputs
+	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
+	// Docker build
+	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
+	// ECR auth
+	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
+	// Docker tag+push
+	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
+
+	if m.stage != stageComplete {
+		t.Fatalf("expected stageComplete, got %s", m.stage)
+	}
+
+	if cmd != nil {
+		msg = cmd()
+		nav, ok := msg.(core.NavigateWithDataMsg)
+		if !ok {
+			t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+		}
+		if nav.Target != core.ViewGenericStatus {
+			t.Fatalf("expected ViewGenericStatus, got %v", nav.Target)
+		}
+		infra, ok := nav.Data.(core.InfraOutputs)
+		if !ok {
+			t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+		}
+		if infra.ToolName != "httpx" {
+			t.Fatalf("expected tool httpx, got %q", infra.ToolName)
+		}
 	}
 }
 
