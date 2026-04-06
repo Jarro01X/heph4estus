@@ -289,6 +289,75 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 	}
 }
 
+func TestDeployModel_GenericFailureEscReturnsToGenericConfig(t *testing.T) {
+	m := NewWithDeployer(core.DeployConfig{
+		ToolName:       "ffuf",
+		PostDeployView: core.ViewGenericStatus,
+	}, &mockDeployer{
+		initErr: errors.New("init failed"),
+	})
+
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	if m.stage != stageFailed {
+		t.Fatalf("expected stageFailed, got %s", m.stage)
+	}
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected navigate command on esc")
+	}
+	msg = cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewGenericConfig {
+		t.Fatalf("expected ViewGenericConfig, got %v", nav.Target)
+	}
+	if nav.Data != "ffuf" {
+		t.Fatalf("expected tool name ffuf, got %#v", nav.Data)
+	}
+}
+
+func TestDeployModel_GenericRejectEscReturnsToGenericConfig(t *testing.T) {
+	m := NewWithDeployer(core.DeployConfig{
+		ToolName:       "gobuster",
+		PostDeployView: core.ViewGenericStatus,
+	}, &mockDeployer{
+		planSummary: "Plan: 1 to add",
+	})
+
+	cmd := m.Init()
+	msg := cmd()
+	_, cmd = m.Update(msg) // init done
+	msg = cmd()
+	m.Update(msg) // plan done -> await approval
+
+	m.Update(tea.KeyPressMsg{Code: 'n'})
+	if m.stage != stageRejected {
+		t.Fatalf("expected stageRejected, got %s", m.stage)
+	}
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected navigate command on esc")
+	}
+	msg = cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewGenericConfig {
+		t.Fatalf("expected ViewGenericConfig, got %v", nav.Target)
+	}
+	if nav.Data != "gobuster" {
+		t.Fatalf("expected tool name gobuster, got %#v", nav.Data)
+	}
+}
+
 // drainBatch executes a batch command and returns all messages.
 func drainBatch(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {

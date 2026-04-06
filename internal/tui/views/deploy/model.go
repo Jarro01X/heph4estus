@@ -120,9 +120,7 @@ func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			if m.stage == stageFailed || m.stage == stageRejected {
-				return m, func() tea.Msg {
-					return core.NavigateMsg{Target: core.ViewNmapConfig}
-				}
+				return m, m.navigateBackToConfig()
 			}
 		case "q", "Q":
 			if m.stage == stageFailed || m.stage == stageRejected {
@@ -383,8 +381,27 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				AMIID:              outputs["ami_id"],
 				ToolName:           cfg.ToolName,
 				ToolOptions:        cfg.ToolOptions,
+				WordlistContent:    cfg.WordlistContent,
+				RuntimeTarget:      cfg.RuntimeTarget,
+				ChunkCount:         cfg.ChunkCount,
 			},
 		}
+	}
+}
+
+func (m *Model) navigateBackToConfig() tea.Cmd {
+	if m.config.PostDeployView == core.ViewGenericStatus && m.config.ToolName != "" {
+		toolName := m.config.ToolName
+		return func() tea.Msg {
+			return core.NavigateWithDataMsg{
+				Target: core.ViewGenericConfig,
+				Data:   toolName,
+			}
+		}
+	}
+
+	return func() tea.Msg {
+		return core.NavigateMsg{Target: core.ViewNmapConfig}
 	}
 }
 
