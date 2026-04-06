@@ -22,7 +22,8 @@ import (
 type statusPhase int
 
 const (
-	phaseEnqueuing statusPhase = iota
+	phaseUploading statusPhase = iota // wordlist only: uploading chunks
+	phaseEnqueuing
 	phaseLaunching
 	phaseScanning
 	phaseComplete
@@ -50,6 +51,12 @@ type scanProgressMsg struct {
 	err       error
 }
 
+type uploadCompleteMsg struct {
+	tasks []worker.Task
+	words int
+	err   error
+}
+
 const SpotThreshold = 50
 
 // GenericSubmitter abstracts target enqueueing and worker launching for generic tools.
@@ -62,6 +69,19 @@ type GenericSubmitter interface {
 // GenericTracker abstracts result counting.
 type GenericTracker interface {
 	CountResults(ctx context.Context, bucket, prefix string) (int, error)
+}
+
+// GenericUploader abstracts chunk uploads to storage.
+type GenericUploader interface {
+	UploadChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error
+}
+
+type realUploader struct {
+	storage cloud.Storage
+}
+
+func (u *realUploader) UploadChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error {
+	return jobs.UploadChunks(ctx, u.storage, bucket, plan)
 }
 
 type realSubmitter struct {
@@ -124,10 +144,13 @@ var statusKeys = statusKeyMap{
 type StatusModel struct {
 	submitter GenericSubmitter
 	tracker   GenericTracker
+	uploader  GenericUploader
 	infra     core.InfraOutputs
 
 	phase        statusPhase
-	totalTargets int
+	isWordlist   bool
+	totalTargets int // for target_list: target count; for wordlist: chunk count
+	totalWords   int // only for wordlist jobs
 	enqueueSent  int
 	workersUp    int
 	completed    int
@@ -155,11 +178,12 @@ func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.
 	return NewStatusWithDeps(infra,
 		&realSubmitter{queue: q, compute: c},
 		&realTracker{counter: counter, storage: s, useCounter: useCounter},
+		&realUploader{storage: s},
 	)
 }
 
 // NewStatusWithDeps creates a status view with injected dependencies (for testing).
-func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker GenericTracker) *StatusModel {
+func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker GenericTracker, uploader GenericUploader) *StatusModel {
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -170,20 +194,33 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker Ge
 		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
+
+	isWL := infra.WordlistContent != ""
+
 	return &StatusModel{
-		submitter: sub,
-		tracker:   tracker,
-		infra:     infra,
-		startTime: time.Now(),
-		help:      h,
+		submitter:  sub,
+		tracker:    tracker,
+		uploader:   uploader,
+		infra:      infra,
+		isWordlist: isWL,
+		startTime:  time.Now(),
+		help:       h,
 	}
 }
 
 func (m *StatusModel) Init() tea.Cmd {
-	targets := parseTargetLines(m.infra.TargetsContent)
 	if m.infra.JobID == "" {
 		m.infra.JobID = jobs.NewID(m.infra.ToolName)
 	}
+
+	if m.isWordlist {
+		return m.initWordlist()
+	}
+	return m.initTargetList()
+}
+
+func (m *StatusModel) initTargetList() tea.Cmd {
+	targets := parseTargetLines(m.infra.TargetsContent)
 
 	tasks := make([]worker.Task, len(targets))
 	for i, t := range targets {
@@ -210,6 +247,37 @@ func (m *StatusModel) Init() tea.Cmd {
 	}
 }
 
+func (m *StatusModel) initWordlist() tea.Cmd {
+	infra := m.infra
+	uploader := m.uploader
+
+	chunkCount := infra.ChunkCount
+	if chunkCount <= 0 {
+		chunkCount = infra.WorkerCount
+	}
+
+	plan, err := jobs.PlanWordlistJob(
+		infra.ToolName, infra.JobID,
+		infra.RuntimeTarget, infra.ToolOptions,
+		infra.WordlistContent, chunkCount,
+	)
+	if err != nil {
+		m.errMsg = fmt.Sprintf("Wordlist error: %v", err)
+		return nil
+	}
+
+	m.totalTargets = len(plan.Tasks)
+	m.totalWords = plan.TotalWords
+	m.phase = phaseUploading
+
+	return func() tea.Msg {
+		if err := uploader.UploadChunks(context.Background(), infra.S3BucketName, plan); err != nil {
+			return uploadCompleteMsg{err: err}
+		}
+		return uploadCompleteMsg{tasks: plan.Tasks, words: plan.TotalWords}
+	}
+}
+
 func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -225,6 +293,22 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			}
 		case "q", "Q":
 			return m, tea.Quit
+		}
+
+	case uploadCompleteMsg:
+		if msg.err != nil {
+			m.errMsg = fmt.Sprintf("Upload failed: %v", msg.err)
+			return m, nil
+		}
+		m.totalWords = msg.words
+		m.totalTargets = len(msg.tasks)
+		m.phase = phaseEnqueuing
+		infra := m.infra
+		sub := m.submitter
+		tasks := msg.tasks
+		return m, func() tea.Msg {
+			err := sub.EnqueueTasks(context.Background(), infra.SQSQueueURL, tasks)
+			return enqueueProgressMsg{sent: len(tasks), total: len(tasks), err: err}
 		}
 
 	case enqueueProgressMsg:
@@ -292,15 +376,32 @@ func (m *StatusModel) View() string {
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(14)
 
+	unitLabel := "targets"
+	if m.isWordlist {
+		unitLabel = "chunks"
+	}
+
 	switch m.phase {
+	case phaseUploading:
+		b.WriteString(core.SelectedStyle.Render("  Uploading wordlist chunks...") + "\n\n")
+		if m.infra.RuntimeTarget != "" {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
+		}
+		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Chunks:"), m.totalTargets)
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+
 	case phaseEnqueuing:
-		b.WriteString(core.SelectedStyle.Render("  Enqueueing targets...") + "\n\n")
-		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Targets:"), fmt.Sprintf("%d", m.totalTargets))
+		b.WriteString(core.SelectedStyle.Render("  Enqueueing "+unitLabel+"...") + "\n\n")
+		if m.isWordlist && m.infra.RuntimeTarget != "" {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
+			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
+		}
+		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Tasks:"), m.totalTargets)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 
 	case phaseLaunching:
 		b.WriteString(core.SelectedStyle.Render("  Launching workers...") + "\n\n")
-		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Targets:"), fmt.Sprintf("%d enqueued", m.enqueueSent))
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Tasks:"), fmt.Sprintf("%d enqueued", m.enqueueSent))
 		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Workers:"), m.workersUp, m.infra.WorkerCount)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 
@@ -310,10 +411,14 @@ func (m *StatusModel) View() string {
 		rate, eta := m.calcRateETA()
 
 		b.WriteString(core.SelectedStyle.Render("  Scanning") + "\n\n")
+		if m.isWordlist && m.infra.RuntimeTarget != "" {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
+			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
+		}
 		fmt.Fprintf(&b, "  %s%d active\n", labelStyle.Render("Workers:"), m.workersUp)
-		fmt.Fprintf(&b, "  %s%s %d / %d targets  (%.1f%%)\n", labelStyle.Render("Progress:"), bar, m.completed, m.totalTargets, pct)
+		fmt.Fprintf(&b, "  %s%s %d / %d %s  (%.1f%%)\n", labelStyle.Render("Progress:"), bar, m.completed, m.totalTargets, unitLabel, pct)
 		if rate > 0 {
-			fmt.Fprintf(&b, "  %s~%.0f targets/min\n", labelStyle.Render("Rate:"), rate)
+			fmt.Fprintf(&b, "  %s~%.0f %s/min\n", labelStyle.Render("Rate:"), rate, unitLabel)
 		}
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 		if eta > 0 {
