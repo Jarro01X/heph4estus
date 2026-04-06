@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"strings"
@@ -9,12 +10,14 @@ import (
 	"heph4estus/internal/worker"
 )
 
-// ParseWordlistEntries splits raw wordlist content into non-empty, non-comment entries.
+// ParseWordlistEntries splits raw wordlist content into non-empty lines while
+// preserving leading/trailing spaces and '#' prefixes exactly as provided.
 func ParseWordlistEntries(content string) []string {
 	var entries []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
 			continue
 		}
 		entries = append(entries, line)
