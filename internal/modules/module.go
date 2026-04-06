@@ -3,6 +3,7 @@ package modules
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -81,4 +82,24 @@ func (m *ModuleDefinition) Validate() error {
 func (m *ModuleDefinition) TimeoutDuration() time.Duration {
 	d, _ := time.ParseDuration(m.Timeout)
 	return d
+}
+
+// NeedsTarget returns true when the module command uses the {{target}} placeholder.
+func (m *ModuleDefinition) NeedsTarget() bool {
+	return containsPlaceholder(m.Exec, m.Shell, "target")
+}
+
+// NeedsWordlist returns true when the module command uses {{wordlist}} or {{input}}.
+func (m *ModuleDefinition) NeedsWordlist() bool {
+	return containsPlaceholder(m.Exec, m.Shell, "wordlist") || containsPlaceholder(m.Exec, m.Shell, "input")
+}
+
+func containsPlaceholder(exec []string, shell, placeholder string) bool {
+	needle := "{{" + placeholder + "}}"
+	for _, arg := range exec {
+		if strings.Contains(arg, needle) {
+			return true
+		}
+	}
+	return strings.Contains(shell, needle)
 }
