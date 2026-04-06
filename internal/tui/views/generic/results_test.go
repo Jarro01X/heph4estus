@@ -202,7 +202,7 @@ func TestFormatResult(t *testing.T) {
 		Error:     "timeout",
 		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-	s := formatResult(r)
+	s := formatResult("test-bucket", r)
 	if !strings.Contains(s, "example.com") {
 		t.Error("expected target in formatted result")
 	}
@@ -215,7 +215,7 @@ func TestFormatResult(t *testing.T) {
 	if !strings.Contains(s, "200 OK") {
 		t.Error("expected output in formatted result")
 	}
-	if !strings.Contains(s, "artifacts/example.com.jsonl") {
-		t.Error("expected output key in formatted result")
+	if !strings.Contains(s, "s3://test-bucket/artifacts/example.com.jsonl") {
+		t.Error("expected full s3 output path in formatted result")
 	}
 }
