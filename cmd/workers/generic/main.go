@@ -114,6 +114,10 @@ func processMessage(
 	if result.Target == "" {
 		result.Target = task.Target
 	}
+	// Propagate chunk metadata from task to result.
+	result.GroupID = task.GroupID
+	result.ChunkIdx = task.ChunkIdx
+	result.TotalChunks = task.TotalChunks
 
 	log.Info("Execution completed for target: %s, success: %v", task.Target, result.Error == "")
 

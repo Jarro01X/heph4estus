@@ -197,7 +197,7 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.results[pk[m.cursor]] = &msg.result
 		}
 		m.detail = true
-		content := formatResult(msg.result)
+		content := formatResult(m.infra.S3BucketName, msg.result)
 		m.detailVP.SetContent(content)
 		m.detailVP.GotoTop()
 	}
@@ -208,7 +208,7 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 func (m *ResultsModel) View() string {
 	var b strings.Builder
 
-	titleBar := core.TitleBarStyle.Render(fmt.Sprintf("  %s Results (%d targets)  ", m.infra.ToolName, m.total))
+	titleBar := core.TitleBarStyle.Render(fmt.Sprintf("  %s Results (%d)  ", m.infra.ToolName, m.total))
 	b.WriteString(titleBar)
 	b.WriteString("\n\n")
 
@@ -226,15 +226,22 @@ func (m *ResultsModel) View() string {
 			}
 		} else {
 			headerStyle := lipgloss.NewStyle().Foreground(core.Gold).Bold(true)
-			b.WriteString(headerStyle.Render(fmt.Sprintf("  %-40s %-8s", "TARGET", "STATUS")))
+			b.WriteString(headerStyle.Render(fmt.Sprintf("  %-40s %-10s %-8s", "TARGET", "CHUNK", "STATUS")))
 			b.WriteString("\n")
-			b.WriteString(core.MutedStyle.Render("  " + strings.Repeat("─", 50)))
+			b.WriteString(core.MutedStyle.Render("  " + strings.Repeat("─", 60)))
 			b.WriteString("\n")
 
 			for i, k := range pageKeys {
 				status := "..."
 				target := jobs.TargetFromKey(k)
+				chunkLabel := ""
 				if r, ok := m.results[k]; ok {
+					if r.Target != "" {
+						target = r.Target
+					}
+					if r.TotalChunks > 0 {
+						chunkLabel = fmt.Sprintf("%d/%d", r.ChunkIdx+1, r.TotalChunks)
+					}
 					if r.Error == "" {
 						status = "OK"
 					} else {
@@ -242,7 +249,7 @@ func (m *ResultsModel) View() string {
 					}
 				}
 
-				line := fmt.Sprintf("  %-40s %-8s", truncate(target, 38), status)
+				line := fmt.Sprintf("  %-40s %-10s %-8s", truncate(target, 38), chunkLabel, status)
 				if i == m.cursor {
 					b.WriteString(core.SelectedStyle.Render("► "+line[2:]) + "\n")
 				} else {
@@ -363,16 +370,23 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 	}
 }
 
-func formatResult(r worker.Result) string {
+func formatResult(bucket string, r worker.Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Target:    %s\n", r.Target)
 	fmt.Fprintf(&b, "Tool:      %s\n", r.ToolName)
+	if r.TotalChunks > 0 {
+		fmt.Fprintf(&b, "Chunk:     %d / %d\n", r.ChunkIdx+1, r.TotalChunks)
+	}
 	fmt.Fprintf(&b, "Timestamp: %s\n", r.Timestamp.Format("2006-01-02 15:04:05"))
 	if r.Error != "" {
 		fmt.Fprintf(&b, "Error:     %s\n", r.Error)
 	}
 	if r.OutputKey != "" {
-		fmt.Fprintf(&b, "Output:    s3://%s\n", r.OutputKey)
+		outputRef := r.OutputKey
+		if bucket != "" && !strings.HasPrefix(outputRef, "s3://") {
+			outputRef = fmt.Sprintf("s3://%s/%s", bucket, strings.TrimPrefix(outputRef, "/"))
+		}
+		fmt.Fprintf(&b, "Output:    %s\n", outputRef)
 	}
 	if r.Output != "" {
 		b.WriteString("\n--- Output ---\n")
