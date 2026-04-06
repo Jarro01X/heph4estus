@@ -29,13 +29,17 @@ func TestMenuContainsRegistryModules(t *testing.T) {
 	}
 }
 
-func TestMenuWordlistModulesDisabled(t *testing.T) {
+func TestMenuWordlistModulesEnabled(t *testing.T) {
 	m := New()
 	v := m.View()
 
-	// Wordlist modules should show "PR 5.7" hint.
-	if !strings.Contains(v, "PR 5.7") {
-		t.Error("menu should show PR 5.7 hint for wordlist modules")
+	// Wordlist modules should show "wordlist" hint and be enabled.
+	if !strings.Contains(v, "ffuf") {
+		t.Error("menu should contain ffuf entry")
+	}
+	// PR 5.7 language should be removed.
+	if strings.Contains(v, "PR 5.7") {
+		t.Error("menu should no longer show PR 5.7 hint")
 	}
 }
 
@@ -122,14 +126,16 @@ func TestMenuGenericToolRoutesToGenericConfig(t *testing.T) {
 	}
 }
 
-func TestMenuWordlistNotSelectable(t *testing.T) {
+func TestMenuWordlistSelectable(t *testing.T) {
 	items := buildMenuItems()
 	// Find a wordlist module.
 	wordlistIdx := -1
+	var wordlistItem menuItem
 	for i, item := range items {
 		mi, ok := item.(menuItem)
-		if ok && !mi.enabled && mi.toolName != "" {
+		if ok && mi.enabled && mi.toolName != "" && mi.hint == "wordlist" {
 			wordlistIdx = i
+			wordlistItem = mi
 			break
 		}
 	}
@@ -142,10 +148,22 @@ func TestMenuWordlistNotSelectable(t *testing.T) {
 		m.Update(tea.KeyPressMsg{Code: 'j'})
 	}
 
-	// Pressing enter on a disabled item should return nil command.
+	// Pressing enter on a wordlist item should produce a navigation command.
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("disabled wordlist item should not produce a command")
+	if cmd == nil {
+		t.Fatal("wordlist item should produce a command")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewGenericConfig {
+		t.Fatalf("expected ViewGenericConfig, got %v", nav.Target)
+	}
+	toolName, ok := nav.Data.(string)
+	if !ok || toolName != wordlistItem.toolName {
+		t.Fatalf("expected tool %q, got %v", wordlistItem.toolName, nav.Data)
 	}
 }
 
