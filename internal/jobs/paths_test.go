@@ -37,6 +37,25 @@ func TestResultAndArtifactKeys(t *testing.T) {
 	}
 }
 
+func TestResultKeyWithURLTarget(t *testing.T) {
+	// URL-shaped targets should be safely sanitized in keys.
+	key := ResultKey("ffuf", "job-456", "https://example.com/FUZZ", "https---example.com-fuzz", 0, 3, 1700000000, "json")
+	if strings.Contains(key, "://") {
+		t.Fatalf("URL protocol should be sanitized in key: %q", key)
+	}
+	if strings.Contains(key, "//") {
+		t.Fatalf("double slashes should be sanitized in key: %q", key)
+	}
+}
+
+func TestResultKeyDisambiguatesCollidingUnsafeTargets(t *testing.T) {
+	keyA := ResultKey("ffuf", "job-456", "https://example.com/a-b", "", 0, 0, 1700000000, "json")
+	keyB := ResultKey("ffuf", "job-456", "https://example.com/a/b", "", 0, 0, 1700000000, "json")
+	if keyA == keyB {
+		t.Fatalf("expected distinct keys for colliding sanitized targets, got %q", keyA)
+	}
+}
+
 func TestTargetFromKey(t *testing.T) {
 	tests := []struct {
 		key  string
@@ -45,6 +64,8 @@ func TestTargetFromKey(t *testing.T) {
 		{"scans/nmap/job-123/results/10.0.0.1_1709913600.json", "10.0.0.1"},
 		{"scans/nmap/job-123/results/example.com_line1/example.com_chunk0_of_5_1700000000.json", "example.com"},
 		{"scans/nmap/job-123/artifacts/example.com_1709913600.xml", "example.com"},
+		// Sanitized URL targets
+		{"scans/ffuf/job-456/results/https---example.com-fuzz_1700000000.json", "https---example.com-fuzz"},
 	}
 
 	for _, tt := range tests {
