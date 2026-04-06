@@ -134,22 +134,42 @@ func TestScanUnknownTool(t *testing.T) {
 	}
 }
 
-func TestScanWordlistRejection(t *testing.T) {
+func TestScanWordlistRequiresWordlistFlag(t *testing.T) {
 	err := run([]string{"scan", "--tool", "ffuf", "--file", "targets.txt"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for wordlist tool")
+		t.Fatal("expected error for wordlist tool with --file")
 	}
-	if !strings.Contains(err.Error(), "PR 5.7") {
-		t.Fatalf("expected PR 5.7 message, got: %v", err)
+	if !strings.Contains(err.Error(), "--file is not valid for wordlist tool") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestScanNonexistentFile(t *testing.T) {
-	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt"}, testLogger())
+func TestScanWordlistRequiresTarget(t *testing.T) {
+	err := run([]string{"scan", "--tool", "ffuf", "--wordlist", "words.txt"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for missing file")
+		t.Fatal("expected error for wordlist tool without --target")
 	}
-	if !strings.Contains(err.Error(), "reading target file") {
+	if !strings.Contains(err.Error(), "--target flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanTargetListRejectsWordlistFlag(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--wordlist", "words.txt"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for target_list tool with --wordlist")
+	}
+	if !strings.Contains(err.Error(), "--wordlist is not valid for target_list tool") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanTargetListRejectsChunks(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--chunks", "5"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for target_list tool with --chunks")
+	}
+	if !strings.Contains(err.Error(), "--chunks is not valid") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

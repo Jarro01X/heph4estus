@@ -22,8 +22,11 @@ import (
 
 func runScan(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
-	tool := fs.String("tool", "", "Tool to run (e.g. httpx, nuclei, subfinder)")
-	inputFile := fs.String("file", "", "Path to file containing targets (required)")
+	tool := fs.String("tool", "", "Tool to run (e.g. httpx, nuclei, subfinder, ffuf)")
+	inputFile := fs.String("file", "", "Path to file containing targets (target_list modules)")
+	wordlistFile := fs.String("wordlist", "", "Path to wordlist file (wordlist modules)")
+	runtimeTarget := fs.String("target", "", "Runtime target / URL (wordlist modules, e.g. https://example.com/FUZZ)")
+	chunks := fs.Int("chunks", 0, "Number of wordlist chunks (default: worker count)")
 	options := fs.String("options", "", "Extra tool-specific options")
 	workers := fs.Int("workers", 10, "Number of worker tasks to launch")
 	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
@@ -36,9 +39,6 @@ func runScan(args []string, log logger.Logger) error {
 
 	if *tool == "" {
 		return fmt.Errorf("--tool flag is required")
-	}
-	if *inputFile == "" {
-		return fmt.Errorf("--file flag is required")
 	}
 	if *format != "text" && *format != "json" {
 		return fmt.Errorf("--format must be text or json")
@@ -59,32 +59,34 @@ func runScan(args []string, log logger.Logger) error {
 	if err != nil {
 		return fmt.Errorf("unknown tool: %q (available: %s)", *tool, strings.Join(reg.Names(), ", "))
 	}
+
+	// Validate flag combinations based on module input type.
 	if mod.InputType == modules.InputTypeWordlist {
-		return fmt.Errorf("tool %q requires wordlist input — planned for PR 5.7", *tool)
-	}
-
-	// Read target file.
-	content, err := os.ReadFile(*inputFile)
-	if err != nil {
-		return fmt.Errorf("reading target file: %w", err)
-	}
-
-	targets := parseTargetLines(string(content))
-	if len(targets) == 0 {
-		return fmt.Errorf("no targets found in %s", *inputFile)
-	}
-
-	jobID := jobs.NewID(*tool)
-	logStatus("Parsed %d targets from %s [job %s]", len(targets), *inputFile, jobID)
-
-	// Build tasks.
-	tasks := make([]worker.Task, len(targets))
-	for i, t := range targets {
-		tasks[i] = worker.Task{
-			ToolName: *tool,
-			JobID:    jobID,
-			Target:   t,
-			Options:  *options,
+		if *inputFile != "" {
+			return fmt.Errorf("--file is not valid for wordlist tool %q — use --wordlist instead", *tool)
+		}
+		if *wordlistFile == "" {
+			return fmt.Errorf("--wordlist flag is required for tool %q", *tool)
+		}
+		if mod.NeedsTarget() && *runtimeTarget == "" {
+			return fmt.Errorf("--target flag is required for tool %q", *tool)
+		}
+		if *chunks < 0 {
+			return fmt.Errorf("--chunks must be positive")
+		}
+	} else {
+		// target_list module
+		if *wordlistFile != "" {
+			return fmt.Errorf("--wordlist is not valid for target_list tool %q — use --file instead", *tool)
+		}
+		if *chunks != 0 {
+			return fmt.Errorf("--chunks is not valid for target_list tool %q", *tool)
+		}
+		if *runtimeTarget != "" {
+			return fmt.Errorf("--target is not valid for target_list tool %q", *tool)
+		}
+		if *inputFile == "" {
+			return fmt.Errorf("--file flag is required")
 		}
 	}
 
@@ -103,9 +105,6 @@ func runScan(args []string, log logger.Logger) error {
 	}
 
 	// Guard: verify the deployed infra matches the requested tool.
-	// The generic Terraform directory is shared — if it was last deployed for
-	// a different tool, the ECR image and task definition won't have the right
-	// binary installed.
 	if deployedTool := outputs["tool_name"]; deployedTool != "" && deployedTool != *tool {
 		return fmt.Errorf("infrastructure was deployed for %q but scan requested %q — run 'heph infra deploy --tool %s --backend generic' first", deployedTool, *tool, *tool)
 	}
@@ -119,6 +118,39 @@ func runScan(args []string, log logger.Logger) error {
 	queue := provider.Queue()
 	storage := provider.Storage()
 	compute := provider.Compute()
+
+	jobID := jobs.NewID(*tool)
+
+	if mod.InputType == modules.InputTypeWordlist {
+		return runWordlistScan(ctx, mod, *tool, jobID, *wordlistFile, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+	}
+	return runTargetListScan(ctx, *tool, jobID, *inputFile, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+}
+
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) error {
+	// Read target file.
+	content, err := os.ReadFile(inputFile)
+	if err != nil {
+		return fmt.Errorf("reading target file: %w", err)
+	}
+
+	targets := parseTargetLines(string(content))
+	if len(targets) == 0 {
+		return fmt.Errorf("no targets found in %s", inputFile)
+	}
+
+	logStatus("Parsed %d targets from %s [job %s]", len(targets), inputFile, jobID)
+
+	// Build tasks.
+	tasks := make([]worker.Task, len(targets))
+	for i, t := range targets {
+		tasks[i] = worker.Task{
+			ToolName: tool,
+			JobID:    jobID,
+			Target:   t,
+			Options:  options,
+		}
+	}
 
 	// Enqueue targets.
 	logStatus("Enqueueing %d targets...", len(tasks))
@@ -139,18 +171,83 @@ func runScan(args []string, log logger.Logger) error {
 	logStatus("Enqueued %d targets", len(tasks))
 
 	// Launch workers.
-	logStatus("Launching %d workers (mode: %s)...", *workers, *computeMode)
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
+		return err
+	}
+
+	// Poll for progress.
+	return pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
+}
+
+func runWordlistScan(ctx context.Context, mod *modules.ModuleDefinition, tool, jobID, wordlistFile, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) error {
+	// Read wordlist file.
+	content, err := os.ReadFile(wordlistFile)
+	if err != nil {
+		return fmt.Errorf("reading wordlist file: %w", err)
+	}
+
+	if chunks <= 0 {
+		chunks = workers
+	}
+
+	plan, err := jobs.PlanWordlistJob(tool, jobID, runtimeTarget, options, string(content), chunks)
+	if err != nil {
+		return fmt.Errorf("planning wordlist job: %w", err)
+	}
+
+	logStatus("Parsed %d entries from %s, splitting into %d chunks [job %s]", plan.TotalWords, wordlistFile, len(plan.Tasks), jobID)
+	if runtimeTarget != "" {
+		logStatus("Target: %s", runtimeTarget)
+	}
+
+	// Upload chunks.
+	logStatus("Uploading %d chunks to s3://%s/...", len(plan.Tasks), bucket)
+	uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
+	defer uploadCancel()
+	if err := jobs.UploadChunks(uploadCtx, storage, bucket, plan); err != nil {
+		return fmt.Errorf("uploading wordlist chunks: %w", err)
+	}
+
+	// Enqueue tasks.
+	logStatus("Enqueueing %d chunk tasks...", len(plan.Tasks))
+	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
+	defer enqueueCancel()
+
+	bodies := make([]string, len(plan.Tasks))
+	for i, t := range plan.Tasks {
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Errorf("marshaling task %d: %w", i, err)
+		}
+		bodies[i] = string(b)
+	}
+	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
+		return fmt.Errorf("enqueueing chunk tasks: %w", err)
+	}
+	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
+
+	// Launch workers.
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
+		return err
+	}
+
+	// Poll for progress.
+	return pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)
+}
+
+func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string) error {
+	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
 
-	containerName := fmt.Sprintf("%s-worker", *tool)
+	containerName := fmt.Sprintf("%s-worker", tool)
 	workerEnv := map[string]string{
 		"QUEUE_URL": queueURL,
 		"S3_BUCKET": bucket,
-		"TOOL_NAME": *tool,
+		"TOOL_NAME": tool,
 	}
 
-	useSpot := resolveComputeMode(*computeMode, *workers)
+	useSpot := resolveComputeMode(computeMode, workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
@@ -161,14 +258,14 @@ func runScan(args []string, log logger.Logger) error {
 		})
 		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
 			AMI:             outputs["ami_id"],
-			Count:           *workers,
+			Count:           workers,
 			SecurityGroups:  []string{outputs["security_group_id"]},
 			SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
 			InstanceProfile: outputs["instance_profile_arn"],
 			UserData:        userData,
 			Tags: map[string]string{
 				"Project": "heph4estus",
-				"Tool":    *tool,
+				"Tool":    tool,
 			},
 		})
 		if err != nil {
@@ -183,19 +280,20 @@ func runScan(args []string, log logger.Logger) error {
 			Subnets:        splitOutputList(outputs["subnet_ids"]),
 			SecurityGroups: []string{outputs["security_group_id"]},
 			Env:            workerEnv,
-			Count:          *workers,
+			Count:          workers,
 		})
 		if err != nil {
 			return fmt.Errorf("launching Fargate tasks: %w", err)
 		}
-		logStatus("Launched %d Fargate tasks", *workers)
+		logStatus("Launched %d Fargate tasks", workers)
 	}
+	return nil
+}
 
-	// Poll for progress.
+func pollAndOutput(ctx context.Context, storage cloud.Storage, bucket, tool, jobID string, totalTasks int, unitLabel, format string) error {
 	logStatus("Scanning...")
 	startTime := time.Now()
-	totalTargets := len(tasks)
-	scanPrefix := jobs.ResultPrefix(*tool, jobID)
+	scanPrefix := jobs.ResultPrefix(tool, jobID)
 
 	for {
 		count, err := storage.Count(ctx, bucket, scanPrefix)
@@ -203,10 +301,10 @@ func runScan(args []string, log logger.Logger) error {
 			logStatus("Warning: progress check failed: %v", err)
 		} else {
 			elapsed := time.Since(startTime).Truncate(time.Second)
-			pct := float64(count) / float64(totalTargets) * 100
-			logStatus("Progress: %d/%d (%.1f%%) — elapsed %s", count, totalTargets, pct, elapsed)
+			pct := float64(count) / float64(totalTasks) * 100
+			logStatus("Progress: %d/%d %s (%.1f%%) — elapsed %s", count, totalTasks, unitLabel, pct, elapsed)
 
-			if count >= totalTargets {
+			if count >= totalTasks {
 				break
 			}
 		}
@@ -214,10 +312,10 @@ func runScan(args []string, log logger.Logger) error {
 	}
 
 	elapsed := time.Since(startTime).Truncate(time.Second)
-	logStatus("Scan complete: %d targets in %s", totalTargets, elapsed)
+	logStatus("Scan complete: %d %s in %s", totalTasks, unitLabel, elapsed)
 
 	// Output results.
-	return outputGenericResults(ctx, storage, bucket, scanPrefix, *format)
+	return outputGenericResults(ctx, storage, bucket, scanPrefix, format)
 }
 
 func outputGenericResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string) error {
@@ -247,8 +345,8 @@ func outputGenericResults(ctx context.Context, storage cloud.Storage, bucket, pr
 			}
 		}
 	} else {
-		fmt.Printf("\n%-40s %s\n", "TARGET", "STATUS")
-		fmt.Println(strings.Repeat("─", 50))
+		fmt.Printf("\n%-40s %-10s %s\n", "TARGET", "CHUNK", "STATUS")
+		fmt.Println(strings.Repeat("─", 60))
 		var failures int
 		for _, key := range keys {
 			if !strings.HasSuffix(key, ".json") {
@@ -256,17 +354,26 @@ func outputGenericResults(ctx context.Context, storage cloud.Storage, bucket, pr
 			}
 			target := extractTargetFromKey(key)
 			status := "OK"
+			chunkLabel := ""
 			data, err := storage.Download(ctx, bucket, key)
 			if err != nil {
 				status = "???"
 			} else {
 				var result worker.Result
-				if err := json.Unmarshal(data, &result); err == nil && result.Error != "" {
-					status = "ERROR"
-					failures++
+				if err := json.Unmarshal(data, &result); err == nil {
+					if result.Target != "" {
+						target = result.Target
+					}
+					if result.TotalChunks > 0 {
+						chunkLabel = fmt.Sprintf("%d/%d", result.ChunkIdx+1, result.TotalChunks)
+					}
+					if result.Error != "" {
+						status = "ERROR"
+						failures++
+					}
 				}
 			}
-			fmt.Printf("%-40s %s\n", target, status)
+			fmt.Printf("%-40s %-10s %s\n", target, chunkLabel, status)
 		}
 		fmt.Printf("\n%d results written to s3://%s/%s", len(keys), bucket, prefix)
 		if failures > 0 {
@@ -289,4 +396,3 @@ func parseTargetLines(content string) []string {
 	}
 	return targets
 }
-
