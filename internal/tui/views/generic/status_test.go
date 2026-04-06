@@ -280,8 +280,8 @@ func TestGenericStatusWordlistInit(t *testing.T) {
 	if len(uc.tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(uc.tasks))
 	}
-	if uc.words != 4 {
-		t.Fatalf("expected 4 words, got %d", uc.words)
+	if uc.words != 5 {
+		t.Fatalf("expected 5 preserved wordlist entries, got %d", uc.words)
 	}
 
 	// Verify chunk metadata on tasks.

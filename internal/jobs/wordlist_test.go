@@ -1,26 +1,45 @@
 package jobs
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestParseWordlistEntries(t *testing.T) {
 	tests := []struct {
+		name    string
 		content string
-		want    int
+		want    []string
 	}{
-		{"admin\nlogin\napi\n", 3},
-		{"# comment\n\nadmin\nlogin\n", 2},
-		{"", 0},
-		{"\n\n\n", 0},
-		{"admin\n# ignore\nlogin\n", 2},
+		{
+			name:    "plain entries",
+			content: "admin\nlogin\napi\n",
+			want:    []string{"admin", "login", "api"},
+		},
+		{
+			name:    "preserves hash prefixes and spaces",
+			content: "#comment\n admin\ntrailing \n  both  \n",
+			want:    []string{"#comment", " admin", "trailing ", "  both  "},
+		},
+		{
+			name:    "skips blank lines only",
+			content: "\n\nadmin\n\nlogin\n",
+			want:    []string{"admin", "login"},
+		},
+		{
+			name:    "empty content",
+			content: "",
+			want:    nil,
+		},
 	}
 	for _, tt := range tests {
-		got := ParseWordlistEntries(tt.content)
-		if len(got) != tt.want {
-			t.Errorf("ParseWordlistEntries(%q) = %d, want %d", tt.content, len(got), tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseWordlistEntries(tt.content)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ParseWordlistEntries(%q) = %#v, want %#v", tt.content, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -112,8 +131,18 @@ func TestPlanWordlistJob(t *testing.T) {
 	}
 }
 
+func TestPlanWordlistJobPreservesRawEntries(t *testing.T) {
+	plan, err := PlanWordlistJob("ffuf", "job-123", "https://example.com/FUZZ", "", "#comment\n admin\ntrailing \n", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := string(plan.ChunkData[0]); got != "#comment\n admin\ntrailing \n" {
+		t.Fatalf("chunk data = %q, want raw wordlist preserved", got)
+	}
+}
+
 func TestPlanWordlistJobEmptyWordlist(t *testing.T) {
-	_, err := PlanWordlistJob("ffuf", "job-123", "https://example.com/FUZZ", "", "# only comments\n\n", 2)
+	_, err := PlanWordlistJob("ffuf", "job-123", "https://example.com/FUZZ", "", "\n\n", 2)
 	if err == nil {
 		t.Fatal("expected error for empty wordlist")
 	}
