@@ -68,6 +68,11 @@ type DeployConfig struct {
 	// PostDeployView controls where deploy navigates on completion.
 	// Defaults to ViewNmapStatus when zero.
 	PostDeployView ViewID
+
+	// Wordlist module fields — set for wordlist-type tools (ffuf, gobuster, etc.).
+	WordlistContent string // Raw wordlist file content
+	RuntimeTarget   string // Single runtime target / URL (e.g. "https://example.com/FUZZ")
+	ChunkCount      int    // Number of wordlist chunks (defaults to WorkerCount)
 }
 
 // InfraOutputs holds terraform outputs needed by downstream views.
@@ -100,6 +105,11 @@ type InfraOutputs struct {
 	// Generic tool fields — set for non-nmap modules.
 	ToolName    string // Module name (e.g. "httpx")
 	ToolOptions string // Extra tool-specific CLI flags
+
+	// Wordlist module fields — carried forward from DeployConfig.
+	WordlistContent string
+	RuntimeTarget   string
+	ChunkCount      int
 }
 
 // StageCompleteMsg signals that a deploy stage finished.

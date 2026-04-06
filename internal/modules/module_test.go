@@ -142,6 +142,58 @@ func TestValidate_EmptyDescriptionIsValid(t *testing.T) {
 	}
 }
 
+func TestNeedsTarget(t *testing.T) {
+	// Exec-based module with {{target}}
+	m := ModuleDefinition{
+		Exec: []string{"tool", "-u", "{{target}}", "-w", "{{input}}"},
+	}
+	if !m.NeedsTarget() {
+		t.Error("expected NeedsTarget() = true for module with {{target}}")
+	}
+
+	// Module without {{target}}
+	m2 := ModuleDefinition{
+		Exec: []string{"tool", "-w", "{{input}}", "-o", "{{output}}"},
+	}
+	if m2.NeedsTarget() {
+		t.Error("expected NeedsTarget() = false for module without {{target}}")
+	}
+
+	// Shell-based module with {{target}}
+	m3 := ModuleDefinition{
+		Shell: "tool -u {{target}} -w {{wordlist}}",
+	}
+	if !m3.NeedsTarget() {
+		t.Error("expected NeedsTarget() = true for shell module with {{target}}")
+	}
+}
+
+func TestNeedsWordlist(t *testing.T) {
+	// Module with {{wordlist}}
+	m := ModuleDefinition{
+		Exec: []string{"ffuf", "-w", "{{wordlist}}", "-u", "{{target}}"},
+	}
+	if !m.NeedsWordlist() {
+		t.Error("expected NeedsWordlist() = true for module with {{wordlist}}")
+	}
+
+	// Module with {{input}}
+	m2 := ModuleDefinition{
+		Exec: []string{"tool", "-f", "{{input}}"},
+	}
+	if !m2.NeedsWordlist() {
+		t.Error("expected NeedsWordlist() = true for module with {{input}}")
+	}
+
+	// Module without wordlist
+	m3 := ModuleDefinition{
+		Exec: []string{"tool", "{{target}}"},
+	}
+	if m3.NeedsWordlist() {
+		t.Error("expected NeedsWordlist() = false for module without {{input}} or {{wordlist}}")
+	}
+}
+
 func TestTimeoutDuration(t *testing.T) {
 	m := validModule()
 	m.Timeout = "5m"
