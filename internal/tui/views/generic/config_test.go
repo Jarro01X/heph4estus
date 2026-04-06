@@ -56,18 +56,62 @@ func TestGenericConfigSubmitRequiresTargetFile(t *testing.T) {
 	}
 }
 
-func TestGenericConfigWordlistRejection(t *testing.T) {
+func TestGenericConfigWordlistRequiresFile(t *testing.T) {
 	m := NewConfig("ffuf")
-	// Set a dummy target file value.
-	m.inputs[cfgFieldTargetFile].SetValue("/tmp/targets.txt")
+	if !m.isWordlist {
+		t.Fatal("expected ffuf to be detected as wordlist module")
+	}
 	// Navigate to submit.
-	m.focus = cfgFieldSubmit
+	m.focus = wlFieldSubmit
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
-		t.Fatal("expected nil command for wordlist tool submission")
+		t.Fatal("expected nil command when submitting without wordlist file")
 	}
-	if !strings.Contains(m.View(), "PR 5.7") {
-		t.Fatal("expected PR 5.7 rejection message for wordlist tool")
+	if !strings.Contains(m.View(), "Wordlist file is required") {
+		t.Fatal("expected wordlist file required error")
+	}
+}
+
+func TestGenericConfigWordlistRequiresTarget(t *testing.T) {
+	m := NewConfig("ffuf")
+	m.wlInputs[wlFieldWordlistFile].SetValue("/tmp/words.txt")
+	// Leave target empty — ffuf requires {{target}}.
+	m.focus = wlFieldSubmit
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected nil command when submitting without target")
+	}
+	if !strings.Contains(m.View(), "Target / URL is required") {
+		t.Fatal("expected target required error")
+	}
+}
+
+func TestGenericConfigWordlistInvalidChunks(t *testing.T) {
+	m := NewConfig("ffuf")
+	m.wlInputs[wlFieldWordlistFile].SetValue("/tmp/words.txt")
+	m.wlInputs[wlFieldTarget].SetValue("https://example.com/FUZZ")
+	m.wlInputs[wlFieldChunks].SetValue("-5")
+	m.focus = wlFieldSubmit
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected nil command for invalid chunks")
+	}
+	if !strings.Contains(m.View(), "Chunks must be a positive number") {
+		t.Fatal("expected chunks validation error")
+	}
+}
+
+func TestGenericConfigWordlistShowsFields(t *testing.T) {
+	m := NewConfig("ffuf")
+	v := m.View()
+	if !strings.Contains(v, "Wordlist File") {
+		t.Fatal("expected Wordlist File label")
+	}
+	if !strings.Contains(v, "Target / URL") {
+		t.Fatal("expected Target / URL label")
+	}
+	if !strings.Contains(v, "Chunks") {
+		t.Fatal("expected Chunks label")
 	}
 }
 

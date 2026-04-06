@@ -20,6 +20,12 @@ type fileReadMsg struct {
 	err     error
 }
 
+// wordlistReadMsg carries the wordlist file content separately from target file.
+type wordlistReadMsg struct {
+	content string
+	err     error
+}
+
 type configKeyMap struct {
 	Tab   key.Binding
 	Enter key.Binding
@@ -42,25 +48,44 @@ var configKeys = configKeyMap{
 	Quit:  key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 }
 
+// Field indices for target_list modules.
 const (
 	cfgFieldTargetFile = iota
 	cfgFieldOptions
 	cfgFieldWorkerCount
 	cfgFieldComputeMode
 	cfgFieldSubmit
-	cfgFieldCount
+)
+
+// Field indices for wordlist modules.
+const (
+	wlFieldWordlistFile = iota
+	wlFieldTarget
+	wlFieldOptions
+	wlFieldChunks
+	wlFieldWorkerCount
+	wlFieldComputeMode
+	wlFieldSubmit
 )
 
 // ConfigModel is the generic tool configuration form view.
 type ConfigModel struct {
-	toolName string
-	mod      *modules.ModuleDefinition
-	inputs   [4]textinput.Model
-	focus    int
-	help     help.Model
-	width    int
-	height   int
-	errMsg   string
+	toolName   string
+	mod        *modules.ModuleDefinition
+	isWordlist bool
+
+	// target_list inputs (4 fields)
+	inputs [4]textinput.Model
+
+	// wordlist inputs (6 fields)
+	wlInputs [6]textinput.Model
+
+	focus      int
+	fieldCount int
+	help       help.Model
+	width      int
+	height     int
+	errMsg     string
 }
 
 // NewConfig creates a generic config view for the given tool name.
@@ -71,9 +96,42 @@ func NewConfig(toolName string) *ConfigModel {
 		mod, _ = reg.Get(toolName)
 	}
 
+	isWordlist := mod != nil && mod.InputType == modules.InputTypeWordlist
+
+	h := help.New()
+	h.Styles = help.Styles{
+		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
+		ShortDesc:      lipgloss.NewStyle().Foreground(core.Steel),
+		ShortSeparator: lipgloss.NewStyle().Foreground(core.Steel),
+		FullKey:        lipgloss.NewStyle().Foreground(core.Steel),
+		FullDesc:       lipgloss.NewStyle().Foreground(core.Steel),
+		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
+		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
+	}
+
+	m := &ConfigModel{
+		toolName:   toolName,
+		mod:        mod,
+		isWordlist: isWordlist,
+		help:       h,
+	}
+
+	if isWordlist {
+		m.fieldCount = wlFieldSubmit + 1
+		m.wlInputs = buildWordlistInputs(mod)
+		m.wlInputs[0].Focus()
+	} else {
+		m.fieldCount = cfgFieldSubmit + 1
+		m.inputs = buildTargetListInputs()
+		m.inputs[0].Focus()
+	}
+
+	return m
+}
+
+func buildTargetListInputs() [4]textinput.Model {
 	targetInput := textinput.New()
 	targetInput.Placeholder = "/path/to/targets.txt"
-	targetInput.Focus()
 	targetInput.CharLimit = 256
 
 	optsInput := textinput.New()
@@ -90,23 +148,41 @@ func NewConfig(toolName string) *ConfigModel {
 	modeInput.SetValue("auto")
 	modeInput.CharLimit = 7
 
-	h := help.New()
-	h.Styles = help.Styles{
-		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
-		ShortDesc:      lipgloss.NewStyle().Foreground(core.Steel),
-		ShortSeparator: lipgloss.NewStyle().Foreground(core.Steel),
-		FullKey:        lipgloss.NewStyle().Foreground(core.Steel),
-		FullDesc:       lipgloss.NewStyle().Foreground(core.Steel),
-		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
-		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
-	}
+	return [4]textinput.Model{targetInput, optsInput, workerInput, modeInput}
+}
 
-	return &ConfigModel{
-		toolName: toolName,
-		mod:      mod,
-		inputs:   [4]textinput.Model{targetInput, optsInput, workerInput, modeInput},
-		help:     h,
+func buildWordlistInputs(mod *modules.ModuleDefinition) [6]textinput.Model {
+	wlInput := textinput.New()
+	wlInput.Placeholder = "/path/to/wordlist.txt"
+	wlInput.CharLimit = 256
+
+	targetInput := textinput.New()
+	if mod != nil && mod.NeedsTarget() {
+		targetInput.Placeholder = "https://example.com/FUZZ"
+	} else {
+		targetInput.Placeholder = "(optional)"
 	}
+	targetInput.CharLimit = 256
+
+	optsInput := textinput.New()
+	optsInput.Placeholder = "extra flags"
+	optsInput.CharLimit = 256
+
+	chunksInput := textinput.New()
+	chunksInput.Placeholder = "default: worker count"
+	chunksInput.CharLimit = 6
+
+	workerInput := textinput.New()
+	workerInput.Placeholder = "10"
+	workerInput.SetValue("10")
+	workerInput.CharLimit = 6
+
+	modeInput := textinput.New()
+	modeInput.Placeholder = "auto"
+	modeInput.SetValue("auto")
+	modeInput.CharLimit = 7
+
+	return [6]textinput.Model{wlInput, targetInput, optsInput, chunksInput, workerInput, modeInput}
 }
 
 func (m *ConfigModel) Init() tea.Cmd {
@@ -127,72 +203,155 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 				return core.NavigateMsg{Target: core.ViewMenu}
 			}
 		case "tab", "down":
-			m.focus = (m.focus + 1) % cfgFieldCount
+			m.focus = (m.focus + 1) % m.fieldCount
 			return m, m.updateFocus()
 		case "shift+tab", "up":
-			m.focus = (m.focus - 1 + cfgFieldCount) % cfgFieldCount
+			m.focus = (m.focus - 1 + m.fieldCount) % m.fieldCount
 			return m, m.updateFocus()
 		case "enter":
-			if m.focus == cfgFieldSubmit {
+			submitIdx := cfgFieldSubmit
+			if m.isWordlist {
+				submitIdx = wlFieldSubmit
+			}
+			if m.focus == submitIdx {
 				return m, m.submit()
 			}
-			m.focus = (m.focus + 1) % cfgFieldCount
+			m.focus = (m.focus + 1) % m.fieldCount
 			return m, m.updateFocus()
 		}
 
 	case fileReadMsg:
-		if msg.err != nil {
-			m.errMsg = fmt.Sprintf("Error reading file: %v", msg.err)
-			return m, nil
-		}
-		workerCount, _ := strconv.Atoi(m.inputs[cfgFieldWorkerCount].Value())
-		if workerCount <= 0 {
-			workerCount = 10
-		}
-		computeMode := strings.TrimSpace(m.inputs[cfgFieldComputeMode].Value())
-		if computeMode == "" {
-			computeMode = "auto"
-		}
-		if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
-			m.errMsg = "Compute mode must be auto, fargate, or spot"
-			return m, nil
-		}
+		return m, m.handleTargetListFileRead(msg)
 
-		buildArgs := installCmdToBuildArgs(m.mod)
-		tfVars := map[string]string{"tool_name": m.toolName}
-		if m.mod != nil {
-			tfVars["task_cpu"] = fmt.Sprintf("%d", m.mod.DefaultCPU)
-			tfVars["task_memory"] = fmt.Sprintf("%d", m.mod.DefaultMemory)
-		}
-		return m, func() tea.Msg {
-			return core.NavigateWithDataMsg{
-				Target: core.ViewDeploy,
-				Data: core.DeployConfig{
-					TerraformDir:  "deployments/aws/generic/environments/dev",
-					Dockerfile:    "containers/generic/Dockerfile",
-					DockerContext: ".",
-					DockerTag:     fmt.Sprintf("heph-%s-worker:latest", m.toolName),
-					ECRRepoName:   fmt.Sprintf("heph-dev-%s", m.toolName),
-					AWSRegion:     awsRegion(),
-					BuildArgs:     buildArgs,
-					TerraformVars: tfVars,
-					TargetsContent: msg.content,
-					WorkerCount:    workerCount,
-					ComputeMode:    computeMode,
-					ToolName:       m.toolName,
-					ToolOptions:    strings.TrimSpace(m.inputs[cfgFieldOptions].Value()),
-					PostDeployView: core.ViewGenericStatus,
-				},
-			}
-		}
+	case wordlistReadMsg:
+		return m, m.handleWordlistFileRead(msg)
 	}
 
-	if m.focus < len(m.inputs) {
-		var cmd tea.Cmd
-		m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
-		return m, cmd
+	// Update the focused text input.
+	if m.isWordlist {
+		if m.focus < len(m.wlInputs) {
+			var cmd tea.Cmd
+			m.wlInputs[m.focus], cmd = m.wlInputs[m.focus].Update(msg)
+			return m, cmd
+		}
+	} else {
+		if m.focus < len(m.inputs) {
+			var cmd tea.Cmd
+			m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
+			return m, cmd
+		}
 	}
 	return m, nil
+}
+
+func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("Error reading file: %v", msg.err)
+		return nil
+	}
+	workerCount, _ := strconv.Atoi(m.inputs[cfgFieldWorkerCount].Value())
+	if workerCount <= 0 {
+		workerCount = 10
+	}
+	computeMode := strings.TrimSpace(m.inputs[cfgFieldComputeMode].Value())
+	if computeMode == "" {
+		computeMode = "auto"
+	}
+	if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
+		m.errMsg = "Compute mode must be auto, fargate, or spot"
+		return nil
+	}
+
+	buildArgs := installCmdToBuildArgs(m.mod)
+	tfVars := map[string]string{"tool_name": m.toolName}
+	if m.mod != nil {
+		tfVars["task_cpu"] = fmt.Sprintf("%d", m.mod.DefaultCPU)
+		tfVars["task_memory"] = fmt.Sprintf("%d", m.mod.DefaultMemory)
+	}
+	return func() tea.Msg {
+		return core.NavigateWithDataMsg{
+			Target: core.ViewDeploy,
+			Data: core.DeployConfig{
+				TerraformDir:   "deployments/aws/generic/environments/dev",
+				Dockerfile:     "containers/generic/Dockerfile",
+				DockerContext:   ".",
+				DockerTag:      fmt.Sprintf("heph-%s-worker:latest", m.toolName),
+				ECRRepoName:    fmt.Sprintf("heph-dev-%s", m.toolName),
+				AWSRegion:      awsRegion(),
+				BuildArgs:      buildArgs,
+				TerraformVars:  tfVars,
+				TargetsContent: msg.content,
+				WorkerCount:    workerCount,
+				ComputeMode:    computeMode,
+				ToolName:       m.toolName,
+				ToolOptions:    strings.TrimSpace(m.inputs[cfgFieldOptions].Value()),
+				PostDeployView: core.ViewGenericStatus,
+			},
+		}
+	}
+}
+
+func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("Error reading wordlist: %v", msg.err)
+		return nil
+	}
+
+	runtimeTarget := strings.TrimSpace(m.wlInputs[wlFieldTarget].Value())
+	if m.mod != nil && m.mod.NeedsTarget() && runtimeTarget == "" {
+		m.errMsg = "Target / URL is required for this tool"
+		return nil
+	}
+
+	workerCount, _ := strconv.Atoi(m.wlInputs[wlFieldWorkerCount].Value())
+	if workerCount <= 0 {
+		workerCount = 10
+	}
+
+	chunkCount, _ := strconv.Atoi(m.wlInputs[wlFieldChunks].Value())
+	if chunkCount <= 0 {
+		chunkCount = workerCount
+	}
+
+	computeMode := strings.TrimSpace(m.wlInputs[wlFieldComputeMode].Value())
+	if computeMode == "" {
+		computeMode = "auto"
+	}
+	if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
+		m.errMsg = "Compute mode must be auto, fargate, or spot"
+		return nil
+	}
+
+	buildArgs := installCmdToBuildArgs(m.mod)
+	tfVars := map[string]string{"tool_name": m.toolName}
+	if m.mod != nil {
+		tfVars["task_cpu"] = fmt.Sprintf("%d", m.mod.DefaultCPU)
+		tfVars["task_memory"] = fmt.Sprintf("%d", m.mod.DefaultMemory)
+	}
+
+	return func() tea.Msg {
+		return core.NavigateWithDataMsg{
+			Target: core.ViewDeploy,
+			Data: core.DeployConfig{
+				TerraformDir:    "deployments/aws/generic/environments/dev",
+				Dockerfile:      "containers/generic/Dockerfile",
+				DockerContext:    ".",
+				DockerTag:       fmt.Sprintf("heph-%s-worker:latest", m.toolName),
+				ECRRepoName:     fmt.Sprintf("heph-dev-%s", m.toolName),
+				AWSRegion:       awsRegion(),
+				BuildArgs:       buildArgs,
+				TerraformVars:   tfVars,
+				WorkerCount:     workerCount,
+				ComputeMode:     computeMode,
+				ToolName:        m.toolName,
+				ToolOptions:     strings.TrimSpace(m.wlInputs[wlFieldOptions].Value()),
+				PostDeployView:  core.ViewGenericStatus,
+				WordlistContent: msg.content,
+				RuntimeTarget:   runtimeTarget,
+				ChunkCount:      chunkCount,
+			},
+		}
+	}
 }
 
 func (m *ConfigModel) View() string {
@@ -209,19 +368,37 @@ func (m *ConfigModel) View() string {
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(18)
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
-	labels := []string{"Target File:*", "Extra Options:", "Worker Count:", "Compute Mode:"}
-	for i, label := range labels {
-		ls := labelStyle
-		if m.focus == i {
-			ls = focusedLabel
+	if m.isWordlist {
+		labels := []string{"Wordlist File:*", "Target / URL:*", "Extra Options:", "Chunks:", "Worker Count:", "Compute Mode:"}
+		if m.mod != nil && !m.mod.NeedsTarget() {
+			labels[1] = "Target / URL:"
 		}
-		fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.inputs[i].View())
+		for i, label := range labels {
+			ls := labelStyle
+			if m.focus == i {
+				ls = focusedLabel
+			}
+			fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.wlInputs[i].View())
+		}
+	} else {
+		labels := []string{"Target File:*", "Extra Options:", "Worker Count:", "Compute Mode:"}
+		for i, label := range labels {
+			ls := labelStyle
+			if m.focus == i {
+				ls = focusedLabel
+			}
+			fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.inputs[i].View())
+		}
 	}
 
 	b.WriteString("\n")
 
+	submitIdx := cfgFieldSubmit
+	if m.isWordlist {
+		submitIdx = wlFieldSubmit
+	}
 	submitStyle := core.MutedStyle
-	if m.focus == cfgFieldSubmit {
+	if m.focus == submitIdx {
 		submitStyle = core.SelectedStyle
 	}
 	b.WriteString("  " + submitStyle.Render("[ Submit ]"))
@@ -246,27 +423,45 @@ func (m *ConfigModel) View() string {
 
 func (m *ConfigModel) updateFocus() tea.Cmd {
 	var cmds []tea.Cmd
-	for i := range m.inputs {
-		if i == m.focus {
-			cmds = append(cmds, m.inputs[i].Focus())
-		} else {
-			m.inputs[i].Blur()
+	if m.isWordlist {
+		for i := range m.wlInputs {
+			if i == m.focus {
+				cmds = append(cmds, m.wlInputs[i].Focus())
+			} else {
+				m.wlInputs[i].Blur()
+			}
+		}
+	} else {
+		for i := range m.inputs {
+			if i == m.focus {
+				cmds = append(cmds, m.inputs[i].Focus())
+			} else {
+				m.inputs[i].Blur()
+			}
 		}
 	}
 	if len(cmds) == 0 {
-		for i := range m.inputs {
-			m.inputs[i].Blur()
+		if m.isWordlist {
+			for i := range m.wlInputs {
+				m.wlInputs[i].Blur()
+			}
+		} else {
+			for i := range m.inputs {
+				m.inputs[i].Blur()
+			}
 		}
 	}
 	return tea.Batch(cmds...)
 }
 
 func (m *ConfigModel) submit() tea.Cmd {
-	if m.mod != nil && m.mod.InputType == modules.InputTypeWordlist {
-		m.errMsg = fmt.Sprintf("%s requires wordlist input — planned for PR 5.7", m.toolName)
-		return nil
+	if m.isWordlist {
+		return m.submitWordlist()
 	}
+	return m.submitTargetList()
+}
 
+func (m *ConfigModel) submitTargetList() tea.Cmd {
 	path := strings.TrimSpace(m.inputs[cfgFieldTargetFile].Value())
 	if path == "" {
 		m.errMsg = "Target file is required"
@@ -279,6 +474,37 @@ func (m *ConfigModel) submit() tea.Cmd {
 			return fileReadMsg{err: err}
 		}
 		return fileReadMsg{content: string(data)}
+	}
+}
+
+func (m *ConfigModel) submitWordlist() tea.Cmd {
+	wlPath := strings.TrimSpace(m.wlInputs[wlFieldWordlistFile].Value())
+	if wlPath == "" {
+		m.errMsg = "Wordlist file is required"
+		return nil
+	}
+
+	runtimeTarget := strings.TrimSpace(m.wlInputs[wlFieldTarget].Value())
+	if m.mod != nil && m.mod.NeedsTarget() && runtimeTarget == "" {
+		m.errMsg = "Target / URL is required for this tool"
+		return nil
+	}
+
+	chunksStr := strings.TrimSpace(m.wlInputs[wlFieldChunks].Value())
+	if chunksStr != "" {
+		if v, err := strconv.Atoi(chunksStr); err != nil || v <= 0 {
+			m.errMsg = "Chunks must be a positive number"
+			return nil
+		}
+	}
+
+	m.errMsg = ""
+	return func() tea.Msg {
+		data, err := os.ReadFile(wlPath)
+		if err != nil {
+			return wordlistReadMsg{err: err}
+		}
+		return wordlistReadMsg{content: string(data)}
 	}
 }
 

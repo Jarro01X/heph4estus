@@ -165,12 +165,13 @@ func buildMenuItems() []list.Item {
 				target:  core.ViewNmapConfig,
 			})
 		case mod.InputType == modules.InputTypeWordlist:
-			// Wordlist modules are visible but disabled until PR 5.7.
+			// Wordlist modules route to the generic config flow.
 			items = append(items, menuItem{
 				title:    mod.Name + " — " + mod.Description,
-				enabled:  false,
+				enabled:  true,
+				target:   core.ViewGenericConfig,
 				toolName: mod.Name,
-				hint:     "wordlist — PR 5.7",
+				hint:     "wordlist",
 			})
 		default:
 			// target_list modules route to the generic config flow.
