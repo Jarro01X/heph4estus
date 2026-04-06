@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"path"
@@ -80,10 +81,38 @@ func sanitizeSegment(segment, fallback string) string {
 	return segment
 }
 
+// InputPrefix returns the S3 key prefix for uploaded wordlist chunks.
+func InputPrefix(toolName, jobID string) string {
+	return path.Join("scans", sanitizeSegment(toolName, "tool"), normalizeJobID(jobID), "inputs") + "/"
+}
+
+// InputKey returns the S3 key for a specific wordlist chunk file.
+func InputKey(toolName, jobID string, chunkIdx int) string {
+	return path.Join(InputPrefix(toolName, jobID), fmt.Sprintf("chunk_%d.txt", chunkIdx))
+}
+
+// SafeTargetStem returns a path-safe representation of a target string.
+// URL-shaped targets are sanitized to avoid bad S3 key paths.
+func SafeTargetStem(target string) string {
+	trimmed := strings.TrimSpace(target)
+	safe := sanitizeSegment(trimmed, "target")
+	if trimmed == "" || trimmed == safe {
+		return safe
+	}
+	return fmt.Sprintf("%s-%s", safe, shortHash(trimmed))
+}
+
 func resultFileName(target, groupID string, chunkIdx, totalChunks int, ts int64, ext string) string {
-	file := fmt.Sprintf("%s_%d.%s", target, ts, ext)
+	safe := SafeTargetStem(target)
+	file := fmt.Sprintf("%s_%d.%s", safe, ts, ext)
 	if groupID != "" {
-		file = path.Join(groupID, fmt.Sprintf("%s_chunk%d_of_%d_%d.%s", target, chunkIdx, totalChunks, ts, ext))
+		safeGroup := sanitizeSegment(groupID, "group")
+		file = path.Join(safeGroup, fmt.Sprintf("%s_chunk%d_of_%d_%d.%s", safe, chunkIdx, totalChunks, ts, ext))
 	}
 	return file
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:4])
 }
