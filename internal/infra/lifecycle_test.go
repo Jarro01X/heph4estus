@@ -1,0 +1,281 @@
+package infra
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+// fullOutputs returns a complete set of terraform outputs for testing.
+func fullOutputs(tool string) map[string]string {
+	return map[string]string{
+		"tool_name":           tool,
+		"sqs_queue_url":       "https://sqs.example.com/q",
+		"s3_bucket_name":      "results-bucket",
+		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/" + tool,
+		"ecs_cluster_name":    "cluster",
+		"task_definition_arn": "arn:aws:ecs:td",
+		"subnet_ids":          "[subnet-a subnet-b]",
+		"security_group_id":   "sg-123",
+		"ami_id":              "ami-123",
+		"instance_profile_arn": "arn:aws:iam::role",
+	}
+}
+
+func TestProbe_Ready(t *testing.T) {
+	outputJSON := `{
+		"tool_name":{"value":"nmap"},
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
+		"s3_bucket_name":{"value":"bucket"},
+		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"ecs_cluster_name":{"value":"cluster"},
+		"task_definition_arn":{"value":"arn:aws:ecs:td"},
+		"subnet_ids":{"value":"[subnet-a]"},
+		"security_group_id":{"value":"sg-123"},
+		"ami_id":{"value":"ami-123"},
+		"instance_profile_arn":{"value":"arn:aws:iam::role"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %s", result.Status)
+	}
+	if result.DeployedTool != "nmap" {
+		t.Fatalf("expected deployed tool nmap, got %q", result.DeployedTool)
+	}
+}
+
+func TestProbe_Missing(t *testing.T) {
+	tc := &TerraformClient{
+		runCmd: newMockExecutor("{}", "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusMissing {
+		t.Fatalf("expected StatusMissing, got %s", result.Status)
+	}
+}
+
+func TestProbe_Mismatch(t *testing.T) {
+	outputJSON := `{
+		"tool_name":{"value":"httpx"},
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
+		"s3_bucket_name":{"value":"bucket"},
+		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/httpx"},
+		"ecs_cluster_name":{"value":"cluster"},
+		"task_definition_arn":{"value":"arn:aws:ecs:td"},
+		"subnet_ids":{"value":"[subnet-a]"},
+		"security_group_id":{"value":"sg-123"},
+		"ami_id":{"value":"ami-123"},
+		"instance_profile_arn":{"value":"arn:aws:iam::role"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusMismatch {
+		t.Fatalf("expected StatusMismatch, got %s", result.Status)
+	}
+	if result.DeployedTool != "httpx" {
+		t.Fatalf("expected deployed tool httpx, got %q", result.DeployedTool)
+	}
+}
+
+func TestProbe_Stale(t *testing.T) {
+	outputJSON := `{
+		"tool_name":{"value":"nmap"},
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusStale {
+		t.Fatalf("expected StatusStale, got %s", result.Status)
+	}
+	if len(result.MissingKeys) == 0 {
+		t.Fatal("expected missing keys")
+	}
+}
+
+func TestProbe_LegacyNoToolName(t *testing.T) {
+	// Legacy deployment with no tool_name — should be classified as stale.
+	outputJSON := `{
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
+		"s3_bucket_name":{"value":"bucket"},
+		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/old"},
+		"ecs_cluster_name":{"value":"cluster"},
+		"task_definition_arn":{"value":"arn:aws:ecs:td"},
+		"subnet_ids":{"value":"[subnet-a]"},
+		"security_group_id":{"value":"sg-123"},
+		"ami_id":{"value":"ami-123"},
+		"instance_profile_arn":{"value":"arn:aws:iam::role"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusStale {
+		t.Fatalf("expected StatusStale for legacy state without tool_name, got %s", result.Status)
+	}
+	found := false
+	for _, k := range result.MissingKeys {
+		if k == "tool_name" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected tool_name in missing keys, got %v", result.MissingKeys)
+	}
+}
+
+func TestProbe_MissingSpotOutputs(t *testing.T) {
+	// Outputs present but missing ami_id / instance_profile_arn — should be stale.
+	outputJSON := `{
+		"tool_name":{"value":"nmap"},
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
+		"s3_bucket_name":{"value":"bucket"},
+		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"ecs_cluster_name":{"value":"cluster"},
+		"task_definition_arn":{"value":"arn:aws:ecs:td"},
+		"subnet_ids":{"value":"[subnet-a]"},
+		"security_group_id":{"value":"sg-123"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusStale {
+		t.Fatalf("expected StatusStale for missing spot outputs, got %s", result.Status)
+	}
+}
+
+func TestProbe_Error(t *testing.T) {
+	tc := &TerraformClient{
+		runCmd: newMockExecutor("", "terraform error", 1, errors.New("exit 1")),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, "/work", "nmap")
+	if result.Status != StatusError {
+		t.Fatalf("expected StatusError, got %s", result.Status)
+	}
+	if result.Err == nil {
+		t.Fatal("expected error to be set")
+	}
+}
+
+func TestDecide_Reuse(t *testing.T) {
+	probe := ProbeResult{
+		Status:       StatusReady,
+		Outputs:      fullOutputs("nmap"),
+		DeployedTool: "nmap",
+	}
+	result := Decide(probe, LifecyclePolicy{})
+	if result.Decision != DecisionReuse {
+		t.Fatalf("expected DecisionReuse, got %s", result.Decision)
+	}
+	if result.Reason != ReasonInfraReady {
+		t.Fatalf("expected ReasonInfraReady, got %s", result.Reason)
+	}
+}
+
+func TestDecide_MissingDeploy(t *testing.T) {
+	probe := ProbeResult{Status: StatusMissing}
+	result := Decide(probe, LifecyclePolicy{})
+	if result.Decision != DecisionDeploy {
+		t.Fatalf("expected DecisionDeploy, got %s", result.Decision)
+	}
+	if result.Reason != ReasonInfraMissing {
+		t.Fatalf("expected ReasonInfraMissing, got %s", result.Reason)
+	}
+}
+
+func TestDecide_MissingNoDeploy(t *testing.T) {
+	probe := ProbeResult{Status: StatusMissing}
+	result := Decide(probe, LifecyclePolicy{NoDeploy: true})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("expected DecisionBlock, got %s", result.Decision)
+	}
+	if result.Reason != ReasonBlockedByPolicy {
+		t.Fatalf("expected ReasonBlockedByPolicy, got %s", result.Reason)
+	}
+}
+
+func TestDecide_MismatchDeploy(t *testing.T) {
+	probe := ProbeResult{
+		Status:       StatusMismatch,
+		Outputs:      fullOutputs("httpx"),
+		DeployedTool: "httpx",
+	}
+	result := Decide(probe, LifecyclePolicy{})
+	if result.Decision != DecisionDeploy {
+		t.Fatalf("expected DecisionDeploy, got %s", result.Decision)
+	}
+	if result.Reason != ReasonToolMismatch {
+		t.Fatalf("expected ReasonToolMismatch, got %s", result.Reason)
+	}
+}
+
+func TestDecide_MismatchNoDeploy(t *testing.T) {
+	probe := ProbeResult{
+		Status:       StatusMismatch,
+		Outputs:      fullOutputs("httpx"),
+		DeployedTool: "httpx",
+	}
+	result := Decide(probe, LifecyclePolicy{NoDeploy: true})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("expected DecisionBlock, got %s", result.Decision)
+	}
+}
+
+func TestDecide_StaleDeploy(t *testing.T) {
+	probe := ProbeResult{
+		Status:      StatusStale,
+		MissingKeys: []string{"ecr_repo_url"},
+	}
+	result := Decide(probe, LifecyclePolicy{})
+	if result.Decision != DecisionDeploy {
+		t.Fatalf("expected DecisionDeploy, got %s", result.Decision)
+	}
+}
+
+func TestDecide_StaleNoDeploy(t *testing.T) {
+	probe := ProbeResult{
+		Status:      StatusStale,
+		MissingKeys: []string{"ecr_repo_url"},
+	}
+	result := Decide(probe, LifecyclePolicy{NoDeploy: true})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("expected DecisionBlock, got %s", result.Decision)
+	}
+}
+
+func TestDecide_ErrorAlwaysBlocks(t *testing.T) {
+	probe := ProbeResult{
+		Status: StatusError,
+		Err:    errors.New("terraform broken"),
+	}
+	// Even without NoDeploy, errors should block.
+	result := Decide(probe, LifecyclePolicy{})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("expected DecisionBlock, got %s", result.Decision)
+	}
+	if result.Reason != ReasonProbeError {
+		t.Fatalf("expected ReasonProbeError, got %s", result.Reason)
+	}
+}
