@@ -41,7 +41,11 @@ func runNmap(args []string, log logger.Logger) error {
 	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
-	terraformDir := fs.String("terraform-dir", "deployments/aws/generic/environments/dev", "Terraform working directory")
+
+	// Lifecycle flags.
+	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
+	autoApprove := fs.Bool("auto-approve", false, "Skip deploy confirmation prompts when lifecycle requires deploy")
+	destroyAfter := fs.Bool("destroy-after", false, "Destroy infrastructure after the run completes")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -76,8 +80,6 @@ func runNmap(args []string, log logger.Logger) error {
 	tasks := scanner.ParseTargetsWithMode(string(content), *defaultOptions, *mode, *portChunks)
 
 	// Inject nmap-specific options into each task at enqueue time (producer-side).
-	// This keeps the generic worker tool-agnostic — it just executes whatever
-	// options are in the task without needing nmap-specific env vars.
 	if *noRDNS {
 		for i := range tasks {
 			tasks[i].Options = "-n " + tasks[i].Options
@@ -108,34 +110,64 @@ func runNmap(args []string, log logger.Logger) error {
 		logStatus("Parsed %d targets from %s [job %s]", len(tasks), *inputFile, jobID)
 	}
 
-	// Read terraform outputs.
-	tf := infra.NewTerraformClient(log)
-	ctx := context.Background()
-	outputs, err := tf.ReadOutputs(ctx, *terraformDir)
+	// Resolve tool config and ensure infrastructure.
+	cfg, err := infra.ResolveToolConfig("nmap")
 	if err != nil {
-		return fmt.Errorf("reading terraform outputs (is infrastructure deployed?): %w", err)
+		return err
 	}
 
+	ctx := mainContext()
+	region := infra.AWSRegion()
+
+	outputs, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
+		NoDeploy:     *noDeploy,
+		AutoApprove:  *autoApprove,
+		DestroyAfter: *destroyAfter,
+	}, region, os.Stderr, deployPrompt, log)
+	if err != nil {
+		return err
+	}
+
+	// Run the scan. Destroy only after execution has actually started.
+	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log)
+
+	if *destroyAfter && started {
+		logStatus("Destroying infrastructure (--destroy-after)...")
+		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
+			if scanErr != nil {
+				return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+			}
+			return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
+		}
+	}
+
+	return scanErr
+}
+
+func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
-		return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-	}
-
-	// Guard: verify the deployed infra matches nmap.
-	if deployedTool := outputs["tool_name"]; deployedTool != "" && deployedTool != "nmap" {
-		return fmt.Errorf("infrastructure was deployed for %q but this command requires nmap — run 'heph infra deploy --tool nmap' first", deployedTool)
+		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
 
 	// Initialize AWS provider.
 	awsConfig, err := awscfg.LoadDefaultConfig(ctx)
 	if err != nil {
-		return fmt.Errorf("loading AWS config: %w", err)
+		return false, fmt.Errorf("loading AWS config: %w", err)
 	}
 	provider := awscloud.NewProvider(awsConfig, log)
-	queue := provider.Queue()
-	storage := provider.Storage()
-	compute := provider.Compute()
+	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute())
+}
+
+func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute) (bool, error) {
+	queueURL := outputs["sqs_queue_url"]
+	bucket := outputs["s3_bucket_name"]
+	if queueURL == "" || bucket == "" {
+		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
+	}
+
+	jobID := tasks[0].JobID
 
 	// Enqueue targets.
 	logStatus("Enqueueing %d targets...", len(tasks))
@@ -156,34 +188,32 @@ func runNmap(args []string, log logger.Logger) error {
 		}
 		b, err := json.Marshal(gt)
 		if err != nil {
-			return fmt.Errorf("marshaling task %d: %w", i, err)
+			return false, fmt.Errorf("marshaling task %d: %w", i, err)
 		}
 		if len(b) > sqsMaxPayload {
-			return fmt.Errorf("task %d exceeds SQS 256KB limit (%d bytes)", i, len(b))
+			return false, fmt.Errorf("task %d exceeds SQS 256KB limit (%d bytes)", i, len(b))
 		}
 		bodies[i] = string(b)
 	}
 	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
-		return fmt.Errorf("enqueueing targets: %w", err)
+		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
 	logStatus("Enqueued %d targets", len(tasks))
 
 	// Launch workers.
-	logStatus("Launching %d workers (mode: %s)...", *workers, *computeMode)
+	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
 
-	// Build env vars for workers. Option injection is done at enqueue time,
-	// so workers only need queue/storage config and jitter.
 	containerName := "nmap-worker"
 	workerEnv := map[string]string{
 		"QUEUE_URL":          queueURL,
 		"S3_BUCKET":          bucket,
-		"JITTER_MAX_SECONDS": strconv.Itoa(*jitterMax),
+		"JITTER_MAX_SECONDS": strconv.Itoa(jitterMax),
 		"TOOL_NAME":          "nmap",
 	}
 
-	useSpot := resolveComputeMode(*computeMode, *workers)
+	useSpot := resolveComputeMode(computeMode, workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
@@ -194,7 +224,7 @@ func runNmap(args []string, log logger.Logger) error {
 		})
 		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
 			AMI:             outputs["ami_id"],
-			Count:           *workers,
+			Count:           workers,
 			SecurityGroups:  []string{outputs["security_group_id"]},
 			SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
 			InstanceProfile: outputs["instance_profile_arn"],
@@ -205,7 +235,7 @@ func runNmap(args []string, log logger.Logger) error {
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("launching spot instances: %w", err)
+			return false, fmt.Errorf("launching spot instances: %w", err)
 		}
 		logStatus("Launched %d spot instances", len(ids))
 	} else {
@@ -216,12 +246,12 @@ func runNmap(args []string, log logger.Logger) error {
 			Subnets:        splitOutputList(outputs["subnet_ids"]),
 			SecurityGroups: []string{outputs["security_group_id"]},
 			Env:            workerEnv,
-			Count:          *workers,
+			Count:          workers,
 		})
 		if err != nil {
-			return fmt.Errorf("launching Fargate tasks: %w", err)
+			return false, fmt.Errorf("launching Fargate tasks: %w", err)
 		}
-		logStatus("Launched %d Fargate tasks", *workers)
+		logStatus("Launched %d Fargate tasks", workers)
 	}
 
 	// Poll for progress.
@@ -250,7 +280,7 @@ func runNmap(args []string, log logger.Logger) error {
 	logStatus("Scan complete: %d targets in %s", totalTargets, elapsed)
 
 	// Output results.
-	return outputResults(ctx, storage, bucket, scanPrefix, *format)
+	return true, outputResults(ctx, storage, bucket, scanPrefix, format)
 }
 
 func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string) error {
