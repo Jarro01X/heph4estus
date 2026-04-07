@@ -29,8 +29,8 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 ```bash
 git clone <repository-url>
 cd heph4estus
-go build -o bin/heph cmd/heph/main.go
-go build -o bin/heph4estus cmd/heph4estus/main.go
+go build -o bin/heph ./cmd/heph
+go build -o bin/heph4estus ./cmd/heph4estus
 ```
 
 ### 2. Authenticate with AWS
