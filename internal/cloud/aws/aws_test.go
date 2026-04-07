@@ -667,15 +667,15 @@ func TestECS_ContainerName_UsedInOverrides(t *testing.T) {
 	_, err := client.RunContainer(context.Background(), cloud.ContainerOpts{
 		Cluster:        "c",
 		TaskDefinition: "td",
-		ContainerName:  "nmap-scanner",
+		ContainerName:  "nmap-worker",
 		Count:          1,
 		Env:            map[string]string{"FOO": "bar"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedName != "nmap-scanner" {
-		t.Fatalf("expected container name nmap-scanner, got %s", capturedName)
+	if capturedName != "nmap-worker" {
+		t.Fatalf("expected container name nmap-worker, got %s", capturedName)
 	}
 }
 

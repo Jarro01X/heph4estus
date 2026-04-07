@@ -57,7 +57,7 @@ type ContainerOpts struct {
 	Subnets        []string
 	SecurityGroups []string
 	TaskDefinition string // ECS task definition ARN
-	ContainerName  string // Container name for env overrides (e.g. "nmap-scanner")
+	ContainerName  string // Container name for env overrides (e.g. "nmap-worker")
 	Count          int    // Number of tasks to launch (default 1)
 }
 
