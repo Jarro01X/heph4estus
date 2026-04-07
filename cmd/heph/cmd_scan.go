@@ -31,7 +31,11 @@ func runScan(args []string, log logger.Logger) error {
 	workers := fs.Int("workers", 10, "Number of worker tasks to launch")
 	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
 	format := fs.String("format", "text", "Output format: text or json")
-	terraformDir := fs.String("terraform-dir", "deployments/aws/generic/environments/dev", "Terraform working directory")
+
+	// Lifecycle flags.
+	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
+	autoApprove := fs.Bool("auto-approve", false, "Skip deploy confirmation prompts when lifecycle requires deploy")
+	destroyAfter := fs.Bool("destroy-after", false, "Destroy infrastructure after the run completes")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -90,23 +94,43 @@ func runScan(args []string, log logger.Logger) error {
 		}
 	}
 
-	// Read terraform outputs.
-	tf := infra.NewTerraformClient(log)
-	ctx := context.Background()
-	outputs, err := tf.ReadOutputs(ctx, *terraformDir)
+	// Validate local inputs before any lifecycle side effects.
+	var targetContent string
+	var wordlistContent string
+	if mod.InputType == modules.InputTypeWordlist {
+		wordlistContent, err = preflightWordlistFile(*tool, *wordlistFile, *runtimeTarget, *options, *chunks, *workers)
+		if err != nil {
+			return err
+		}
+	} else {
+		targetContent, err = preflightTargetListFile(*inputFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Resolve tool config and ensure infrastructure.
+	cfg, err := infra.ResolveToolConfig(*tool)
 	if err != nil {
-		return fmt.Errorf("reading terraform outputs (is infrastructure deployed?): %w", err)
+		return err
+	}
+
+	ctx := mainContext()
+	region := infra.AWSRegion()
+
+	outputs, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
+		NoDeploy:     *noDeploy,
+		AutoApprove:  *autoApprove,
+		DestroyAfter: *destroyAfter,
+	}, region, os.Stderr, deployPrompt, log)
+	if err != nil {
+		return err
 	}
 
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
 		return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-	}
-
-	// Guard: verify the deployed infra matches the requested tool.
-	if deployedTool := outputs["tool_name"]; deployedTool != "" && deployedTool != *tool {
-		return fmt.Errorf("infrastructure was deployed for %q but scan requested %q — run 'heph infra deploy --tool %s --backend generic' first", deployedTool, *tool, *tool)
 	}
 
 	// Initialize AWS provider.
@@ -121,22 +145,34 @@ func runScan(args []string, log logger.Logger) error {
 
 	jobID := jobs.NewID(*tool)
 
+	var (
+		scanErr error
+		started bool
+	)
 	if mod.InputType == modules.InputTypeWordlist {
-		return runWordlistScan(ctx, mod, *tool, jobID, *wordlistFile, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+	} else {
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
 	}
-	return runTargetListScan(ctx, *tool, jobID, *inputFile, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+
+	// Destroy only after execution has actually started.
+	if *destroyAfter && started {
+		logStatus("Destroying infrastructure (--destroy-after)...")
+		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
+			if scanErr != nil {
+				return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+			}
+			return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
+		}
+	}
+
+	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) error {
-	// Read target file.
-	content, err := os.ReadFile(inputFile)
-	if err != nil {
-		return fmt.Errorf("reading target file: %w", err)
-	}
-
-	targets := parseTargetLines(string(content))
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) (bool, error) {
+	targets := parseTargetLines(content)
 	if len(targets) == 0 {
-		return fmt.Errorf("no targets found in %s", inputFile)
+		return false, fmt.Errorf("no targets found in %s", inputFile)
 	}
 
 	logStatus("Parsed %d targets from %s [job %s]", len(targets), inputFile, jobID)
@@ -161,38 +197,32 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, options stri
 	for i, t := range tasks {
 		b, err := json.Marshal(t)
 		if err != nil {
-			return fmt.Errorf("marshaling task %d: %w", i, err)
+			return false, fmt.Errorf("marshaling task %d: %w", i, err)
 		}
 		bodies[i] = string(b)
 	}
 	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
-		return fmt.Errorf("enqueueing targets: %w", err)
+		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
 	logStatus("Enqueued %d targets", len(tasks))
 
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
-		return err
+		return false, err
 	}
 
 	// Poll for progress.
-	return pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
+	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
 }
 
-func runWordlistScan(ctx context.Context, mod *modules.ModuleDefinition, tool, jobID, wordlistFile, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) error {
-	// Read wordlist file.
-	content, err := os.ReadFile(wordlistFile)
-	if err != nil {
-		return fmt.Errorf("reading wordlist file: %w", err)
-	}
-
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) (bool, error) {
 	if chunks <= 0 {
 		chunks = workers
 	}
 
-	plan, err := jobs.PlanWordlistJob(tool, jobID, runtimeTarget, options, string(content), chunks)
+	plan, err := jobs.PlanWordlistJob(tool, jobID, runtimeTarget, options, content, chunks)
 	if err != nil {
-		return fmt.Errorf("planning wordlist job: %w", err)
+		return false, fmt.Errorf("planning wordlist job: %w", err)
 	}
 
 	logStatus("Parsed %d entries from %s, splitting into %d chunks [job %s]", plan.TotalWords, wordlistFile, len(plan.Tasks), jobID)
@@ -205,7 +235,7 @@ func runWordlistScan(ctx context.Context, mod *modules.ModuleDefinition, tool, j
 	uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer uploadCancel()
 	if err := jobs.UploadChunks(uploadCtx, storage, bucket, plan); err != nil {
-		return fmt.Errorf("uploading wordlist chunks: %w", err)
+		return false, fmt.Errorf("uploading wordlist chunks: %w", err)
 	}
 
 	// Enqueue tasks.
@@ -217,22 +247,47 @@ func runWordlistScan(ctx context.Context, mod *modules.ModuleDefinition, tool, j
 	for i, t := range plan.Tasks {
 		b, err := json.Marshal(t)
 		if err != nil {
-			return fmt.Errorf("marshaling task %d: %w", i, err)
+			return false, fmt.Errorf("marshaling task %d: %w", i, err)
 		}
 		bodies[i] = string(b)
 	}
 	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
-		return fmt.Errorf("enqueueing chunk tasks: %w", err)
+		return false, fmt.Errorf("enqueueing chunk tasks: %w", err)
 	}
 	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
 
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
-		return err
+		return false, err
 	}
 
 	// Poll for progress.
-	return pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)
+	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)
+}
+
+func preflightTargetListFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading target file: %w", err)
+	}
+	if len(parseTargetLines(string(content))) == 0 {
+		return "", fmt.Errorf("no targets found in %s", path)
+	}
+	return string(content), nil
+}
+
+func preflightWordlistFile(tool, path, runtimeTarget, options string, chunks, workers int) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading wordlist file: %w", err)
+	}
+	if chunks <= 0 {
+		chunks = workers
+	}
+	if _, err := jobs.PlanWordlistJob(tool, "preflight", runtimeTarget, options, string(content), chunks); err != nil {
+		return "", fmt.Errorf("planning wordlist job: %w", err)
+	}
+	return string(content), nil
 }
 
 func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string) error {
