@@ -113,34 +113,3 @@ func (c *SQSClient) Delete(ctx context.Context, queueID, receiptHandle string) e
 	})
 	return err
 }
-
-// --- Backward-compatible methods (used by cmd/workers/nmap/main.go) ---
-
-// ReceiveMessage receives a message from SQS (legacy signature).
-func (c *SQSClient) ReceiveMessage(ctx context.Context, queueURL string) (*sqs.ReceiveMessageOutput, error) {
-	c.logger.Info("Receiving messages from SQS queue: %s", queueURL)
-	return c.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:            &queueURL,
-		MaxNumberOfMessages: 1,
-		WaitTimeSeconds:     20,
-	})
-}
-
-// DeleteMessage deletes a message from SQS (legacy signature).
-func (c *SQSClient) DeleteMessage(ctx context.Context, queueURL string, receiptHandle *string) error {
-	c.logger.Info("Deleting message from SQS queue: %s", queueURL)
-	_, err := c.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-		QueueUrl:      &queueURL,
-		ReceiptHandle: receiptHandle,
-	})
-	return err
-}
-
-// SendMessage sends a message to SQS (legacy signature).
-func (c *SQSClient) SendMessage(ctx context.Context, queueURL string, messageBody string) (*sqs.SendMessageOutput, error) {
-	c.logger.Info("Sending message to SQS queue: %s", queueURL)
-	return c.client.SendMessage(ctx, &sqs.SendMessageInput{
-		QueueUrl:    &queueURL,
-		MessageBody: &messageBody,
-	})
-}

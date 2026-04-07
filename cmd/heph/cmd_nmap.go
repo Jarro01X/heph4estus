@@ -41,8 +41,7 @@ func runNmap(args []string, log logger.Logger) error {
 	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
-	terraformDir := fs.String("terraform-dir", "deployments/aws/nmap/environments/dev", "Terraform working directory")
-	useGeneric := fs.Bool("use-generic", false, "Use generic worker infrastructure instead of nmap-specific")
+	terraformDir := fs.String("terraform-dir", "deployments/aws/generic/environments/dev", "Terraform working directory")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -123,6 +122,11 @@ func runNmap(args []string, log logger.Logger) error {
 		return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
 
+	// Guard: verify the deployed infra matches nmap.
+	if deployedTool := outputs["tool_name"]; deployedTool != "" && deployedTool != "nmap" {
+		return fmt.Errorf("infrastructure was deployed for %q but this command requires nmap — run 'heph infra deploy --tool nmap' first", deployedTool)
+	}
+
 	// Initialize AWS provider.
 	awsConfig, err := awscfg.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -141,22 +145,16 @@ func runNmap(args []string, log logger.Logger) error {
 	const sqsMaxPayload = 256 * 1024 // 256 KB SQS message size limit
 	bodies := make([]string, len(tasks))
 	for i, t := range tasks {
-		var b []byte
-		if *useGeneric {
-			// Generic worker expects worker.Task with ToolName set.
-			gt := worker.Task{
-				ToolName:    "nmap",
-				JobID:       t.JobID,
-				Target:      t.Target,
-				Options:     t.Options,
-				GroupID:     t.GroupID,
-				ChunkIdx:    t.ChunkIdx,
-				TotalChunks: t.TotalChunks,
-			}
-			b, err = json.Marshal(gt)
-		} else {
-			b, err = json.Marshal(t)
+		gt := worker.Task{
+			ToolName:    "nmap",
+			JobID:       t.JobID,
+			Target:      t.Target,
+			Options:     t.Options,
+			GroupID:     t.GroupID,
+			ChunkIdx:    t.ChunkIdx,
+			TotalChunks: t.TotalChunks,
 		}
+		b, err := json.Marshal(gt)
 		if err != nil {
 			return fmt.Errorf("marshaling task %d: %w", i, err)
 		}
@@ -177,15 +175,12 @@ func runNmap(args []string, log logger.Logger) error {
 
 	// Build env vars for workers. Option injection is done at enqueue time,
 	// so workers only need queue/storage config and jitter.
-	containerName := "nmap-scanner"
+	containerName := "nmap-worker"
 	workerEnv := map[string]string{
 		"QUEUE_URL":          queueURL,
 		"S3_BUCKET":          bucket,
 		"JITTER_MAX_SECONDS": strconv.Itoa(*jitterMax),
-	}
-	if *useGeneric {
-		containerName = "nmap-worker"
-		workerEnv["TOOL_NAME"] = "nmap"
+		"TOOL_NAME":          "nmap",
 	}
 
 	useSpot := resolveComputeMode(*computeMode, *workers)
@@ -255,10 +250,10 @@ func runNmap(args []string, log logger.Logger) error {
 	logStatus("Scan complete: %d targets in %s", totalTargets, elapsed)
 
 	// Output results.
-	return outputResults(ctx, storage, bucket, scanPrefix, *format, *useGeneric)
+	return outputResults(ctx, storage, bucket, scanPrefix, *format)
 }
 
-func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string, generic bool) error {
+func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string) error {
 	keys, err := storage.List(ctx, bucket, prefix)
 	if err != nil {
 		return fmt.Errorf("listing results: %w", err)
@@ -276,24 +271,13 @@ func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, f
 				logStatus("Warning: failed to download %s: %v", key, err)
 				continue
 			}
-			if generic {
-				var result worker.Result
-				if err := json.Unmarshal(data, &result); err != nil {
-					logStatus("Warning: failed to parse %s: %v", key, err)
-					continue
-				}
-				if err := encoder.Encode(result); err != nil {
-					return fmt.Errorf("encoding result: %w", err)
-				}
-			} else {
-				var result nmap.ScanResult
-				if err := json.Unmarshal(data, &result); err != nil {
-					logStatus("Warning: failed to parse %s: %v", key, err)
-					continue
-				}
-				if err := encoder.Encode(result); err != nil {
-					return fmt.Errorf("encoding result: %w", err)
-				}
+			var result worker.Result
+			if err := json.Unmarshal(data, &result); err != nil {
+				logStatus("Warning: failed to parse %s: %v", key, err)
+				continue
+			}
+			if err := encoder.Encode(result); err != nil {
+				return fmt.Errorf("encoding result: %w", err)
 			}
 		}
 	} else {

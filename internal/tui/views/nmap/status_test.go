@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
-	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
+	"heph4estus/internal/worker"
 )
 
 type mockSubmitter struct {
@@ -17,7 +17,7 @@ type mockSubmitter struct {
 	spotIDs       []string
 }
 
-func (s *mockSubmitter) EnqueueTargets(_ context.Context, _ string, _ []nmaptool.ScanTask) error {
+func (s *mockSubmitter) EnqueueTargets(_ context.Context, _ string, _ []worker.Task) error {
 	return s.enqueueErr
 }
 

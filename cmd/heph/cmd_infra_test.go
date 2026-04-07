@@ -5,22 +5,13 @@ import (
 	"testing"
 )
 
-func TestResolveToolPaths_NmapDedicated(t *testing.T) {
-	paths, err := resolveToolPaths("nmap", "dedicated")
-	if err != nil {
+func TestResolveToolPaths_DedicatedRejected(t *testing.T) {
+	_, err := resolveToolPaths("nmap", "dedicated")
+	if err == nil {
+		t.Fatal("expected error for --backend dedicated")
+	}
+	if !strings.Contains(err.Error(), "no longer supported") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if paths.TerraformDir != "deployments/aws/nmap/environments/dev" {
-		t.Errorf("TerraformDir = %q, want nmap-specific path", paths.TerraformDir)
-	}
-	if paths.Dockerfile != "containers/nmap/Dockerfile" {
-		t.Errorf("Dockerfile = %q, want nmap container", paths.Dockerfile)
-	}
-	if paths.BuildArgs != nil {
-		t.Error("dedicated nmap should not have BuildArgs")
-	}
-	if paths.TerraformVars != nil {
-		t.Error("dedicated nmap should not have TerraformVars")
 	}
 }
 
@@ -61,7 +52,7 @@ func TestResolveToolPaths_DedicatedNonNmapRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for --backend dedicated with non-nmap tool")
 	}
-	if !strings.Contains(err.Error(), "only supported for nmap") {
+	if !strings.Contains(err.Error(), "no longer supported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
