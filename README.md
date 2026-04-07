@@ -13,7 +13,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 **You provide:** cloud credentials + input files (targets, hashes). **Heph4estus handles:** infrastructure provisioning, container builds, job orchestration, result collection, and teardown.
 
-**Built-in modules today:** `nmap`, `nuclei`, `ffuf`, `subfinder`, `httpx`, `masscan`, `gobuster`, `feroxbuster`, `dnsx`, `katana`, `gospider`, `massdns`, `dalfox`, `gowitness`. The remaining Phase 5 work is converging `nmap` onto the generic backend; Naabu+Nmap remains planned. See `ARCHITECTURE.md`, `PLAN.md`, and `IMPLEMENTATION.md` for the roadmap.
+**Built-in modules today:** `nmap`, `nuclei`, `ffuf`, `subfinder`, `httpx`, `masscan`, `gobuster`, `feroxbuster`, `dnsx`, `katana`, `gospider`, `massdns`, `dalfox`, `gowitness`. All modules run on the generic worker backend. See `ARCHITECTURE.md`, `PLAN.md`, and `IMPLEMENTATION.md` for the roadmap.
 
 ## Requirements
 
@@ -65,13 +65,12 @@ api
 The CLI reads existing Terraform outputs. Deploy the matching infrastructure first:
 
 ```bash
-# Dedicated nmap backend
+# Deploy nmap infrastructure
 ./bin/heph infra deploy --tool nmap
 
-# Generic backend for target_list or wordlist modules
-./bin/heph infra deploy --tool httpx --backend generic
-# or
-./bin/heph infra deploy --tool ffuf --backend generic
+# Deploy infrastructure for other modules
+./bin/heph infra deploy --tool httpx
+./bin/heph infra deploy --tool ffuf
 ```
 
 ### 5. Run
@@ -79,7 +78,7 @@ The CLI reads existing Terraform outputs. Deploy the matching infrastructure fir
 Examples:
 
 ```bash
-# Dedicated nmap flow
+# Nmap flow (uses generic worker backend)
 ./bin/heph nmap --file targets.txt
 
 # Generic target_list flow
@@ -100,35 +99,51 @@ Cleanup is prompted from within the TUI/CLI after results are collected, or can 
 
 ```bash
 ./bin/heph infra destroy --tool nmap
-./bin/heph infra destroy --tool httpx --backend generic
-./bin/heph infra destroy --tool ffuf --backend generic
+./bin/heph infra destroy --tool httpx
+./bin/heph infra destroy --tool ffuf
 ```
+
+### Migration from dedicated nmap backend
+
+If you previously deployed the dedicated nmap infrastructure (`deployments/aws/nmap/environments/dev`), you must destroy it before switching to the generic backend. The dedicated Terraform files have been removed from this repo, so you need to destroy using your existing local Terraform state:
+
+```bash
+# Option 1: Check out the last commit that still has the dedicated nmap Terraform,
+# then destroy from there.
+git stash  # if needed
+git checkout <last-commit-with-dedicated-nmap>
+cd deployments/aws/nmap/environments/dev
+# Empty the S3 bucket first (aws s3 rm s3://<bucket> --recursive)
+terraform destroy
+git checkout -  # return to current branch
+
+# Option 2: If your Terraform state is remote (S3 backend), you can run
+# terraform destroy from any checkout that still has the .tf files, or
+# delete the resources manually via the AWS console.
+```
+
+Then deploy generic nmap infrastructure:
+
+```bash
+./bin/heph infra deploy --tool nmap
+```
+
+Future nmap results will land under the generic job-scoped prefixes (`scans/nmap/<job>/...`).
 
 ## Development
 
 For manual infrastructure management during development:
 
 ```bash
-# Dedicated nmap backend
-cd deployments/aws/nmap/environments/dev
-terraform init && terraform plan && terraform apply
+# Deploy generic infrastructure for any tool
+./bin/heph infra deploy --tool nmap
+./bin/heph infra deploy --tool httpx
 
-# Build and push container image manually
-docker build -t nmap-scanner -f containers/nmap/Dockerfile .
-ECR_REPO=<ecr_repository_url from terraform output>
-ECR_REGISTRY=<registry portion of ECR_REPO>
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
-docker tag nmap-scanner:latest $ECR_REPO:latest
-docker push $ECR_REPO:latest
+# Build nmap generic worker image manually
+docker build -t heph-nmap-worker \
+  --build-arg RUNTIME_INSTALL_CMD="apk add --no-cache nmap nmap-scripts" \
+  -f containers/generic/Dockerfile .
 
 # Tear down (empty S3 bucket first)
-cd deployments/aws/nmap/environments/dev
-terraform destroy
-```
-
-For generic modules during development, use the CLI helper so the shared generic Terraform variables and Docker build args stay aligned with the selected tool:
-
-```bash
-./bin/heph infra deploy --tool httpx --backend generic
-./bin/heph infra deploy --tool ffuf --backend generic
+./bin/heph infra destroy --tool nmap
 ```

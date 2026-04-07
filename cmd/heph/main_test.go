@@ -246,12 +246,35 @@ func TestInfraDeployUnknownTool(t *testing.T) {
 	}
 }
 
-func TestInfraDeployDedicatedNonNmap(t *testing.T) {
-	err := run([]string{"infra", "deploy", "--tool", "httpx", "--backend", "dedicated"}, testLogger())
-	if err == nil {
-		t.Fatal("expected error for dedicated non-nmap")
+func TestInfraDeployDedicatedRejected(t *testing.T) {
+	// Dedicated backend is no longer supported for any tool.
+	for _, tool := range []string{"nmap", "httpx"} {
+		err := run([]string{"infra", "deploy", "--tool", tool, "--backend", "dedicated"}, testLogger())
+		if err == nil {
+			t.Fatalf("expected error for dedicated %s", tool)
+		}
+		if !strings.Contains(err.Error(), "must be generic") {
+			t.Fatalf("unexpected error for %s: %v", tool, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "only supported for nmap") {
+}
+
+func TestInfraDeployInvalidBackend(t *testing.T) {
+	err := run([]string{"infra", "deploy", "--tool", "nmap", "--backend", "generci"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for typo in --backend")
+	}
+	if !strings.Contains(err.Error(), "must be generic") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraDestroyInvalidBackend(t *testing.T) {
+	err := run([]string{"infra", "destroy", "--tool", "nmap", "--backend", "typo"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for typo in --backend")
+	}
+	if !strings.Contains(err.Error(), "must be generic") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

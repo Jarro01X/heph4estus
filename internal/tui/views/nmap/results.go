@@ -13,8 +13,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/jobs"
-	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
+	"heph4estus/internal/worker"
 )
 
 const pageSize = 50
@@ -28,7 +28,7 @@ type keysLoadedMsg struct {
 
 // resultLoadedMsg carries a downloaded scan result.
 type resultLoadedMsg struct {
-	result nmaptool.ScanResult
+	result worker.Result
 	err    error
 }
 
@@ -71,7 +71,7 @@ type ResultsModel struct {
 	total      int
 	page       int
 	cursor     int
-	results    map[string]*nmaptool.ScanResult // cached downloads
+	results    map[string]*worker.Result // cached downloads
 	detail     bool
 	detailVP   viewport.Model
 	destroying bool
@@ -98,7 +98,8 @@ func NewResults(infra core.InfraOutputs, storage cloud.Storage) *ResultsModel {
 	return &ResultsModel{
 		storage: storage,
 		infra:   infra,
-		results: make(map[string]*nmaptool.ScanResult),
+		results: make(map[string]*worker.Result),
+
 		help:    h,
 	}
 }
@@ -314,7 +315,7 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 		if err != nil {
 			return resultLoadedMsg{err: err}
 		}
-		var result nmaptool.ScanResult
+		var result worker.Result
 		if err := json.Unmarshal(data, &result); err != nil {
 			return resultLoadedMsg{err: err}
 		}
@@ -326,7 +327,7 @@ func extractTarget(key string) string {
 	return jobs.TargetFromKey(key)
 }
 
-func formatResult(r nmaptool.ScanResult) string {
+func formatResult(r worker.Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Target:    %s\n", r.Target)
 	fmt.Fprintf(&b, "Timestamp: %s\n", r.Timestamp.Format("2006-01-02 15:04:05"))

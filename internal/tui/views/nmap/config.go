@@ -197,12 +197,20 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
 				Data: core.DeployConfig{
-					TerraformDir:       "deployments/aws/nmap/environments/dev",
-					Dockerfile:         "containers/nmap/Dockerfile",
+					TerraformDir:       "deployments/aws/generic/environments/dev",
+					Dockerfile:         "containers/generic/Dockerfile",
 					DockerContext:       ".",
-					DockerTag:          "nmap-scanner:latest",
-					ECRRepoName:        "nmap-scanner",
+					DockerTag:          "heph-nmap-worker:latest",
+					ECRRepoName:        "heph-dev-nmap",
 					AWSRegion:          awsRegion(),
+					BuildArgs: map[string]string{
+						"RUNTIME_INSTALL_CMD": "apk add --no-cache nmap nmap-scripts",
+					},
+					TerraformVars: map[string]string{
+						"tool_name":   "nmap",
+						"task_cpu":    "256",
+						"task_memory": "512",
+					},
 					TargetsContent:     msg.content,
 					NmapOptions:        m.inputs[fieldNmapOptions].Value(),
 					WorkerCount:        workerCount,

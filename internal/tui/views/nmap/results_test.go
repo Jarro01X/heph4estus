@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"heph4estus/internal/cloud/mock"
-	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
+	"heph4estus/internal/worker"
 )
 
 func testResultsStorage() *mock.Storage {
@@ -20,7 +20,8 @@ func testResultsStorage() *mock.Storage {
 		"scans/nmap/job-123/results/192.168.1.3_1002.json",
 	}
 
-	result := nmaptool.ScanResult{
+	result := worker.Result{
+		ToolName:  "nmap",
 		Target:    "192.168.1.1",
 		Output:    "Nmap scan output here",
 		Timestamp: time.Now(),

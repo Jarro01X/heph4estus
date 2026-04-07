@@ -17,6 +17,7 @@ import (
 	"heph4estus/internal/jobs"
 	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
+	"heph4estus/internal/worker"
 )
 
 // Phase of the status view lifecycle.
@@ -55,7 +56,7 @@ const SpotThreshold = 50
 
 // JobSubmitter abstracts target enqueueing and worker launching.
 type JobSubmitter interface {
-	EnqueueTargets(ctx context.Context, queueURL string, tasks []nmaptool.ScanTask) error
+	EnqueueTargets(ctx context.Context, queueURL string, tasks []worker.Task) error
 	LaunchWorkers(ctx context.Context, opts cloud.ContainerOpts) (string, error)
 	LaunchSpotWorkers(ctx context.Context, opts cloud.SpotOpts) ([]string, error)
 }
@@ -71,7 +72,7 @@ type realSubmitter struct {
 	compute cloud.Compute
 }
 
-func (s *realSubmitter) EnqueueTargets(ctx context.Context, queueURL string, tasks []nmaptool.ScanTask) error {
+func (s *realSubmitter) EnqueueTargets(ctx context.Context, queueURL string, tasks []worker.Task) error {
 	bodies := make([]string, len(tasks))
 	for i, t := range tasks {
 		b, err := json.Marshal(t)
@@ -199,12 +200,33 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker Progre
 
 func (m *StatusModel) Init() tea.Cmd {
 	scanner := nmaptool.NewScanner(nil)
-	tasks := scanner.ParseTargets(m.infra.TargetsContent, m.infra.NmapOptions)
+	nmapTasks := scanner.ParseTargets(m.infra.TargetsContent, m.infra.NmapOptions)
 	if m.infra.JobID == "" {
 		m.infra.JobID = jobs.NewID("nmap")
 	}
-	for i := range tasks {
-		tasks[i].JobID = m.infra.JobID
+
+	// Convert nmap tasks to generic worker tasks with producer-side option injection.
+	tasks := make([]worker.Task, len(nmapTasks))
+	for i, t := range nmapTasks {
+		opts := t.Options
+		if m.infra.NoRDNS {
+			opts = "-n " + opts
+		}
+		if m.infra.NmapTimingTemplate != "" {
+			opts = fmt.Sprintf("-T%s %s", m.infra.NmapTimingTemplate, opts)
+		}
+		if m.infra.DNSServers != "" {
+			opts = fmt.Sprintf("--dns-servers %s %s", m.infra.DNSServers, opts)
+		}
+		tasks[i] = worker.Task{
+			ToolName:    "nmap",
+			JobID:       m.infra.JobID,
+			Target:      t.Target,
+			Options:     opts,
+			GroupID:     t.GroupID,
+			ChunkIdx:    t.ChunkIdx,
+			TotalChunks: t.TotalChunks,
+		}
 	}
 	m.totalTargets = len(tasks)
 
@@ -379,16 +401,14 @@ func (m *StatusModel) launchWorkers() tea.Cmd {
 		_, err := sub.LaunchWorkers(context.Background(), cloud.ContainerOpts{
 			Cluster:        infra.ECSClusterName,
 			TaskDefinition: infra.TaskDefinitionARN,
-			ContainerName:  "nmap-scanner",
+			ContainerName:  "nmap-worker",
 			Subnets:        infra.SubnetIDs,
 			SecurityGroups: []string{infra.SecurityGroupID},
 			Env: map[string]string{
-				"QUEUE_URL":            infra.SQSQueueURL,
-				"S3_BUCKET":            infra.S3BucketName,
-				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
-				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
-				"DNS_SERVERS":          infra.DNSServers,
-				"NO_RDNS":              formatBool(infra.NoRDNS),
+				"QUEUE_URL":          infra.SQSQueueURL,
+				"S3_BUCKET":          infra.S3BucketName,
+				"JITTER_MAX_SECONDS": strconv.Itoa(infra.JitterMaxSeconds),
+				"TOOL_NAME":          "nmap",
 			},
 			Count: infra.WorkerCount,
 		})
@@ -405,12 +425,10 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 			ImageTag:   "latest",
 			Region:     regionFromECR(infra.ECRRepoURL),
 			EnvVars: map[string]string{
-				"QUEUE_URL":            infra.SQSQueueURL,
-				"S3_BUCKET":            infra.S3BucketName,
-				"JITTER_MAX_SECONDS":   strconv.Itoa(infra.JitterMaxSeconds),
-				"NMAP_TIMING_TEMPLATE": infra.NmapTimingTemplate,
-				"DNS_SERVERS":          infra.DNSServers,
-				"NO_RDNS":              formatBool(infra.NoRDNS),
+				"QUEUE_URL":          infra.SQSQueueURL,
+				"S3_BUCKET":          infra.S3BucketName,
+				"JITTER_MAX_SECONDS": strconv.Itoa(infra.JitterMaxSeconds),
+				"TOOL_NAME":          "nmap",
 			},
 		})
 		ids, err := sub.LaunchSpotWorkers(context.Background(), cloud.SpotOpts{
@@ -434,15 +452,6 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 type spotLaunchMsg struct {
 	launchProgressMsg
 	instanceIDs []string
-}
-
-// regionFromECR extracts the AWS region from an ECR repo URL like
-// "123456789.dkr.ecr.us-east-1.amazonaws.com/repo".
-func formatBool(b bool) string {
-	if b {
-		return "true"
-	}
-	return ""
 }
 
 func regionFromECR(url string) string {

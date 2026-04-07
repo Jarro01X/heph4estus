@@ -25,23 +25,10 @@ type toolPaths struct {
 }
 
 func resolveToolPaths(tool, backend string) (*toolPaths, error) {
-	// Nmap dedicated backend is a special case with its own infra.
-	if tool == "nmap" && backend == "dedicated" {
-		return &toolPaths{
-			TerraformDir: "deployments/aws/nmap/environments/dev",
-			Dockerfile:   "containers/nmap/Dockerfile",
-			DockerCtx:    ".",
-			DockerTag:    "nmap-scanner:latest",
-			ECRRepoName:  "nmap-scanner",
-		}, nil
+	if backend == "dedicated" {
+		return nil, fmt.Errorf("--backend dedicated is no longer supported; use --backend generic for %q", tool)
 	}
 
-	// Only nmap has a dedicated backend; all other tools must use generic.
-	if backend == "dedicated" && tool != "nmap" {
-		return nil, fmt.Errorf("--backend dedicated is only supported for nmap; use --backend generic for %q", tool)
-	}
-
-	// All other tools (and nmap with generic backend) resolve from the registry.
 	return resolveGenericToolPaths(tool)
 }
 
@@ -106,7 +93,7 @@ func runInfra(args []string, log logger.Logger) error {
 func runInfraDeploy(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("infra deploy", flag.ContinueOnError)
 	tool := fs.String("tool", "", "Tool to deploy infrastructure for (e.g. nmap)")
-	backend := fs.String("backend", "dedicated", "Infrastructure backend: dedicated or generic")
+	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
 	region := fs.String("region", "", "AWS region (default: from AWS_REGION or us-east-1)")
 
@@ -116,8 +103,8 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 	if *tool == "" {
 		return fmt.Errorf("--tool flag is required")
 	}
-	if *backend != "dedicated" && *backend != "generic" {
-		return fmt.Errorf("--backend must be dedicated or generic")
+	if *backend != "generic" {
+		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
 	paths, err := resolveToolPaths(*tool, *backend)
@@ -216,7 +203,7 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 func runInfraDestroy(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("infra destroy", flag.ContinueOnError)
 	tool := fs.String("tool", "", "Tool whose infrastructure to destroy")
-	backend := fs.String("backend", "dedicated", "Infrastructure backend: dedicated or generic")
+	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
 
 	if err := fs.Parse(args); err != nil {
@@ -224,6 +211,9 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 	}
 	if *tool == "" {
 		return fmt.Errorf("--tool flag is required")
+	}
+	if *backend != "generic" {
+		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
 	paths, err := resolveToolPaths(*tool, *backend)
