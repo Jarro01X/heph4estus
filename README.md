@@ -13,7 +13,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 **You provide:** cloud credentials + input files (targets, hashes). **Heph4estus handles:** infrastructure provisioning, container builds, job orchestration, result collection, and teardown.
 
-**Planned tools:** Naabu+Nmap (fast port discovery + deep scan in one pass via `-nmap-cli`), generalized module system for 60+ security tools. See `ARCHITECTURE.md` for the full roadmap.
+**Built-in modules today:** `nmap`, `nuclei`, `ffuf`, `subfinder`, `httpx`, `masscan`, `gobuster`, `feroxbuster`, `dnsx`, `katana`, `gospider`, `massdns`, `dalfox`, `gowitness`. The remaining Phase 5 work is converging `nmap` onto the generic backend; Naabu+Nmap remains planned. See `ARCHITECTURE.md`, `PLAN.md`, and `IMPLEMENTATION.md` for the roadmap.
 
 ## Requirements
 
@@ -30,6 +30,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 git clone <repository-url>
 cd heph4estus
 go build -o bin/heph cmd/heph/main.go
+go build -o bin/heph4estus cmd/heph4estus/main.go
 ```
 
 ### 2. Authenticate with AWS
@@ -39,9 +40,9 @@ aws sso login
 # or configure credentials via env vars / ~/.aws/credentials
 ```
 
-### 3. Create a Targets File
+### 3. Create Input Files
 
-Create a file named `targets.txt` with one target per line:
+Create a file named `targets.txt` with one target per line for `nmap` or generic `target_list` tools:
 
 ```
 example.com -sV -p 80,443
@@ -51,29 +52,56 @@ example.com -sV -p 80,443
 
 Format: `<target> [nmap options]`. Default options are `-sS` if none specified.
 
-### 4. Run
+For wordlist-driven tools such as `ffuf`, create a file named `words.txt`:
+
+```
+admin
+login
+api
+```
+
+### 4. Deploy Infrastructure
+
+The CLI reads existing Terraform outputs. Deploy the matching infrastructure first:
 
 ```bash
-# CLI (handles deploy → scan → results automatically)
+# Dedicated nmap backend
+./bin/heph infra deploy --tool nmap
+
+# Generic backend for target_list or wordlist modules
+./bin/heph infra deploy --tool httpx --backend generic
+# or
+./bin/heph infra deploy --tool ffuf --backend generic
+```
+
+### 5. Run
+
+Examples:
+
+```bash
+# Dedicated nmap flow
 ./bin/heph nmap --file targets.txt
 
-# Or launch the TUI for interactive use
+# Generic target_list flow
+./bin/heph scan --tool httpx --file targets.txt
+
+# Generic wordlist flow
+./bin/heph scan --tool ffuf --wordlist words.txt --target https://example.com/FUZZ --chunks 20
+
+# Interactive TUI
 ./bin/heph4estus
 ```
 
-The tool will:
-1. Show you a Terraform plan for the required infrastructure
-2. Wait for your approval
-3. Deploy the infrastructure and push container images
-4. Submit your scan job and monitor progress
-5. Collect and display results
+The TUI handles deploy -> scan -> results interactively. The CLI expects the matching infrastructure to already be deployed and then handles submit -> monitor -> results.
 
-### 5. Clean Up
+### 6. Clean Up
 
 Cleanup is prompted from within the TUI/CLI after results are collected, or can be run manually:
 
 ```bash
 ./bin/heph infra destroy --tool nmap
+./bin/heph infra destroy --tool httpx --backend generic
+./bin/heph infra destroy --tool ffuf --backend generic
 ```
 
 ## Development
@@ -81,7 +109,7 @@ Cleanup is prompted from within the TUI/CLI after results are collected, or can 
 For manual infrastructure management during development:
 
 ```bash
-# Deploy infrastructure manually
+# Dedicated nmap backend
 cd deployments/aws/nmap/environments/dev
 terraform init && terraform plan && terraform apply
 
@@ -96,4 +124,11 @@ docker push $ECR_REPO:latest
 # Tear down (empty S3 bucket first)
 cd deployments/aws/nmap/environments/dev
 terraform destroy
+```
+
+For generic modules during development, use the CLI helper so the shared generic Terraform variables and Docker build args stay aligned with the selected tool:
+
+```bash
+./bin/heph infra deploy --tool httpx --backend generic
+./bin/heph infra deploy --tool ffuf --backend generic
 ```
