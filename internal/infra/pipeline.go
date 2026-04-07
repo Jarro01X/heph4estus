@@ -35,18 +35,24 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 	ecr := NewECRClient(log)
 
 	// 1. Terraform init
-	fmt.Fprintln(opts.Stream, "==> Terraform init")
+	if err := writeLine(opts.Stream, "==> Terraform init"); err != nil {
+		return nil, err
+	}
 	if err := tf.Init(ctx, cfg.TerraformDir); err != nil {
 		return nil, err
 	}
 
 	// 2. Terraform plan
-	fmt.Fprintln(opts.Stream, "==> Terraform plan")
+	if err := writeLine(opts.Stream, "==> Terraform plan"); err != nil {
+		return nil, err
+	}
 	summary, err := tf.Plan(ctx, cfg.TerraformDir, cfg.TerraformVars)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(opts.Stream, "    %s\n", summary)
+	if err := writef(opts.Stream, "    %s\n", summary); err != nil {
+		return nil, err
+	}
 
 	// 3. Approval
 	if !opts.AutoApprove && opts.PromptFunc != nil {
@@ -56,23 +62,31 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 	}
 
 	// 4. Terraform apply
-	fmt.Fprintln(opts.Stream, "==> Terraform apply")
+	if err := writeLine(opts.Stream, "==> Terraform apply"); err != nil {
+		return nil, err
+	}
 	if err := tf.Apply(ctx, cfg.TerraformDir, cfg.TerraformVars, opts.Stream); err != nil {
 		return nil, err
 	}
 
 	// 5. Read outputs
-	fmt.Fprintln(opts.Stream, "==> Reading outputs")
+	if err := writeLine(opts.Stream, "==> Reading outputs"); err != nil {
+		return nil, err
+	}
 	outputs, err := tf.ReadOutputs(ctx, cfg.TerraformDir)
 	if err != nil {
 		return nil, err
 	}
 	for k, v := range outputs {
-		fmt.Fprintf(opts.Stream, "    %s = %s\n", k, v)
+		if err := writef(opts.Stream, "    %s = %s\n", k, v); err != nil {
+			return nil, err
+		}
 	}
 
 	// 6. Docker build
-	fmt.Fprintln(opts.Stream, "==> Docker build")
+	if err := writeLine(opts.Stream, "==> Docker build"); err != nil {
+		return nil, err
+	}
 	if len(cfg.BuildArgs) > 0 {
 		if err := docker.BuildWithArgs(ctx, cfg.Dockerfile, cfg.DockerCtx, cfg.DockerTag, cfg.BuildArgs, opts.Stream); err != nil {
 			return nil, err
@@ -84,7 +98,9 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 	}
 
 	// 7. ECR auth
-	fmt.Fprintln(opts.Stream, "==> ECR authenticate")
+	if err := writeLine(opts.Stream, "==> ECR authenticate"); err != nil {
+		return nil, err
+	}
 	if err := ecr.Authenticate(ctx, opts.Region); err != nil {
 		return nil, err
 	}
@@ -96,7 +112,9 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 	}
 	remoteTag := ecrURL + ":latest"
 
-	fmt.Fprintln(opts.Stream, "==> Docker push")
+	if err := writeLine(opts.Stream, "==> Docker push"); err != nil {
+		return nil, err
+	}
 	if err := docker.Tag(ctx, cfg.DockerTag, remoteTag); err != nil {
 		return nil, err
 	}
@@ -104,7 +122,9 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 		return nil, err
 	}
 
-	fmt.Fprintln(opts.Stream, "==> Infrastructure deployed successfully")
+	if err := writeLine(opts.Stream, "==> Infrastructure deployed successfully"); err != nil {
+		return nil, err
+	}
 	return &DeployResult{Outputs: outputs}, nil
 }
 
@@ -112,13 +132,19 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 func RunDestroy(ctx context.Context, cfg *ToolConfig, stream io.Writer, log logger.Logger) error {
 	tf := NewTerraformClient(log)
 
-	fmt.Fprintln(stream, "==> Terraform destroy")
-	fmt.Fprintln(stream, "    Note: Empty the S3 bucket first if destroy fails.")
+	if err := writeLine(stream, "==> Terraform destroy"); err != nil {
+		return err
+	}
+	if err := writeLine(stream, "    Note: Empty the S3 bucket first if destroy fails."); err != nil {
+		return err
+	}
 	if err := tf.Destroy(ctx, cfg.TerraformDir, stream); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(stream, "==> Infrastructure destroyed")
+	if err := writeLine(stream, "==> Infrastructure destroyed"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -131,7 +157,9 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 	probe := Probe(ctx, tf, cfg.TerraformDir, cfg.ToolName)
 	decision := Decide(probe, policy)
 
-	fmt.Fprintf(stream, "==> Lifecycle: %s\n", decision.Message)
+	if err := writef(stream, "==> Lifecycle: %s\n", decision.Message); err != nil {
+		return nil, err
+	}
 
 	switch decision.Decision {
 	case DecisionReuse:
@@ -156,4 +184,20 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 	default:
 		return nil, fmt.Errorf("unexpected lifecycle decision: %s", decision.Decision)
 	}
+}
+
+func writeLine(w io.Writer, line string) error {
+	if w == nil {
+		return nil
+	}
+	_, err := fmt.Fprintln(w, line)
+	return err
+}
+
+func writef(w io.Writer, format string, args ...interface{}) error {
+	if w == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, format, args...)
+	return err
 }
