@@ -60,42 +60,55 @@ login
 api
 ```
 
-### 4. Deploy Infrastructure
+### 4. Run
 
-The CLI reads existing Terraform outputs. Deploy the matching infrastructure first:
-
-```bash
-# Deploy nmap infrastructure
-./bin/heph infra deploy --tool nmap
-
-# Deploy infrastructure for other modules
-./bin/heph infra deploy --tool httpx
-./bin/heph infra deploy --tool ffuf
-```
-
-### 5. Run
-
-Examples:
+`heph scan` and `heph nmap` automatically deploy infrastructure when needed. If matching infrastructure already exists, it is reused without redeploying.
 
 ```bash
-# Nmap flow (uses generic worker backend)
+# Nmap — auto-deploys if no nmap infra exists, reuses if it does
 ./bin/heph nmap --file targets.txt
 
-# Generic target_list flow
+# Generic target_list flow — same lifecycle behavior
 ./bin/heph scan --tool httpx --file targets.txt
 
 # Generic wordlist flow
 ./bin/heph scan --tool ffuf --wordlist words.txt --target https://example.com/FUZZ --chunks 20
 
-# Interactive TUI
+# Interactive TUI (also auto-detects existing infra)
 ./bin/heph4estus
 ```
 
-The TUI handles deploy -> scan -> results interactively. The CLI expects the matching infrastructure to already be deployed and then handles submit -> monitor -> results.
+#### Lifecycle flags
+
+Both `heph scan` and `heph nmap` accept these lifecycle flags:
+
+- `--no-deploy` — fail instead of deploying or redeploying (power-user / CI mode)
+- `--auto-approve` — skip deploy confirmation prompts when lifecycle work is needed
+- `--destroy-after` — tear down infrastructure after the run completes
+
+```bash
+# CI pipeline: deploy, scan, tear down, no prompts
+./bin/heph nmap --file targets.txt --auto-approve --destroy-after
+
+# Explicit "infra must already exist" mode
+./bin/heph scan --tool httpx --file targets.txt --no-deploy
+```
+
+### 5. Explicit Infrastructure Management
+
+`heph infra` is still available as the power-user and CI path for managing infrastructure directly:
+
+```bash
+# Deploy infrastructure for a tool
+./bin/heph infra deploy --tool nmap
+
+# Tear down (empty S3 bucket first if destroy fails)
+./bin/heph infra destroy --tool nmap
+```
 
 ### 6. Clean Up
 
-Cleanup is prompted from within the TUI/CLI after results are collected, or can be run manually:
+Infrastructure can be destroyed after a run using `--destroy-after`, or manually:
 
 ```bash
 ./bin/heph infra destroy --tool nmap
