@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,12 +10,17 @@ import (
 	"heph4estus/internal/logger"
 )
 
+// mainContext returns a background context for top-level CLI operations.
+func mainContext() context.Context {
+	return context.Background()
+}
+
 const usage = `Usage: heph <command> [options]
 
 Commands:
-  nmap     Run an nmap scan (enqueue targets, launch workers, poll progress)
-  scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; requires matching generic infra)
-  infra    Manage cloud infrastructure (deploy/destroy)
+  nmap     Run an nmap scan (auto-deploys infrastructure if needed)
+  scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
+  infra    Manage cloud infrastructure explicitly (deploy/destroy)
   status   Check job status (planned)
 
 Run 'heph <command> --help' for command-specific usage.`
