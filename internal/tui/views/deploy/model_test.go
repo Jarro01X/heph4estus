@@ -65,14 +65,89 @@ func (d *mockDeployer) TerraformDestroy(_ context.Context, _ string, _ io.Writer
 	return nil
 }
 
-func TestDeployModel_InitStartsTerraformInit(t *testing.T) {
+// simulateLifecycleDeploy sends a LifecycleCheckMsg indicating deploy is needed,
+// bypassing the real terraform probe that Init() would call.
+func simulateLifecycleDeploy(m *Model) (core.View, tea.Cmd) {
+	return m.Update(core.LifecycleCheckMsg{
+		Decision: "deploy",
+		Reason:   "test: deploying",
+	})
+}
+
+// simulateLifecycleReuse sends a LifecycleCheckMsg indicating reuse with outputs.
+func simulateLifecycleReuse(m *Model, outputs map[string]string) (core.View, tea.Cmd) {
+	return m.Update(core.LifecycleCheckMsg{
+		Decision: "reuse",
+		Reason:   "test: reusing",
+		Outputs:  outputs,
+	})
+}
+
+func TestDeployModel_InitStartsLifecycleCheck(t *testing.T) {
 	m := NewWithDeployer(core.DeployConfig{}, &mockDeployer{})
 	cmd := m.Init()
 	if cmd == nil {
 		t.Fatal("expected init command")
 	}
-	if m.stage != stageTerraformInit {
-		t.Fatalf("expected stage %s, got %s", stageTerraformInit, m.stage)
+	if m.stage != stageLifecycleCheck {
+		t.Fatalf("expected stage %s, got %s", stageLifecycleCheck, m.stage)
+	}
+}
+
+func TestDeployModel_LifecycleReuse(t *testing.T) {
+	outputs := map[string]string{
+		"sqs_queue_url":       "https://sqs.example.com/q",
+		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"s3_bucket_name":      "results-bucket",
+		"ecs_cluster_name":    "nmap-cluster",
+		"task_definition_arn": "arn:aws:ecs:td",
+		"subnet_ids":          "[subnet-a subnet-b]",
+		"security_group_id":   "sg-123",
+	}
+
+	cfg := core.DeployConfig{
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    5,
+	}
+	m := NewWithDeployer(cfg, &mockDeployer{})
+
+	// Simulate lifecycle reuse.
+	_, cmd := simulateLifecycleReuse(m, outputs)
+
+	if m.stage != stageComplete {
+		t.Fatalf("expected stageComplete, got %s", m.stage)
+	}
+	if !m.lifecycleReuse {
+		t.Fatal("expected lifecycleReuse to be true")
+	}
+
+	// Should emit navigate.
+	if cmd != nil {
+		msg := cmd()
+		nav, ok := msg.(core.NavigateWithDataMsg)
+		if !ok {
+			t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+		}
+		if nav.Target != core.ViewNmapStatus {
+			t.Fatalf("expected ViewNmapStatus, got %v", nav.Target)
+		}
+	}
+}
+
+func TestDeployModel_LifecycleBlock(t *testing.T) {
+	m := NewWithDeployer(core.DeployConfig{}, &mockDeployer{})
+
+	m.Update(core.LifecycleCheckMsg{
+		Decision: "block",
+		Reason:   "terraform is broken",
+		Err:      errors.New("broken"),
+	})
+
+	if m.stage != stageFailed {
+		t.Fatalf("expected stageFailed, got %s", m.stage)
+	}
+	if !strings.Contains(m.errMsg, "terraform is broken") {
+		t.Fatalf("expected error message, got %q", m.errMsg)
 	}
 }
 
@@ -80,10 +155,14 @@ func TestDeployModel_InitFailure(t *testing.T) {
 	m := NewWithDeployer(core.DeployConfig{}, &mockDeployer{
 		initErr: errors.New("init failed"),
 	})
-	cmd := m.Init()
-	msg := cmd()
 
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
+	// Run init stage.
+	msg := cmd()
 	m.Update(msg)
+
 	if m.stage != stageFailed {
 		t.Fatalf("expected stageFailed, got %s", m.stage)
 	}
@@ -114,8 +193,10 @@ func TestDeployModel_FullPipeline(t *testing.T) {
 	}
 	m := NewWithDeployer(cfg, d)
 
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
 	// Run init → terraform init
-	cmd := m.Init()
 	msg := cmd()
 	_, cmd = m.Update(msg) // init complete → plan
 
@@ -185,12 +266,12 @@ func TestDeployModel_FullPipeline(t *testing.T) {
 		if nav.Target != core.ViewNmapStatus {
 			t.Fatalf("expected ViewNmapStatus, got %v", nav.Target)
 		}
-		infra, ok := nav.Data.(core.InfraOutputs)
+		infraOut, ok := nav.Data.(core.InfraOutputs)
 		if !ok {
 			t.Fatalf("expected InfraOutputs, got %T", nav.Data)
 		}
-		if infra.WorkerCount != 5 {
-			t.Fatalf("expected 5 workers, got %d", infra.WorkerCount)
+		if infraOut.WorkerCount != 5 {
+			t.Fatalf("expected 5 workers, got %d", infraOut.WorkerCount)
 		}
 	}
 }
@@ -199,7 +280,9 @@ func TestDeployModel_RejectPlan(t *testing.T) {
 	d := &mockDeployer{planSummary: "Plan: 5 to add"}
 	m := NewWithDeployer(core.DeployConfig{}, d)
 
-	cmd := m.Init()
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
 	msg := cmd()
 	_, cmd = m.Update(msg) // init done
 	msg = cmd()
@@ -224,13 +307,13 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 	d := &mockDeployer{
 		planSummary: "Plan: 1 to add",
 		readOutputs: map[string]string{
-			"sqs_queue_url":    "https://sqs.example.com/q",
-			"ecr_repo_url":    "123.dkr.ecr.us-east-1.amazonaws.com/httpx",
-			"s3_bucket_name":  "results-bucket",
-			"ecs_cluster_name": "cluster",
+			"sqs_queue_url":       "https://sqs.example.com/q",
+			"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/httpx",
+			"s3_bucket_name":      "results-bucket",
+			"ecs_cluster_name":    "cluster",
 			"task_definition_arn": "arn:aws:ecs:td",
-			"subnet_ids":       "[subnet-a]",
-			"security_group_id": "sg-123",
+			"subnet_ids":          "[subnet-a]",
+			"security_group_id":   "sg-123",
 		},
 	}
 	cfg := core.DeployConfig{
@@ -243,8 +326,10 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 	}
 	m := NewWithDeployer(cfg, d)
 
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
 	// Run the full pipeline.
-	cmd := m.Init()
 	msg := cmd()
 	_, cmd = m.Update(msg)   // init complete -> plan
 	msg = cmd()
@@ -279,12 +364,12 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 		if nav.Target != core.ViewGenericStatus {
 			t.Fatalf("expected ViewGenericStatus, got %v", nav.Target)
 		}
-		infra, ok := nav.Data.(core.InfraOutputs)
+		infraOut, ok := nav.Data.(core.InfraOutputs)
 		if !ok {
 			t.Fatalf("expected InfraOutputs, got %T", nav.Data)
 		}
-		if infra.ToolName != "httpx" {
-			t.Fatalf("expected tool httpx, got %q", infra.ToolName)
+		if infraOut.ToolName != "httpx" {
+			t.Fatalf("expected tool httpx, got %q", infraOut.ToolName)
 		}
 	}
 }
@@ -297,7 +382,9 @@ func TestDeployModel_GenericFailureEscReturnsToGenericConfig(t *testing.T) {
 		initErr: errors.New("init failed"),
 	})
 
-	cmd := m.Init()
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
 	msg := cmd()
 	m.Update(msg)
 
@@ -330,7 +417,9 @@ func TestDeployModel_GenericRejectEscReturnsToGenericConfig(t *testing.T) {
 		planSummary: "Plan: 1 to add",
 	})
 
-	cmd := m.Init()
+	// Simulate lifecycle deciding to deploy.
+	_, cmd := simulateLifecycleDeploy(m)
+
 	msg := cmd()
 	_, cmd = m.Update(msg) // init done
 	msg = cmd()
@@ -355,6 +444,21 @@ func TestDeployModel_GenericRejectEscReturnsToGenericConfig(t *testing.T) {
 	}
 	if nav.Data != "gobuster" {
 		t.Fatalf("expected tool name gobuster, got %#v", nav.Data)
+	}
+}
+
+func TestDeployModel_LifecycleReuseShowsCorrectView(t *testing.T) {
+	m := NewWithDeployer(core.DeployConfig{}, &mockDeployer{})
+
+	// Simulate reuse.
+	simulateLifecycleReuse(m, map[string]string{
+		"sqs_queue_url":  "url",
+		"s3_bucket_name": "bucket",
+	})
+
+	v := m.View()
+	if !strings.Contains(v, "Reusing existing infrastructure") {
+		t.Fatal("expected reuse message in view")
 	}
 }
 
