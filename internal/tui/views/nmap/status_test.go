@@ -318,7 +318,7 @@ func TestUseSpot_EmptyDefaultsToAuto(t *testing.T) {
 func TestStatusModel_SpotLaunch(t *testing.T) {
 	infra := testInfra()
 	infra.ComputeMode = "spot"
-	infra.ECRRepoURL = "123.dkr.ecr.us-east-1.amazonaws.com/nmap-scanner"
+	infra.ECRRepoURL = "123.dkr.ecr.us-east-1.amazonaws.com/nmap-worker"
 	infra.AMIID = "ami-test"
 	infra.InstanceProfileARN = "arn:profile"
 

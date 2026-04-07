@@ -8,7 +8,7 @@ import (
 
 func TestGenerateUserData_ContainsExpectedCommands(t *testing.T) {
 	ud := GenerateUserData(UserDataOpts{
-		ECRRepoURL: "123456789.dkr.ecr.us-east-1.amazonaws.com/nmap-scanner",
+		ECRRepoURL: "123456789.dkr.ecr.us-east-1.amazonaws.com/nmap-worker",
 		ImageTag:   "latest",
 		Region:     "us-east-1",
 		EnvVars: map[string]string{
@@ -28,7 +28,7 @@ func TestGenerateUserData_ContainsExpectedCommands(t *testing.T) {
 		"set -e",
 		"yum install -y docker",
 		"docker login",
-		"docker pull 123456789.dkr.ecr.us-east-1.amazonaws.com/nmap-scanner:latest",
+		"docker pull 123456789.dkr.ecr.us-east-1.amazonaws.com/nmap-worker:latest",
 		"docker run",
 		"-e QUEUE_URL=https://sqs/q",
 		"-e S3_BUCKET=my-bucket",
