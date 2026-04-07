@@ -11,11 +11,13 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/tui/core"
 )
 
 const (
+	stageLifecycleCheck = "lifecycle-check"
 	stageTerraformInit  = "terraform-init"
 	stageTerraformPlan  = "terraform-plan"
 	stageAwaitApproval  = "await-approval"
@@ -53,18 +55,20 @@ var deployKeys = deployKeyMap{
 
 // Model is the deploy pipeline view.
 type Model struct {
-	deployer     Deployer
-	config       core.DeployConfig
-	stage        string
-	planSummary  string
-	outputs      map[string]string
-	streamWriter *core.StreamWriter
-	streamLog    string
-	viewport     viewport.Model
-	errMsg       string
-	help         help.Model
-	width        int
-	height       int
+	deployer       Deployer
+	config         core.DeployConfig
+	stage          string
+	planSummary    string
+	outputs        map[string]string
+	streamWriter   *core.StreamWriter
+	streamLog      string
+	viewport       viewport.Model
+	errMsg         string
+	help           help.Model
+	width          int
+	height         int
+	lifecycleMsg   string // explains reuse or redeploy reason
+	lifecycleReuse bool   // true if lifecycle check found matching infra
 }
 
 // New creates a deploy view with a real deployer.
@@ -87,14 +91,49 @@ func NewWithDeployer(cfg core.DeployConfig, d Deployer) *Model {
 	return &Model{
 		deployer:     d,
 		config:       cfg,
-		stage:        stageTerraformInit,
+		stage:        stageLifecycleCheck,
 		streamWriter: &core.StreamWriter{},
 		help:         h,
 	}
 }
 
 func (m *Model) Init() tea.Cmd {
-	return m.runStage(stageTerraformInit)
+	return m.runLifecycleCheck()
+}
+
+func (m *Model) runLifecycleCheck() tea.Cmd {
+	cfg := m.config
+	return func() tea.Msg {
+		ctx := context.Background()
+		toolName := cfg.TerraformVars["tool_name"]
+		if toolName == "" {
+			toolName = cfg.ToolName
+		}
+
+		tf := infra.NewTerraformClient(simpleLogger{})
+		probe := infra.Probe(ctx, tf, cfg.TerraformDir, toolName)
+		decision := infra.Decide(probe, infra.LifecyclePolicy{})
+
+		switch decision.Decision {
+		case infra.DecisionReuse:
+			return core.LifecycleCheckMsg{
+				Decision: "reuse",
+				Reason:   decision.Message,
+				Outputs:  probe.Outputs,
+			}
+		case infra.DecisionDeploy:
+			return core.LifecycleCheckMsg{
+				Decision: "deploy",
+				Reason:   decision.Message,
+			}
+		default:
+			return core.LifecycleCheckMsg{
+				Decision: "block",
+				Reason:   decision.Message,
+				Err:      fmt.Errorf("%s", decision.Message),
+			}
+		}
+	}
 }
 
 func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
@@ -126,6 +165,23 @@ func (m *Model) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			if m.stage == stageFailed || m.stage == stageRejected {
 				return m, tea.Quit
 			}
+		}
+
+	case core.LifecycleCheckMsg:
+		m.lifecycleMsg = msg.Reason
+		switch msg.Decision {
+		case "reuse":
+			m.lifecycleReuse = true
+			m.outputs = msg.Outputs
+			m.stage = stageComplete
+			return m, m.emitNavigateToStatus()
+		case "deploy":
+			m.stage = stageTerraformInit
+			return m, m.runStage(stageTerraformInit)
+		default: // "block"
+			m.stage = stageFailed
+			m.errMsg = msg.Reason
+			return m, nil
 		}
 
 	case core.TickMsg:
@@ -160,11 +216,17 @@ func (m *Model) View() string {
 	b.WriteString(titleBar)
 	b.WriteString("\n\n")
 
+	// Lifecycle message (if any).
+	if m.lifecycleMsg != "" {
+		b.WriteString("  " + core.MutedStyle.Render("Lifecycle: "+m.lifecycleMsg) + "\n\n")
+	}
+
 	// Stage progress
 	stages := []struct {
 		id    string
 		label string
 	}{
+		{stageLifecycleCheck, "Lifecycle Check"},
 		{stageTerraformInit, "Terraform Init"},
 		{stageTerraformPlan, "Terraform Plan"},
 		{stageAwaitApproval, "Approve Plan"},
@@ -188,6 +250,10 @@ func (m *Model) View() string {
 	}
 
 	for i, s := range stages {
+		// When reusing, skip showing deploy stages.
+		if m.lifecycleReuse && i > 0 {
+			continue
+		}
 		var marker string
 		switch {
 		case i < currentIdx:
@@ -214,7 +280,11 @@ func (m *Model) View() string {
 		b.WriteString("\n")
 
 	case stageComplete:
-		b.WriteString(core.SuccessStyle.Render("  Infrastructure deployed successfully!") + "\n")
+		if m.lifecycleReuse {
+			b.WriteString(core.SuccessStyle.Render("  Reusing existing infrastructure!") + "\n")
+		} else {
+			b.WriteString(core.SuccessStyle.Render("  Infrastructure deployed successfully!") + "\n")
+		}
 		b.WriteString("  " + core.MutedStyle.Render("Transitioning to scan...") + "\n")
 
 	case stageFailed:

@@ -112,6 +112,14 @@ type InfraOutputs struct {
 	ChunkCount      int
 }
 
+// LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.
+type LifecycleCheckMsg struct {
+	Decision string            // "reuse", "deploy", or "block"
+	Reason   string            // human-readable explanation
+	Outputs  map[string]string // populated when Decision is "reuse"
+	Err      error             // populated when Decision is "block"
+}
+
 // StageCompleteMsg signals that a deploy stage finished.
 type StageCompleteMsg struct {
 	Stage   string
