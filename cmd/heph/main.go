@@ -13,7 +13,7 @@ const usage = `Usage: heph <command> [options]
 
 Commands:
   nmap     Run an nmap scan (enqueue targets, launch workers, poll progress)
-  scan     Run a generic tool scan (e.g. httpx, nuclei, subfinder)
+  scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; requires matching generic infra)
   infra    Manage cloud infrastructure (deploy/destroy)
   status   Check job status (planned)
 
