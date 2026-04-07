@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/tui/core"
 )
@@ -262,24 +263,23 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		return nil
 	}
 
-	buildArgs := installCmdToBuildArgs(m.mod)
-	tfVars := map[string]string{"tool_name": m.toolName}
-	if m.mod != nil {
-		tfVars["task_cpu"] = fmt.Sprintf("%d", m.mod.DefaultCPU)
-		tfVars["task_memory"] = fmt.Sprintf("%d", m.mod.DefaultMemory)
+	tc, err := infra.ResolveToolConfig(m.toolName)
+	if err != nil {
+		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
+		return nil
 	}
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
 			Data: core.DeployConfig{
-				TerraformDir:   "deployments/aws/generic/environments/dev",
-				Dockerfile:     "containers/generic/Dockerfile",
-				DockerContext:   ".",
-				DockerTag:      fmt.Sprintf("heph-%s-worker:latest", m.toolName),
-				ECRRepoName:    fmt.Sprintf("heph-dev-%s", m.toolName),
-				AWSRegion:      awsRegion(),
-				BuildArgs:      buildArgs,
-				TerraformVars:  tfVars,
+				TerraformDir:   tc.TerraformDir,
+				Dockerfile:     tc.Dockerfile,
+				DockerContext:   tc.DockerCtx,
+				DockerTag:      tc.DockerTag,
+				ECRRepoName:    tc.ECRRepoName,
+				AWSRegion:      infra.AWSRegion(),
+				BuildArgs:      tc.BuildArgs,
+				TerraformVars:  tc.TerraformVars,
 				TargetsContent: msg.content,
 				WorkerCount:    workerCount,
 				ComputeMode:    computeMode,
@@ -322,25 +322,24 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		return nil
 	}
 
-	buildArgs := installCmdToBuildArgs(m.mod)
-	tfVars := map[string]string{"tool_name": m.toolName}
-	if m.mod != nil {
-		tfVars["task_cpu"] = fmt.Sprintf("%d", m.mod.DefaultCPU)
-		tfVars["task_memory"] = fmt.Sprintf("%d", m.mod.DefaultMemory)
+	tc, err := infra.ResolveToolConfig(m.toolName)
+	if err != nil {
+		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
+		return nil
 	}
 
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
 			Data: core.DeployConfig{
-				TerraformDir:    "deployments/aws/generic/environments/dev",
-				Dockerfile:      "containers/generic/Dockerfile",
-				DockerContext:    ".",
-				DockerTag:       fmt.Sprintf("heph-%s-worker:latest", m.toolName),
-				ECRRepoName:     fmt.Sprintf("heph-dev-%s", m.toolName),
-				AWSRegion:       awsRegion(),
-				BuildArgs:       buildArgs,
-				TerraformVars:   tfVars,
+				TerraformDir:    tc.TerraformDir,
+				Dockerfile:      tc.Dockerfile,
+				DockerContext:    tc.DockerCtx,
+				DockerTag:       tc.DockerTag,
+				ECRRepoName:     tc.ECRRepoName,
+				AWSRegion:       infra.AWSRegion(),
+				BuildArgs:       tc.BuildArgs,
+				TerraformVars:   tc.TerraformVars,
 				WorkerCount:     workerCount,
 				ComputeMode:     computeMode,
 				ToolName:        m.toolName,
@@ -508,22 +507,3 @@ func (m *ConfigModel) submitWordlist() tea.Cmd {
 	}
 }
 
-func installCmdToBuildArgs(mod *modules.ModuleDefinition) map[string]string {
-	if mod == nil {
-		return nil
-	}
-	if strings.HasPrefix(mod.InstallCmd, "go install ") {
-		return map[string]string{"GO_INSTALL_CMD": mod.InstallCmd}
-	}
-	return map[string]string{"RUNTIME_INSTALL_CMD": mod.InstallCmd}
-}
-
-func awsRegion() string {
-	if r := os.Getenv("AWS_REGION"); r != "" {
-		return r
-	}
-	if r := os.Getenv("AWS_DEFAULT_REGION"); r != "" {
-		return r
-	}
-	return "us-east-1"
-}

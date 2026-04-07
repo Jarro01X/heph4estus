@@ -3,10 +3,12 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"heph4estus/internal/infra"
 )
 
 func TestResolveToolPaths_DedicatedRejected(t *testing.T) {
-	_, err := resolveToolPaths("nmap", "dedicated")
+	_, err := resolveToolConfig("nmap", "dedicated")
 	if err == nil {
 		t.Fatal("expected error for --backend dedicated")
 	}
@@ -16,7 +18,7 @@ func TestResolveToolPaths_DedicatedRejected(t *testing.T) {
 }
 
 func TestResolveToolPaths_NmapGeneric(t *testing.T) {
-	paths, err := resolveToolPaths("nmap", "generic")
+	paths, err := resolveToolConfig("nmap", "generic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,14 +43,14 @@ func TestResolveToolPaths_NmapGeneric(t *testing.T) {
 }
 
 func TestResolveToolPaths_UnknownTool(t *testing.T) {
-	_, err := resolveToolPaths("unknown", "generic")
+	_, err := resolveToolConfig("unknown", "generic")
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
 }
 
 func TestResolveToolPaths_DedicatedNonNmapRejected(t *testing.T) {
-	_, err := resolveToolPaths("httpx", "dedicated")
+	_, err := resolveToolConfig("httpx", "dedicated")
 	if err == nil {
 		t.Fatal("expected error for --backend dedicated with non-nmap tool")
 	}
@@ -58,7 +60,7 @@ func TestResolveToolPaths_DedicatedNonNmapRejected(t *testing.T) {
 }
 
 func TestResolveToolPaths_Httpx(t *testing.T) {
-	paths, err := resolveToolPaths("httpx", "generic")
+	paths, err := resolveToolConfig("httpx", "generic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,19 +89,19 @@ func TestResolveToolPaths_AllRegistryTools(t *testing.T) {
 	// Every registered tool should be resolvable via generic backend.
 	tools := []string{"dalfox", "dnsx", "gospider", "gowitness", "httpx", "katana", "masscan", "massdns", "nmap", "nuclei", "subfinder", "feroxbuster", "ffuf", "gobuster"}
 	for _, tool := range tools {
-		paths, err := resolveToolPaths(tool, "generic")
+		paths, err := resolveToolConfig(tool, "generic")
 		if err != nil {
-			t.Errorf("resolveToolPaths(%q, generic) failed: %v", tool, err)
+			t.Errorf("resolveToolConfig(%q, generic) failed: %v", tool, err)
 			continue
 		}
 		if paths.TerraformVars["tool_name"] != tool {
-			t.Errorf("resolveToolPaths(%q): tool_name = %q", tool, paths.TerraformVars["tool_name"])
+			t.Errorf("resolveToolConfig(%q): tool_name = %q", tool, paths.TerraformVars["tool_name"])
 		}
 	}
 }
 
 func TestInstallCmdToBuildArgs_GoInstall(t *testing.T) {
-	args := installCmdToBuildArgs("go install github.com/example/tool@latest")
+	args := infra.InstallCmdToBuildArgs("go install github.com/example/tool@latest")
 	if args["GO_INSTALL_CMD"] == "" {
 		t.Error("expected GO_INSTALL_CMD for go install command")
 	}
@@ -109,7 +111,7 @@ func TestInstallCmdToBuildArgs_GoInstall(t *testing.T) {
 }
 
 func TestInstallCmdToBuildArgs_RuntimeInstall(t *testing.T) {
-	args := installCmdToBuildArgs("apk add --no-cache nmap")
+	args := infra.InstallCmdToBuildArgs("apk add --no-cache nmap")
 	if args["RUNTIME_INSTALL_CMD"] == "" {
 		t.Error("expected RUNTIME_INSTALL_CMD for runtime install command")
 	}
@@ -119,7 +121,7 @@ func TestInstallCmdToBuildArgs_RuntimeInstall(t *testing.T) {
 }
 
 func TestResolveToolPaths_GowitnessForwardsModuleSizing(t *testing.T) {
-	paths, err := resolveToolPaths("gowitness", "generic")
+	paths, err := resolveToolConfig("gowitness", "generic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +135,7 @@ func TestResolveToolPaths_GowitnessForwardsModuleSizing(t *testing.T) {
 }
 
 func TestResolveToolPaths_HttpxDefaultSizing(t *testing.T) {
-	paths, err := resolveToolPaths("httpx", "generic")
+	paths, err := resolveToolConfig("httpx", "generic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +149,7 @@ func TestResolveToolPaths_HttpxDefaultSizing(t *testing.T) {
 }
 
 func TestResolveToolPaths_ErrorContainsAvailable(t *testing.T) {
-	_, err := resolveToolPaths("nonexistent", "generic")
+	_, err := resolveToolConfig("nonexistent", "generic")
 	if err == nil {
 		t.Fatal("expected error")
 	}

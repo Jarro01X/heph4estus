@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/tui/core"
 )
 
@@ -193,24 +194,23 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			jitterMax = 0
 		}
 
+		tc, err := infra.ResolveToolConfig("nmap")
+		if err != nil {
+			m.errMsg = fmt.Sprintf("Error resolving nmap config: %v", err)
+			return m, nil
+		}
 		return m, func() tea.Msg {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
 				Data: core.DeployConfig{
-					TerraformDir:       "deployments/aws/generic/environments/dev",
-					Dockerfile:         "containers/generic/Dockerfile",
-					DockerContext:       ".",
-					DockerTag:          "heph-nmap-worker:latest",
-					ECRRepoName:        "heph-dev-nmap",
-					AWSRegion:          awsRegion(),
-					BuildArgs: map[string]string{
-						"RUNTIME_INSTALL_CMD": "apk add --no-cache nmap nmap-scripts",
-					},
-					TerraformVars: map[string]string{
-						"tool_name":   "nmap",
-						"task_cpu":    "256",
-						"task_memory": "512",
-					},
+					TerraformDir:       tc.TerraformDir,
+					Dockerfile:         tc.Dockerfile,
+					DockerContext:       tc.DockerCtx,
+					DockerTag:          tc.DockerTag,
+					ECRRepoName:        tc.ECRRepoName,
+					AWSRegion:          infra.AWSRegion(),
+					BuildArgs:          tc.BuildArgs,
+					TerraformVars:      tc.TerraformVars,
 					TargetsContent:     msg.content,
 					NmapOptions:        m.inputs[fieldNmapOptions].Value(),
 					WorkerCount:        workerCount,
@@ -218,7 +218,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 					JitterMaxSeconds:   jitterMax,
 					NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
 					DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
-				NoRDNS:             m.noRDNS,
+					NoRDNS:             m.noRDNS,
 				},
 			}
 		}
@@ -324,12 +324,3 @@ func (m *ConfigModel) submit() tea.Cmd {
 	}
 }
 
-func awsRegion() string {
-	if r := os.Getenv("AWS_REGION"); r != "" {
-		return r
-	}
-	if r := os.Getenv("AWS_DEFAULT_REGION"); r != "" {
-		return r
-	}
-	return "us-east-1"
-}
