@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,68 +9,14 @@ import (
 
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
-	"heph4estus/internal/modules"
 )
 
-// toolPaths maps tool names to their infrastructure paths.
-type toolPaths struct {
-	TerraformDir  string
-	Dockerfile    string
-	DockerCtx     string
-	DockerTag     string
-	ECRRepoName   string
-	BuildArgs     map[string]string // Docker --build-arg flags (nil for dedicated containers)
-	TerraformVars map[string]string // Terraform -var flags (nil for dedicated infra)
-}
-
-func resolveToolPaths(tool, backend string) (*toolPaths, error) {
+// resolveToolConfig validates the backend flag and delegates to infra.ResolveToolConfig.
+func resolveToolConfig(tool, backend string) (*infra.ToolConfig, error) {
 	if backend == "dedicated" {
 		return nil, fmt.Errorf("--backend dedicated is no longer supported; use --backend generic for %q", tool)
 	}
-
-	return resolveGenericToolPaths(tool)
-}
-
-// resolveGenericToolPaths derives Docker/Terraform configuration from a module definition.
-func resolveGenericToolPaths(tool string) (*toolPaths, error) {
-	reg, err := modules.NewDefaultRegistry()
-	if err != nil {
-		return nil, fmt.Errorf("loading module registry: %w", err)
-	}
-	mod, err := reg.Get(tool)
-	if err != nil {
-		names := reg.Names()
-		return nil, fmt.Errorf("unknown tool: %q (available: %s)", tool, strings.Join(names, ", "))
-	}
-
-	buildArgs := installCmdToBuildArgs(mod.InstallCmd)
-
-	return &toolPaths{
-		TerraformDir: "deployments/aws/generic/environments/dev",
-		Dockerfile:   "containers/generic/Dockerfile",
-		DockerCtx:    ".",
-		DockerTag:    fmt.Sprintf("heph-%s-worker:latest", tool),
-		ECRRepoName:  fmt.Sprintf("heph-dev-%s", tool),
-		BuildArgs:    buildArgs,
-		TerraformVars: map[string]string{
-			"tool_name":   tool,
-			"task_cpu":    fmt.Sprintf("%d", mod.DefaultCPU),
-			"task_memory": fmt.Sprintf("%d", mod.DefaultMemory),
-		},
-	}, nil
-}
-
-// installCmdToBuildArgs maps a module's install_cmd to the correct Docker build arg.
-// "go install ..." → GO_INSTALL_CMD; everything else → RUNTIME_INSTALL_CMD.
-func installCmdToBuildArgs(installCmd string) map[string]string {
-	if strings.HasPrefix(installCmd, "go install ") {
-		return map[string]string{
-			"GO_INSTALL_CMD": installCmd,
-		}
-	}
-	return map[string]string{
-		"RUNTIME_INSTALL_CMD": installCmd,
-	}
+	return infra.ResolveToolConfig(tool)
 }
 
 func runInfra(args []string, log logger.Logger) error {
@@ -107,97 +52,23 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
-	paths, err := resolveToolPaths(*tool, *backend)
+	cfg, err := resolveToolConfig(*tool, *backend)
 	if err != nil {
 		return err
 	}
 
 	if *region == "" {
-		*region = awsRegion()
+		*region = infra.AWSRegion()
 	}
 
-	ctx := context.Background()
-	tf := infra.NewTerraformClient(log)
-	docker := infra.NewDockerClient(log)
-	ecr := infra.NewECRClient(log)
-
-	// 1. Terraform init
-	fmt.Fprintln(os.Stderr, "==> Terraform init")
-	if err := tf.Init(ctx, paths.TerraformDir); err != nil {
-		return err
-	}
-
-	// 2. Terraform plan
-	fmt.Fprintln(os.Stderr, "==> Terraform plan")
-	summary, err := tf.Plan(ctx, paths.TerraformDir, paths.TerraformVars)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "    %s\n", summary)
-
-	// 3. Approval
-	if !*autoApprove {
-		fmt.Fprint(os.Stderr, "\nApply these changes? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "y" && answer != "yes" {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
-		}
-	}
-
-	// 4. Terraform apply
-	fmt.Fprintln(os.Stderr, "==> Terraform apply")
-	if err := tf.Apply(ctx, paths.TerraformDir, paths.TerraformVars, os.Stderr); err != nil {
-		return err
-	}
-
-	// 5. Read outputs
-	fmt.Fprintln(os.Stderr, "==> Reading outputs")
-	outputs, err := tf.ReadOutputs(ctx, paths.TerraformDir)
-	if err != nil {
-		return err
-	}
-	for k, v := range outputs {
-		fmt.Fprintf(os.Stderr, "    %s = %s\n", k, v)
-	}
-
-	// 6. Docker build
-	fmt.Fprintln(os.Stderr, "==> Docker build")
-	if len(paths.BuildArgs) > 0 {
-		if err := docker.BuildWithArgs(ctx, paths.Dockerfile, paths.DockerCtx, paths.DockerTag, paths.BuildArgs, os.Stderr); err != nil {
-			return err
-		}
-	} else {
-		if err := docker.Build(ctx, paths.Dockerfile, paths.DockerCtx, paths.DockerTag, os.Stderr); err != nil {
-			return err
-		}
-	}
-
-	// 7. ECR auth
-	fmt.Fprintln(os.Stderr, "==> ECR authenticate")
-	if err := ecr.Authenticate(ctx, *region); err != nil {
-		return err
-	}
-
-	// 8. Docker tag + push
-	ecrURL := outputs["ecr_repo_url"]
-	if ecrURL == "" {
-		return fmt.Errorf("terraform output missing ecr_repo_url")
-	}
-	remoteTag := ecrURL + ":latest"
-
-	fmt.Fprintln(os.Stderr, "==> Docker push")
-	if err := docker.Tag(ctx, paths.DockerTag, remoteTag); err != nil {
-		return err
-	}
-	if err := docker.Push(ctx, remoteTag, os.Stderr); err != nil {
-		return err
-	}
-
-	fmt.Fprintln(os.Stderr, "==> Infrastructure deployed successfully")
-	return nil
+	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
+		ToolConfig:  cfg,
+		Region:      *region,
+		AutoApprove: *autoApprove,
+		Stream:      os.Stderr,
+		PromptFunc:  deployPrompt,
+	}, log)
+	return err
 }
 
 func runInfraDestroy(args []string, log logger.Logger) error {
@@ -216,41 +87,33 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
-	paths, err := resolveToolPaths(*tool, *backend)
+	cfg, err := resolveToolConfig(*tool, *backend)
 	if err != nil {
 		return err
 	}
 
 	if !*autoApprove {
-		fmt.Fprint(os.Stderr, "Destroy all infrastructure? This cannot be undone. [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "y" && answer != "yes" {
+		if !cliPrompt("Destroy all infrastructure? This cannot be undone.") {
 			fmt.Fprintln(os.Stderr, "Cancelled.")
 			return nil
 		}
 	}
 
-	ctx := context.Background()
-	tf := infra.NewTerraformClient(log)
-
-	fmt.Fprintln(os.Stderr, "==> Terraform destroy")
-	fmt.Fprintln(os.Stderr, "    Note: Empty the S3 bucket first if destroy fails.")
-	if err := tf.Destroy(ctx, paths.TerraformDir, os.Stderr); err != nil {
-		return err
-	}
-
-	fmt.Fprintln(os.Stderr, "==> Infrastructure destroyed")
-	return nil
+	return infra.RunDestroy(mainContext(), cfg, os.Stderr, log)
 }
 
-func awsRegion() string {
-	if r := os.Getenv("AWS_REGION"); r != "" {
-		return r
+func deployPrompt(_ string) bool {
+	return cliPrompt("Apply these changes?")
+}
+
+// cliPrompt asks the operator a yes/no question on stderr/stdin.
+func cliPrompt(question string) bool {
+	if strings.TrimSpace(question) == "" {
+		question = "Apply these changes?"
 	}
-	if r := os.Getenv("AWS_DEFAULT_REGION"); r != "" {
-		return r
-	}
-	return "us-east-1"
+	fmt.Fprintf(os.Stderr, "\n%s [y/N]: ", question)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "y" || answer == "yes"
 }
