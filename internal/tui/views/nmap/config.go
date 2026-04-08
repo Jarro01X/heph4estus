@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/infra"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 )
 
@@ -81,6 +82,8 @@ type ConfigModel struct {
 
 // NewConfig creates a new nmap config view.
 func NewConfig() *ConfigModel {
+	cfg, _ := operator.LoadConfig()
+
 	targetInput := textinput.New()
 	targetInput.Placeholder = "/path/to/targets.txt"
 	targetInput.Focus()
@@ -91,14 +94,17 @@ func NewConfig() *ConfigModel {
 	optsInput.SetValue("-sS")
 	optsInput.CharLimit = 256
 
+	workers := operator.ResolveWorkers(0, cfg)
+	computeMode := operator.ResolveComputeMode("", cfg)
+
 	workerInput := textinput.New()
 	workerInput.Placeholder = "10"
-	workerInput.SetValue("10")
+	workerInput.SetValue(strconv.Itoa(workers))
 	workerInput.CharLimit = 6
 
 	modeInput := textinput.New()
 	modeInput.Placeholder = "auto"
-	modeInput.SetValue("auto")
+	modeInput.SetValue(computeMode)
 	modeInput.CharLimit = 7
 
 	jitterInput := textinput.New()
@@ -199,6 +205,9 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("Error resolving nmap config: %v", err)
 			return m, nil
 		}
+		opCfg, _ := operator.LoadConfig()
+		cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
+		outputDir := operator.ResolveOutputDir("", opCfg)
 		return m, func() tea.Msg {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
@@ -219,6 +228,8 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 					NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
 					DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
 					NoRDNS:             m.noRDNS,
+					CleanupPolicy:      cleanupPolicy,
+					OutputDir:          outputDir,
 				},
 			}
 		}

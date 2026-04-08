@@ -462,6 +462,107 @@ func TestDeployModel_LifecycleReuseShowsCorrectView(t *testing.T) {
 	}
 }
 
+// --- Track 6B: verify cleanup/reuse state is threaded through ---
+
+func TestDeployModel_ReuseCarriesCleanupFields(t *testing.T) {
+	outputs := map[string]string{
+		"sqs_queue_url":       "https://sqs.example.com/q",
+		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"s3_bucket_name":      "bucket",
+		"ecs_cluster_name":    "cluster",
+		"task_definition_arn": "arn:aws:ecs:td",
+		"subnet_ids":          "[subnet-a]",
+		"security_group_id":   "sg-123",
+	}
+	cfg := core.DeployConfig{
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    5,
+		CleanupPolicy:  "destroy-after",
+		OutputDir:      "/tmp/results",
+	}
+	m := NewWithDeployer(cfg, &mockDeployer{})
+
+	_, cmd := simulateLifecycleReuse(m, outputs)
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	infraOut, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+	}
+	if infraOut.CleanupPolicy != "destroy-after" {
+		t.Errorf("CleanupPolicy = %q, want destroy-after", infraOut.CleanupPolicy)
+	}
+	if !infraOut.Reused {
+		t.Error("expected Reused to be true for lifecycle reuse")
+	}
+	if infraOut.OutputDir != "/tmp/results" {
+		t.Errorf("OutputDir = %q, want /tmp/results", infraOut.OutputDir)
+	}
+}
+
+func TestDeployModel_FreshDeployCarriesCleanupFields(t *testing.T) {
+	d := &mockDeployer{
+		planSummary: "Plan: 1 to add",
+		readOutputs: map[string]string{
+			"sqs_queue_url":       "https://sqs/q",
+			"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+			"s3_bucket_name":      "bucket",
+			"ecs_cluster_name":    "cluster",
+			"task_definition_arn": "arn:td",
+			"subnet_ids":          "[subnet-a]",
+			"security_group_id":   "sg-1",
+		},
+	}
+	cfg := core.DeployConfig{
+		TerraformDir:   "/tmp/tf",
+		DockerTag:      "nmap:latest",
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    5,
+		CleanupPolicy:  "reuse",
+		OutputDir:      "/data/out",
+	}
+	m := NewWithDeployer(cfg, d)
+
+	// Run through full pipeline.
+	_, cmd := simulateLifecycleDeploy(m)
+	msg := cmd()
+	_, cmd = m.Update(msg) // init
+	msg = cmd()
+	_, _ = m.Update(msg) // plan
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'y'}) // approve
+	msgs := drainBatch(cmd)
+	for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } }
+	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // read outputs
+	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // docker build
+	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // ecr auth
+	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // docker push
+
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	msg = cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	infraOut := nav.Data.(core.InfraOutputs)
+	if infraOut.CleanupPolicy != "reuse" {
+		t.Errorf("CleanupPolicy = %q, want reuse", infraOut.CleanupPolicy)
+	}
+	if infraOut.Reused {
+		t.Error("expected Reused to be false for fresh deploy")
+	}
+	if infraOut.OutputDir != "/data/out" {
+		t.Errorf("OutputDir = %q, want /data/out", infraOut.OutputDir)
+	}
+}
+
 // drainBatch executes a batch command and returns all messages.
 func drainBatch(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {

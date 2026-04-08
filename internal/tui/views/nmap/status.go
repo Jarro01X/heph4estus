@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/jobs"
+	"heph4estus/internal/operator"
 	nmaptool "heph4estus/internal/tools/nmap"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
@@ -27,6 +28,7 @@ const (
 	phaseEnqueuing statusPhase = iota
 	phaseLaunching
 	phaseScanning
+	phaseExporting // exporting results locally before cleanup
 	phaseComplete
 )
 
@@ -48,6 +50,13 @@ type launchProgressMsg struct {
 type scanProgressMsg struct {
 	completed int
 	err       error
+}
+
+// exportCompleteMsg reports the outcome of a local result export.
+type exportCompleteMsg struct {
+	dir   string
+	count int
+	err   error
 }
 
 // SpotThreshold is the worker count at or above which auto mode selects spot
@@ -134,9 +143,11 @@ var statusKeys = statusKeyMap{
 
 // StatusModel displays enqueue → launch → scan progress.
 type StatusModel struct {
-	submitter JobSubmitter
-	tracker   ProgressTracker
-	infra     core.InfraOutputs
+	submitter  JobSubmitter
+	tracker    ProgressTracker
+	jobTracker *operator.Tracker
+	storage    cloud.Storage // for local export on completion
+	infra      core.InfraOutputs
 
 	phase        statusPhase
 	totalTargets int
@@ -147,6 +158,9 @@ type StatusModel struct {
 	errMsg       string
 
 	spotInstanceIDs []string
+
+	// Cleanup / export state
+	cleanupWarning string // shown when destroy-after is gated
 
 	// Rolling rate samples
 	rateSamples []rateSample
@@ -165,20 +179,23 @@ type rateSample struct {
 // counter may be nil — falls back to Storage.Count() for progress tracking.
 // When counter is provided and the target count is >= CounterThreshold, the
 // counter is used automatically for O(1) progress polling.
-func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter) *StatusModel {
+func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter, jt *operator.Tracker) *StatusModel {
 	// Pre-count targets to decide tracking strategy.
 	scanner := nmaptool.NewScanner(nil)
 	targets := scanner.ParseTargets(infra.TargetsContent, infra.NmapOptions)
 	useCounter := counter != nil && len(targets) >= CounterThreshold
 
-	return NewStatusWithDeps(infra,
+	m := NewStatusWithDeps(infra,
 		&realSubmitter{queue: q, compute: c},
 		&realTracker{counter: counter, storage: s, useCounter: useCounter},
+		jt,
 	)
+	m.storage = s
+	return m
 }
 
 // NewStatusWithDeps creates a status view with injected dependencies.
-func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker ProgressTracker) *StatusModel {
+func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker ProgressTracker, jt ...*operator.Tracker) *StatusModel {
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -189,13 +206,47 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker Progre
 		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
-	return &StatusModel{
-		submitter: sub,
-		tracker:   tracker,
-		infra:     infra,
-		startTime: time.Now(),
-		help:      h,
+	var jobTracker *operator.Tracker
+	if len(jt) > 0 && jt[0] != nil {
+		jobTracker = jt[0]
 	}
+	return &StatusModel{
+		submitter:  sub,
+		tracker:    tracker,
+		jobTracker: jobTracker,
+		infra:      infra,
+		startTime:  time.Now(),
+		help:       h,
+	}
+}
+
+// trackPhase updates the job record if a tracker is available.
+func (m *StatusModel) trackPhase(phase operator.Phase) {
+	if m.jobTracker != nil && m.infra.JobID != "" {
+		m.jobTracker.UpdatePhase(m.infra.JobID, phase)
+	}
+}
+
+// trackFail marks the job as failed if a tracker is available.
+func (m *StatusModel) trackFail(err error) {
+	if m.jobTracker != nil && m.infra.JobID != "" {
+		m.jobTracker.Fail(m.infra.JobID, err)
+	}
+}
+
+func (m *StatusModel) trackCreate() {
+	if m.jobTracker == nil || m.infra.JobID == "" {
+		return
+	}
+	m.jobTracker.Create(&operator.JobRecord{
+		JobID:       m.infra.JobID,
+		ToolName:    "nmap",
+		Phase:       operator.PhaseEnqueuing,
+		TotalTasks:  m.totalTargets,
+		WorkerCount: m.infra.WorkerCount,
+		ComputeMode: m.infra.ComputeMode,
+		Bucket:      m.infra.S3BucketName,
+	})
 }
 
 func (m *StatusModel) Init() tea.Cmd {
@@ -236,6 +287,7 @@ func (m *StatusModel) Init() tea.Cmd {
 	}
 
 	m.phase = phaseEnqueuing
+	m.trackCreate()
 	infra := m.infra
 	sub := m.submitter
 	return func() tea.Msg {
@@ -264,29 +316,35 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	case enqueueProgressMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Enqueue failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.enqueueSent = msg.sent
 		m.phase = phaseLaunching
+		m.trackPhase(operator.PhaseLaunching)
 		return m, m.launchWorkers()
 
 	case spotLaunchMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Spot launch failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.spotInstanceIDs = msg.instanceIDs
 		m.workersUp = msg.launched
 		m.phase = phaseScanning
+		m.trackPhase(operator.PhaseScanning)
 		return m, m.pollProgress()
 
 	case launchProgressMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Launch failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.workersUp = msg.launched
 		m.phase = phaseScanning
+		m.trackPhase(operator.PhaseScanning)
 		return m, m.pollProgress()
 
 	case scanProgressMsg:
@@ -304,15 +362,31 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		}
 
 		if m.completed >= m.totalTargets {
-			m.phase = phaseComplete
-			return m, func() tea.Msg {
-				return core.NavigateWithDataMsg{
-					Target: core.ViewNmapResults,
-					Data:   m.infra,
-				}
+			if m.jobTracker != nil && m.infra.JobID != "" {
+				m.jobTracker.Complete(m.infra.JobID)
 			}
+			// Export gating: if destroy-after is set, export locally first.
+			if m.shouldExport() {
+				m.phase = phaseExporting
+				return m, m.exportResults()
+			}
+			if m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir == "" {
+				m.cleanupWarning = "destroy-after skipped: no output directory configured"
+			}
+			m.phase = phaseComplete
+			return m, m.navigateToResults()
 		}
 		return m, m.pollProgress()
+
+	case exportCompleteMsg:
+		if msg.err != nil {
+			m.cleanupWarning = fmt.Sprintf("destroy-after skipped: export failed (%v)", msg.err)
+		} else {
+			m.infra.Exported = true
+			m.infra.ExportDir = msg.dir
+		}
+		m.phase = phaseComplete
+		return m, m.navigateToResults()
 	}
 
 	return m, nil
@@ -327,6 +401,17 @@ func (m *StatusModel) View() string {
 
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(14)
+
+	// Lifecycle summary — shown in all phases.
+	infraLabel := "freshly deployed"
+	if m.infra.Reused {
+		infraLabel = "reused"
+	}
+	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Infra:"), infraLabel)
+	if m.infra.CleanupPolicy != "" {
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Cleanup:"), m.infra.CleanupPolicy)
+	}
+	b.WriteString("\n")
 
 	switch m.phase {
 	case phaseEnqueuing:
@@ -356,12 +441,24 @@ func (m *StatusModel) View() string {
 			fmt.Fprintf(&b, "  %s~%s\n", labelStyle.Render("Remaining:"), eta.Truncate(time.Second).String())
 		}
 
+	case phaseExporting:
+		b.WriteString(core.SelectedStyle.Render("  Exporting results locally...") + "\n\n")
+		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Output:"), m.infra.OutputDir)
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+
 	case phaseComplete:
 		b.WriteString(core.SuccessStyle.Render("  Scan complete!") + "\n\n")
 		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+		if m.infra.Exported {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Exported:"), m.infra.ExportDir)
+		}
 	}
 
+	if m.cleanupWarning != "" {
+		b.WriteString("\n  " + core.MutedStyle.Render(m.cleanupWarning) + "\n")
+	}
 	if m.errMsg != "" {
 		b.WriteString("\n  " + core.ErrorStyle.Render(m.errMsg) + "\n")
 	}
@@ -462,6 +559,37 @@ func regionFromECR(url string) string {
 		}
 	}
 	return "us-east-1"
+}
+
+// shouldExport returns true when the cleanup policy requires local export
+// before destroy-after can be honored.
+func (m *StatusModel) shouldExport() bool {
+	return m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir != "" && m.storage != nil
+}
+
+func (m *StatusModel) exportResults() tea.Cmd {
+	storage := m.storage
+	infra := m.infra
+	return func() tea.Msg {
+		result, err := operator.ExportJob(
+			context.Background(), storage,
+			infra.S3BucketName, "nmap", infra.JobID, infra.OutputDir,
+		)
+		if err != nil {
+			return exportCompleteMsg{err: err}
+		}
+		return exportCompleteMsg{dir: result.Dir, count: result.ResultCount + result.ArtifactCount}
+	}
+}
+
+func (m *StatusModel) navigateToResults() tea.Cmd {
+	infra := m.infra
+	return func() tea.Msg {
+		return core.NavigateWithDataMsg{
+			Target: core.ViewNmapResults,
+			Data:   infra,
+		}
+	}
 }
 
 func (m *StatusModel) pollProgress() tea.Cmd {
