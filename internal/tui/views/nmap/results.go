@@ -11,7 +11,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"heph4estus/internal/cloud"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
@@ -30,6 +29,10 @@ type keysLoadedMsg struct {
 type resultLoadedMsg struct {
 	result worker.Result
 	err    error
+}
+
+type destroyCompleteMsg struct {
+	err error
 }
 
 type resultsKeyMap struct {
@@ -64,8 +67,9 @@ var resultsKeys = resultsKeyMap{
 
 // ResultsModel displays paginated scan results.
 type ResultsModel struct {
-	storage cloud.Storage
-	infra   core.InfraOutputs
+	source    core.ResultsSource
+	destroyer core.Destroyer // nil when destroy is not available
+	infra     core.InfraOutputs
 
 	allKeys    []string
 	total      int
@@ -75,6 +79,7 @@ type ResultsModel struct {
 	detail     bool
 	detailVP   viewport.Model
 	destroying bool
+	destroyed  bool
 	destroyMsg string
 	errMsg     string
 
@@ -84,7 +89,7 @@ type ResultsModel struct {
 }
 
 // NewResults creates a results view.
-func NewResults(infra core.InfraOutputs, storage cloud.Storage) *ResultsModel {
+func NewResults(infra core.InfraOutputs, source core.ResultsSource, destroyer core.Destroyer) *ResultsModel {
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -96,11 +101,12 @@ func NewResults(infra core.InfraOutputs, storage cloud.Storage) *ResultsModel {
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
 	return &ResultsModel{
-		storage: storage,
-		infra:   infra,
-		results: make(map[string]*worker.Result),
+		source:    source,
+		destroyer: destroyer,
+		infra:     infra,
+		results:   make(map[string]*worker.Result),
 
-		help:    h,
+		help: h,
 	}
 }
 
@@ -160,14 +166,18 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 				m.cursor = 0
 			}
 		case "d":
-			if !m.destroying {
+			if !m.destroying && !m.destroyed {
+				if m.destroyer == nil {
+					m.destroyMsg = "Destroy not available (no terraform directory)"
+					return m, nil
+				}
+				if m.infra.CleanupPolicy == "destroy-after" && !m.infra.Exported {
+					m.destroyMsg = "Cannot destroy: results not exported locally"
+					return m, nil
+				}
 				m.destroying = true
 				m.destroyMsg = "Destroying infrastructure..."
-				// No actual destroy here — just signal. In a real flow we'd
-				// call deployer.TerraformDestroy. For now we navigate back.
-				return m, func() tea.Msg {
-					return core.NavigateMsg{Target: core.ViewMenu}
-				}
+				return m, m.runDestroy()
 			}
 		}
 
@@ -192,6 +202,15 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		content := formatResult(msg.result)
 		m.detailVP.SetContent(content)
 		m.detailVP.GotoTop()
+
+	case destroyCompleteMsg:
+		m.destroying = false
+		m.destroyed = true
+		if msg.err != nil {
+			m.destroyMsg = fmt.Sprintf("Destroy failed: %v", msg.err)
+		} else {
+			m.destroyMsg = "Infrastructure destroyed successfully"
+		}
 	}
 
 	return m, nil
@@ -203,6 +222,24 @@ func (m *ResultsModel) View() string {
 	titleBar := core.TitleBarStyle.Render(fmt.Sprintf("  Nmap Scan Results (%d targets)  ", m.total))
 	b.WriteString(titleBar)
 	b.WriteString("\n\n")
+
+	// Cleanup / export summary.
+	if m.infra.CleanupPolicy != "" || m.infra.Exported {
+		summaryStyle := lipgloss.NewStyle().Foreground(core.Steel)
+		var parts []string
+		if m.infra.Reused {
+			parts = append(parts, "infra: reused")
+		}
+		if m.infra.CleanupPolicy != "" {
+			parts = append(parts, "cleanup: "+m.infra.CleanupPolicy)
+		}
+		if m.infra.Exported {
+			parts = append(parts, "exported: "+m.infra.ExportDir)
+		}
+		if len(parts) > 0 {
+			b.WriteString("  " + summaryStyle.Render(strings.Join(parts, "  |  ")) + "\n\n")
+		}
+	}
 
 	if m.detail {
 		b.WriteString(m.detailVP.View())
@@ -251,7 +288,13 @@ func (m *ResultsModel) View() string {
 		}
 
 		if m.destroyMsg != "" {
-			b.WriteString("\n  " + core.MutedStyle.Render(m.destroyMsg))
+			style := core.MutedStyle
+			if m.destroyed && !strings.Contains(m.destroyMsg, "failed") {
+				style = core.SuccessStyle
+			} else if strings.Contains(m.destroyMsg, "failed") || strings.Contains(m.destroyMsg, "Cannot") || strings.Contains(m.destroyMsg, "not available") {
+				style = core.ErrorStyle
+			}
+			b.WriteString("\n  " + style.Render(m.destroyMsg))
 		}
 	}
 
@@ -286,10 +329,9 @@ func (m *ResultsModel) maxPage() int {
 }
 
 func (m *ResultsModel) loadKeys() tea.Cmd {
-	s := m.storage
-	infra := m.infra
+	src := m.source
 	return func() tea.Msg {
-		keys, err := s.List(context.Background(), infra.S3BucketName, jobs.ResultPrefix("nmap", infra.JobID))
+		keys, err := src.ListKeys(context.Background())
 		return keysLoadedMsg{keys: keys, total: len(keys), err: err}
 	}
 }
@@ -308,10 +350,9 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 		}
 	}
 
-	s := m.storage
-	bucket := m.infra.S3BucketName
+	src := m.source
 	return func() tea.Msg {
-		data, err := s.Download(context.Background(), bucket, k)
+		data, err := src.Download(context.Background(), k)
 		if err != nil {
 			return resultLoadedMsg{err: err}
 		}
@@ -320,6 +361,14 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 			return resultLoadedMsg{err: err}
 		}
 		return resultLoadedMsg{result: result}
+	}
+}
+
+func (m *ResultsModel) runDestroy() tea.Cmd {
+	d := m.destroyer
+	return func() tea.Msg {
+		err := d.Destroy(context.Background())
+		return destroyCompleteMsg{err: err}
 	}
 }
 

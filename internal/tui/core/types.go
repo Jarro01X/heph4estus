@@ -73,6 +73,10 @@ type DeployConfig struct {
 	WordlistContent string // Raw wordlist file content
 	RuntimeTarget   string // Single runtime target / URL (e.g. "https://example.com/FUZZ")
 	ChunkCount      int    // Number of wordlist chunks (defaults to WorkerCount)
+
+	// Lifecycle fields.
+	CleanupPolicy string // "reuse" or "destroy-after"
+	OutputDir     string // local export directory
 }
 
 // InfraOutputs holds terraform outputs needed by downstream views.
@@ -110,6 +114,16 @@ type InfraOutputs struct {
 	WordlistContent string
 	RuntimeTarget   string
 	ChunkCount      int
+
+	// Lifecycle summary fields.
+	CleanupPolicy string // "reuse" or "destroy-after"
+	Reused        bool   // true if infra was reused (not freshly deployed)
+	OutputDir     string // local export directory (from operator config)
+	TerraformDir  string // terraform working directory (for destroy)
+
+	// Export state — set by status view after successful local export.
+	Exported  bool   // true if results were exported locally
+	ExportDir string // directory where results were exported
 }
 
 // LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.

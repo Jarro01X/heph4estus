@@ -13,18 +13,19 @@ import (
 	"heph4estus/internal/worker"
 )
 
-// mockStorage implements cloud.Storage for testing.
-type mockStorage struct {
-	keys     []string
-	listErr  error
-	data     map[string][]byte
-	dlErr    error
-	countVal int
-	countErr error
+// mockResultsSource implements core.ResultsSource for testing.
+type mockResultsSource struct {
+	keys    []string
+	listErr error
+	data    map[string][]byte
+	dlErr   error
 }
 
-func (s *mockStorage) Upload(_ context.Context, _, _ string, _ []byte) error { return nil }
-func (s *mockStorage) Download(_ context.Context, _, key string) ([]byte, error) {
+func (s *mockResultsSource) ListKeys(_ context.Context) ([]string, error) {
+	return s.keys, s.listErr
+}
+
+func (s *mockResultsSource) Download(_ context.Context, key string) ([]byte, error) {
 	if s.dlErr != nil {
 		return nil, s.dlErr
 	}
@@ -33,11 +34,16 @@ func (s *mockStorage) Download(_ context.Context, _, key string) ([]byte, error)
 	}
 	return nil, fmt.Errorf("not found: %s", key)
 }
-func (s *mockStorage) List(_ context.Context, _, _ string) ([]string, error) {
-	return s.keys, s.listErr
+
+// mockDestroyer implements core.Destroyer for testing.
+type mockDestroyer struct {
+	called bool
+	err    error
 }
-func (s *mockStorage) Count(_ context.Context, _, _ string) (int, error) {
-	return s.countVal, s.countErr
+
+func (d *mockDestroyer) Destroy(_ context.Context) error {
+	d.called = true
+	return d.err
 }
 
 func testResultInfra() core.InfraOutputs {
@@ -49,15 +55,15 @@ func testResultInfra() core.InfraOutputs {
 }
 
 func TestGenericResultsInit(t *testing.T) {
-	key1 := "scans/httpx/httpx-20260405t120000-abcd1234/results/example.com_1700000000.json"
-	key2 := "scans/httpx/httpx-20260405t120000-abcd1234/results/10.0.0.1_1700000001.json"
+	key1 := "example.com_1700000000.json"
+	key2 := "10.0.0.1_1700000001.json"
 	r1, _ := json.Marshal(worker.Result{Target: "example.com", Timestamp: time.Now()})
 	r2, _ := json.Marshal(worker.Result{Target: "10.0.0.1", Error: "timeout", Timestamp: time.Now()})
-	storage := &mockStorage{
+	source := &mockResultsSource{
 		keys: []string{key1, key2},
 		data: map[string][]byte{key1: r1, key2: r2},
 	}
-	m := NewResults(testResultInfra(), storage)
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	if cmd == nil {
 		t.Fatal("expected init command")
@@ -84,8 +90,8 @@ func TestGenericResultsInit(t *testing.T) {
 }
 
 func TestGenericResultsViewContainsToolName(t *testing.T) {
-	storage := &mockStorage{keys: []string{}}
-	m := NewResults(testResultInfra(), storage)
+	source := &mockResultsSource{keys: []string{}}
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -105,12 +111,12 @@ func TestGenericResultsDetailView(t *testing.T) {
 	}
 	data, _ := json.Marshal(result)
 
-	key := "scans/httpx/httpx-20260405t120000-abcd1234/results/example.com_1700000000.json"
-	storage := &mockStorage{
+	key := "example.com_1700000000.json"
+	source := &mockResultsSource{
 		keys: []string{key},
 		data: map[string][]byte{key: data},
 	}
-	m := NewResults(testResultInfra(), storage)
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg) // load keys
@@ -129,8 +135,8 @@ func TestGenericResultsDetailView(t *testing.T) {
 }
 
 func TestGenericResultsEscNavigatesBack(t *testing.T) {
-	storage := &mockStorage{keys: []string{}}
-	m := NewResults(testResultInfra(), storage)
+	source := &mockResultsSource{keys: []string{}}
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -150,8 +156,8 @@ func TestGenericResultsEscNavigatesBack(t *testing.T) {
 }
 
 func TestGenericResultsListError(t *testing.T) {
-	storage := &mockStorage{listErr: fmt.Errorf("access denied")}
-	m := NewResults(testResultInfra(), storage)
+	source := &mockResultsSource{listErr: fmt.Errorf("access denied")}
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -165,10 +171,10 @@ func TestGenericResultsPagination(t *testing.T) {
 	// Create more than pageSize keys.
 	keys := make([]string, pageSize+5)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("scans/httpx/job/results/target%d_%d.json", i, i)
+		keys[i] = fmt.Sprintf("target%d_%d.json", i, i)
 	}
-	storage := &mockStorage{keys: keys}
-	m := NewResults(testResultInfra(), storage)
+	source := &mockResultsSource{keys: keys}
+	m := NewResults(testResultInfra(), source, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -217,5 +223,105 @@ func TestFormatResult(t *testing.T) {
 	}
 	if !strings.Contains(s, "s3://test-bucket/artifacts/example.com.jsonl") {
 		t.Error("expected full s3 output path in formatted result")
+	}
+}
+
+func TestGenericResultsDestroyExecutes(t *testing.T) {
+	source := &mockResultsSource{keys: []string{}}
+	destroyer := &mockDestroyer{}
+	infra := testResultInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = true
+	infra.ExportDir = "/tmp/exports/httpx/job1"
+	infra.TerraformDir = "/tmp/tf"
+	m := NewResults(infra, source, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	// Press d to trigger destroy.
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+	if !m.destroying {
+		t.Fatal("expected destroying=true")
+	}
+
+	// Execute the destroy command.
+	msg = cmd()
+	m.Update(msg)
+
+	if !destroyer.called {
+		t.Fatal("expected destroyer to be called")
+	}
+	if !m.destroyed {
+		t.Fatal("expected destroyed=true")
+	}
+	if !strings.Contains(m.destroyMsg, "destroyed successfully") {
+		t.Fatalf("expected success message, got %q", m.destroyMsg)
+	}
+}
+
+func TestGenericResultsDestroyBlockedWithoutExport(t *testing.T) {
+	source := &mockResultsSource{keys: []string{}}
+	destroyer := &mockDestroyer{}
+	infra := testResultInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = false // not exported yet
+	m := NewResults(infra, source, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	// Press d — should be blocked.
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd != nil {
+		t.Fatal("expected no command (destroy blocked)")
+	}
+	if destroyer.called {
+		t.Fatal("destroyer should not have been called")
+	}
+	if !strings.Contains(m.destroyMsg, "not exported") {
+		t.Fatalf("expected blocked message, got %q", m.destroyMsg)
+	}
+}
+
+func TestGenericResultsDestroyNoDestroyer(t *testing.T) {
+	source := &mockResultsSource{keys: []string{}}
+	m := NewResults(testResultInfra(), source, nil) // nil destroyer
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd != nil {
+		t.Fatal("expected no command (no destroyer)")
+	}
+	if !strings.Contains(m.destroyMsg, "not available") {
+		t.Fatalf("expected not-available message, got %q", m.destroyMsg)
+	}
+}
+
+func TestGenericResultsDestroyFailure(t *testing.T) {
+	source := &mockResultsSource{keys: []string{}}
+	destroyer := &mockDestroyer{err: fmt.Errorf("terraform error")}
+	infra := testResultInfra()
+	infra.Exported = true
+	infra.ExportDir = "/tmp/out"
+	m := NewResults(infra, source, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+	msg = cmd()
+	m.Update(msg)
+
+	if !strings.Contains(m.destroyMsg, "Destroy failed") {
+		t.Fatalf("expected failure message, got %q", m.destroyMsg)
 	}
 }

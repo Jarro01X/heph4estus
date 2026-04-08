@@ -334,6 +334,123 @@ func TestGenericStatusWordlistViewShowsTarget(t *testing.T) {
 	}
 }
 
+// --- Track 6B: reuse/cleanup summary and export gating tests ---
+
+func TestGenericStatusViewShowsReused(t *testing.T) {
+	infra := testInfra()
+	infra.Reused = true
+	infra.CleanupPolicy = "reuse"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 10
+	m.phase = phaseScanning
+
+	v := m.View()
+	if !strings.Contains(v, "reused") {
+		t.Fatal("expected 'reused' in view")
+	}
+}
+
+func TestGenericStatusViewShowsFreshlyDeployed(t *testing.T) {
+	infra := testInfra()
+	infra.Reused = false
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 10
+	m.phase = phaseScanning
+
+	v := m.View()
+	if !strings.Contains(v, "freshly deployed") {
+		t.Fatal("expected 'freshly deployed' in view")
+	}
+	if !strings.Contains(v, "destroy-after") {
+		t.Fatal("expected cleanup policy in view")
+	}
+}
+
+func TestGenericStatusDestroyAfterWithoutOutputDir(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = ""
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 2
+	m.phase = phaseScanning
+
+	m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "no output directory") {
+		t.Fatalf("expected warning, got %q", m.cleanupWarning)
+	}
+}
+
+func TestGenericStatusDestroyAfterWithOutputDir(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 2
+	m.phase = phaseScanning
+	m.storage = &mockExportStorage{}
+
+	m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseExporting {
+		t.Fatalf("expected phaseExporting, got %d", m.phase)
+	}
+}
+
+func TestGenericStatusExportComplete(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.phase = phaseExporting
+
+	m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 3})
+	if !m.infra.Exported {
+		t.Fatal("expected Exported to be true")
+	}
+	if m.infra.ExportDir != "/tmp/export/httpx/job-1" {
+		t.Fatalf("expected ExportDir, got %q", m.infra.ExportDir)
+	}
+}
+
+func TestGenericStatusExportFailed(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.phase = phaseExporting
+
+	m.Update(exportCompleteMsg{err: fmt.Errorf("download error")})
+	if m.infra.Exported {
+		t.Fatal("expected Exported to remain false")
+	}
+	if !strings.Contains(m.cleanupWarning, "export failed") {
+		t.Fatalf("expected export failure warning, got %q", m.cleanupWarning)
+	}
+}
+
+func TestGenericStatusViewShowsExportingPhase(t *testing.T) {
+	infra := testInfra()
+	infra.OutputDir = "/tmp/out"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 10
+	m.completed = 10
+	m.phase = phaseExporting
+
+	v := m.View()
+	if !strings.Contains(v, "Exporting") {
+		t.Fatal("expected 'Exporting' in view")
+	}
+}
+
+// mockExportStorage is a minimal cloud.Storage for export gating tests.
+type mockExportStorage struct{}
+
+func (s *mockExportStorage) Upload(context.Context, string, string, []byte) error    { return nil }
+func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
+func (s *mockExportStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
+func (s *mockExportStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+
 func TestParseTargetLines(t *testing.T) {
 	tests := []struct {
 		content string

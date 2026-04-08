@@ -2,11 +2,16 @@ package tui
 
 import (
 	"context"
+	"io"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 
 	tea "charm.land/bubbletea/v2"
 	"heph4estus/internal/cloud/aws"
+	infraPkg "heph4estus/internal/infra"
+	"heph4estus/internal/jobs"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/tui/views/deploy"
 	genericview "heph4estus/internal/tui/views/generic"
@@ -117,17 +122,21 @@ func (a *App) createStatusView(infra core.InfraOutputs) core.View {
 	provider := aws.NewProvider(awsCfg, log)
 	// counter is nil — falls back to Storage.Count(). A DynamoDB counter
 	// implementation can be wired here for 1M+ target scale.
-	return nmapview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil)
+	return nmapview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker())
+}
+
+
+func (a *App) newTracker() *operator.Tracker {
+	store, err := operator.NewJobStore()
+	if err != nil {
+		return operator.NoopTracker()
+	}
+	return operator.NewTracker(store)
 }
 
 func (a *App) createResultsView(infra core.InfraOutputs) core.View {
-	awsCfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		return nmapview.NewConfig()
-	}
-	log := nopLogger{}
-	provider := aws.NewProvider(awsCfg, log)
-	return nmapview.NewResults(infra, provider.Storage())
+	source, destroyer := a.buildResultsDeps(infra, "nmap")
+	return nmapview.NewResults(infra, source, destroyer)
 }
 
 func (a *App) createGenericStatusView(infra core.InfraOutputs) core.View {
@@ -137,17 +146,54 @@ func (a *App) createGenericStatusView(infra core.InfraOutputs) core.View {
 	}
 	log := nopLogger{}
 	provider := aws.NewProvider(awsCfg, log)
-	return genericview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil)
+	return genericview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker())
 }
 
 func (a *App) createGenericResultsView(infra core.InfraOutputs) core.View {
-	awsCfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		return menu.New()
+	source, destroyer := a.buildResultsDeps(infra, infra.ToolName)
+	return genericview.NewResults(infra, source, destroyer)
+}
+
+// buildResultsDeps returns the appropriate ResultsSource and Destroyer for a
+// results view. When results have been exported locally, a LocalResultsSource
+// is used so the view works even after infrastructure is destroyed. Otherwise
+// an S3ResultsSource is created.
+func (a *App) buildResultsDeps(infra core.InfraOutputs, toolName string) (core.ResultsSource, core.Destroyer) {
+	var source core.ResultsSource
+
+	if infra.Exported && infra.ExportDir != "" {
+		source = &core.LocalResultsSource{
+			ResultsDir: filepath.Join(infra.ExportDir, "results"),
+		}
+	} else {
+		awsCfg, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			// Return a source that will fail on first call — the view handles errors.
+			source = &core.S3ResultsSource{}
+		} else {
+			log := nopLogger{}
+			provider := aws.NewProvider(awsCfg, log)
+			source = &core.S3ResultsSource{
+				Storage: provider.Storage(),
+				Bucket:  infra.S3BucketName,
+				Prefix:  jobs.ResultPrefix(toolName, infra.JobID),
+			}
+		}
 	}
-	log := nopLogger{}
-	provider := aws.NewProvider(awsCfg, log)
-	return genericview.NewResults(infra, provider.Storage())
+
+	var destroyer core.Destroyer
+	if infra.TerraformDir != "" {
+		log := nopLogger{}
+		tf := infraPkg.NewTerraformClient(log)
+		destroyer = &core.TerraformDestroyer{
+			DestroyFunc: func(ctx context.Context, workDir string) error {
+				return tf.Destroy(ctx, workDir, io.Discard)
+			},
+			WorkDir: infra.TerraformDir,
+		}
+	}
+
+	return source, destroyer
 }
 
 // nopLogger satisfies logger.Logger for AWS provider init.

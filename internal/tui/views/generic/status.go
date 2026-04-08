@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/jobs"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
@@ -26,6 +27,7 @@ const (
 	phaseEnqueuing
 	phaseLaunching
 	phaseScanning
+	phaseExporting // exporting results locally before cleanup
 	phaseComplete
 )
 
@@ -49,6 +51,12 @@ type spotLaunchMsg struct {
 type scanProgressMsg struct {
 	completed int
 	err       error
+}
+
+type exportCompleteMsg struct {
+	dir   string
+	count int
+	err   error
 }
 
 type uploadCompleteMsg struct {
@@ -142,10 +150,12 @@ var statusKeys = statusKeyMap{
 
 // StatusModel displays enqueue -> launch -> scan progress for generic tools.
 type StatusModel struct {
-	submitter GenericSubmitter
-	tracker   GenericTracker
-	uploader  GenericUploader
-	infra     core.InfraOutputs
+	submitter  GenericSubmitter
+	tracker    GenericTracker
+	uploader   GenericUploader
+	jobTracker *operator.Tracker
+	storage    cloud.Storage // for local export on completion
+	infra      core.InfraOutputs
 
 	phase        statusPhase
 	isWordlist   bool
@@ -160,6 +170,9 @@ type StatusModel struct {
 	spotInstanceIDs []string
 	rateSamples     []rateSample
 
+	// Cleanup / export state
+	cleanupWarning string
+
 	help   help.Model
 	width  int
 	height int
@@ -171,19 +184,22 @@ type rateSample struct {
 }
 
 // NewStatus creates a status view with real cloud clients.
-func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter) *StatusModel {
+func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter, jt *operator.Tracker) *StatusModel {
 	targets := parseTargetLines(infra.TargetsContent)
 	useCounter := counter != nil && len(targets) >= 10_000
 
-	return NewStatusWithDeps(infra,
+	m := NewStatusWithDeps(infra,
 		&realSubmitter{queue: q, compute: c},
 		&realTracker{counter: counter, storage: s, useCounter: useCounter},
 		&realUploader{storage: s},
+		jt,
 	)
+	m.storage = s
+	return m
 }
 
 // NewStatusWithDeps creates a status view with injected dependencies (for testing).
-func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker GenericTracker, uploader GenericUploader) *StatusModel {
+func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker GenericTracker, uploader GenericUploader, jt ...*operator.Tracker) *StatusModel {
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -197,15 +213,54 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker Ge
 
 	isWL := infra.WordlistContent != ""
 
+	var jobTracker *operator.Tracker
+	if len(jt) > 0 && jt[0] != nil {
+		jobTracker = jt[0]
+	}
 	return &StatusModel{
 		submitter:  sub,
 		tracker:    tracker,
 		uploader:   uploader,
+		jobTracker: jobTracker,
 		infra:      infra,
 		isWordlist: isWL,
 		startTime:  time.Now(),
 		help:       h,
 	}
+}
+
+func (m *StatusModel) trackPhase(phase operator.Phase) {
+	if m.jobTracker != nil && m.infra.JobID != "" {
+		m.jobTracker.UpdatePhase(m.infra.JobID, phase)
+	}
+}
+
+// trackFail marks the job as failed if a tracker is available.
+func (m *StatusModel) trackFail(err error) {
+	if m.jobTracker != nil && m.infra.JobID != "" {
+		m.jobTracker.Fail(m.infra.JobID, err)
+	}
+}
+
+func (m *StatusModel) trackCreate() {
+	if m.jobTracker == nil || m.infra.JobID == "" {
+		return
+	}
+	rec := &operator.JobRecord{
+		JobID:         m.infra.JobID,
+		ToolName:      m.infra.ToolName,
+		Phase:         operator.PhaseEnqueuing,
+		TotalTasks:    m.totalTargets,
+		TotalWords:    m.totalWords,
+		WorkerCount:   m.infra.WorkerCount,
+		ComputeMode:   m.infra.ComputeMode,
+		Bucket:        m.infra.S3BucketName,
+		RuntimeTarget: m.infra.RuntimeTarget,
+	}
+	if m.isWordlist {
+		rec.Phase = operator.PhaseUploading
+	}
+	m.jobTracker.Create(rec)
 }
 
 func (m *StatusModel) Init() tea.Cmd {
@@ -239,6 +294,7 @@ func (m *StatusModel) initTargetList() tea.Cmd {
 	}
 
 	m.phase = phaseEnqueuing
+	m.trackCreate()
 	infra := m.infra
 	sub := m.submitter
 	return func() tea.Msg {
@@ -269,6 +325,7 @@ func (m *StatusModel) initWordlist() tea.Cmd {
 	m.totalTargets = len(plan.Tasks)
 	m.totalWords = plan.TotalWords
 	m.phase = phaseUploading
+	m.trackCreate()
 
 	return func() tea.Msg {
 		if err := uploader.UploadChunks(context.Background(), infra.S3BucketName, plan); err != nil {
@@ -298,11 +355,13 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	case uploadCompleteMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Upload failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.totalWords = msg.words
 		m.totalTargets = len(msg.tasks)
 		m.phase = phaseEnqueuing
+		m.trackPhase(operator.PhaseEnqueuing)
 		infra := m.infra
 		sub := m.submitter
 		tasks := msg.tasks
@@ -314,29 +373,35 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	case enqueueProgressMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Enqueue failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.enqueueSent = msg.sent
 		m.phase = phaseLaunching
+		m.trackPhase(operator.PhaseLaunching)
 		return m, m.launchWorkers()
 
 	case spotLaunchMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Spot launch failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.spotInstanceIDs = msg.instanceIDs
 		m.workersUp = msg.launched
 		m.phase = phaseScanning
+		m.trackPhase(operator.PhaseScanning)
 		return m, m.pollProgress()
 
 	case launchProgressMsg:
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Launch failed: %v", msg.err)
+			m.trackFail(msg.err)
 			return m, nil
 		}
 		m.workersUp = msg.launched
 		m.phase = phaseScanning
+		m.trackPhase(operator.PhaseScanning)
 		return m, m.pollProgress()
 
 	case scanProgressMsg:
@@ -352,15 +417,30 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		}
 
 		if m.completed >= m.totalTargets {
-			m.phase = phaseComplete
-			return m, func() tea.Msg {
-				return core.NavigateWithDataMsg{
-					Target: core.ViewGenericResults,
-					Data:   m.infra,
-				}
+			if m.jobTracker != nil && m.infra.JobID != "" {
+				m.jobTracker.Complete(m.infra.JobID)
 			}
+			if m.shouldExport() {
+				m.phase = phaseExporting
+				return m, m.exportResults()
+			}
+			if m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir == "" {
+				m.cleanupWarning = "destroy-after skipped: no output directory configured"
+			}
+			m.phase = phaseComplete
+			return m, m.navigateToResults()
 		}
 		return m, m.pollProgress()
+
+	case exportCompleteMsg:
+		if msg.err != nil {
+			m.cleanupWarning = fmt.Sprintf("destroy-after skipped: export failed (%v)", msg.err)
+		} else {
+			m.infra.Exported = true
+			m.infra.ExportDir = msg.dir
+		}
+		m.phase = phaseComplete
+		return m, m.navigateToResults()
 	}
 
 	return m, nil
@@ -375,6 +455,17 @@ func (m *StatusModel) View() string {
 
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(14)
+
+	// Lifecycle summary — shown in all phases.
+	infraLabel := "freshly deployed"
+	if m.infra.Reused {
+		infraLabel = "reused"
+	}
+	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Infra:"), infraLabel)
+	if m.infra.CleanupPolicy != "" {
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Cleanup:"), m.infra.CleanupPolicy)
+	}
+	b.WriteString("\n")
 
 	unitLabel := "targets"
 	if m.isWordlist {
@@ -425,12 +516,24 @@ func (m *StatusModel) View() string {
 			fmt.Fprintf(&b, "  %s~%s\n", labelStyle.Render("Remaining:"), eta.Truncate(time.Second).String())
 		}
 
+	case phaseExporting:
+		b.WriteString(core.SelectedStyle.Render("  Exporting results locally...") + "\n\n")
+		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Output:"), m.infra.OutputDir)
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+
 	case phaseComplete:
 		b.WriteString(core.SuccessStyle.Render("  Scan complete!") + "\n\n")
 		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+		if m.infra.Exported {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Exported:"), m.infra.ExportDir)
+		}
 	}
 
+	if m.cleanupWarning != "" {
+		b.WriteString("\n  " + core.MutedStyle.Render(m.cleanupWarning) + "\n")
+	}
 	if m.errMsg != "" {
 		b.WriteString("\n  " + core.ErrorStyle.Render(m.errMsg) + "\n")
 	}
@@ -513,6 +616,35 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 		})
 		msg := launchProgressMsg{launched: len(ids), total: infra.WorkerCount, err: err}
 		return spotLaunchMsg{launchProgressMsg: msg, instanceIDs: ids}
+	}
+}
+
+func (m *StatusModel) shouldExport() bool {
+	return m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir != "" && m.storage != nil
+}
+
+func (m *StatusModel) exportResults() tea.Cmd {
+	storage := m.storage
+	infra := m.infra
+	return func() tea.Msg {
+		result, err := operator.ExportJob(
+			context.Background(), storage,
+			infra.S3BucketName, infra.ToolName, infra.JobID, infra.OutputDir,
+		)
+		if err != nil {
+			return exportCompleteMsg{err: err}
+		}
+		return exportCompleteMsg{dir: result.Dir, count: result.ResultCount + result.ArtifactCount}
+	}
+}
+
+func (m *StatusModel) navigateToResults() tea.Cmd {
+	infra := m.infra
+	return func() tea.Msg {
+		return core.NavigateWithDataMsg{
+			Target: core.ViewGenericResults,
+			Data:   infra,
+		}
 	}
 }
 

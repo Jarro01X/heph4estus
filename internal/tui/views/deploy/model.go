@@ -428,6 +428,7 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 		target = core.ViewNmapStatus
 	}
 
+	reused := m.lifecycleReuse
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: target,
@@ -454,6 +455,10 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				WordlistContent:    cfg.WordlistContent,
 				RuntimeTarget:      cfg.RuntimeTarget,
 				ChunkCount:         cfg.ChunkCount,
+				CleanupPolicy:      cfg.CleanupPolicy,
+				Reused:             reused,
+				OutputDir:          cfg.OutputDir,
+				TerraformDir:       cfg.TerraformDir,
 			},
 		}
 	}

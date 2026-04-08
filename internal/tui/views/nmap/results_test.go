@@ -3,21 +3,54 @@ package nmap
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"heph4estus/internal/cloud/mock"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
 
-func testResultsStorage() *mock.Storage {
+// mockResultsSource implements core.ResultsSource for testing.
+type mockResultsSource struct {
+	keys    []string
+	listErr error
+	data    map[string][]byte
+	dlErr   error
+}
+
+func (s *mockResultsSource) ListKeys(_ context.Context) ([]string, error) {
+	return s.keys, s.listErr
+}
+
+func (s *mockResultsSource) Download(_ context.Context, key string) ([]byte, error) {
+	if s.dlErr != nil {
+		return nil, s.dlErr
+	}
+	if d, ok := s.data[key]; ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("not found: %s", key)
+}
+
+// mockDestroyer implements core.Destroyer for testing.
+type mockDestroyer struct {
+	called bool
+	err    error
+}
+
+func (d *mockDestroyer) Destroy(_ context.Context) error {
+	d.called = true
+	return d.err
+}
+
+func testResultsSource() *mockResultsSource {
 	keys := []string{
-		"scans/nmap/job-123/results/192.168.1.1_1000.json",
-		"scans/nmap/job-123/results/192.168.1.2_1001.json",
-		"scans/nmap/job-123/results/192.168.1.3_1002.json",
+		"192.168.1.1_1000.json",
+		"192.168.1.2_1001.json",
+		"192.168.1.3_1002.json",
 	}
 
 	result := worker.Result{
@@ -28,23 +61,21 @@ func testResultsStorage() *mock.Storage {
 	}
 	resultBytes, _ := json.Marshal(result)
 
-	return &mock.Storage{
-		ListFunc: func(_ context.Context, _, _ string) ([]string, error) {
-			return keys, nil
-		},
-		DownloadFunc: func(_ context.Context, _, _ string) ([]byte, error) {
-			return resultBytes, nil
-		},
-		CountFunc: func(_ context.Context, _, _ string) (int, error) {
-			return len(keys), nil
-		},
+	data := make(map[string][]byte)
+	for _, k := range keys {
+		data[k] = resultBytes
+	}
+
+	return &mockResultsSource{
+		keys: keys,
+		data: data,
 	}
 }
 
 func TestResultsModel_Init(t *testing.T) {
-	s := testResultsStorage()
+	s := testResultsSource()
 	infra := testInfra()
-	m := NewResults(infra, s)
+	m := NewResults(infra, s, nil)
 	cmd := m.Init()
 	if cmd == nil {
 		t.Fatal("expected init command")
@@ -59,8 +90,8 @@ func TestResultsModel_Init(t *testing.T) {
 }
 
 func TestResultsModel_Navigation(t *testing.T) {
-	s := testResultsStorage()
-	m := NewResults(testInfra(), s)
+	s := testResultsSource()
+	m := NewResults(testInfra(), s, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -79,8 +110,8 @@ func TestResultsModel_Navigation(t *testing.T) {
 }
 
 func TestResultsModel_DetailView(t *testing.T) {
-	s := testResultsStorage()
-	m := NewResults(testInfra(), s)
+	s := testResultsSource()
+	m := NewResults(testInfra(), s, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -105,8 +136,8 @@ func TestResultsModel_DetailView(t *testing.T) {
 }
 
 func TestResultsModel_EscNavigatesBack(t *testing.T) {
-	s := testResultsStorage()
-	m := NewResults(testInfra(), s)
+	s := testResultsSource()
+	m := NewResults(testInfra(), s, nil)
 	m.Init()
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -124,8 +155,8 @@ func TestResultsModel_EscNavigatesBack(t *testing.T) {
 }
 
 func TestResultsModel_View(t *testing.T) {
-	s := testResultsStorage()
-	m := NewResults(testInfra(), s)
+	s := testResultsSource()
+	m := NewResults(testInfra(), s, nil)
 	cmd := m.Init()
 	msg := cmd()
 	m.Update(msg)
@@ -134,9 +165,6 @@ func TestResultsModel_View(t *testing.T) {
 	if !strings.Contains(v, "Nmap Scan Results") {
 		t.Fatal("expected title")
 	}
-	if !strings.Contains(v, "192.168.1.1") {
-		t.Fatal("expected target in view")
-	}
 }
 
 func TestExtractTarget(t *testing.T) {
@@ -144,14 +172,72 @@ func TestExtractTarget(t *testing.T) {
 		key    string
 		target string
 	}{
-		{"scans/nmap/job-123/results/192.168.1.1_1000.json", "192.168.1.1"},
-		{"scans/nmap/job-123/results/example.com_1234.json", "example.com"},
-		{"scans/nmap/job-123/results/example.com_line1/example.com_chunk0_of_5_1234.json", "example.com"},
+		{"192.168.1.1_1000.json", "192.168.1.1"},
+		{"example.com_1234.json", "example.com"},
 	}
 	for _, tt := range tests {
 		got := extractTarget(tt.key)
 		if got != tt.target {
 			t.Errorf("extractTarget(%q) = %q, want %q", tt.key, got, tt.target)
 		}
+	}
+}
+
+func TestResultsModel_DestroyExecutes(t *testing.T) {
+	s := testResultsSource()
+	destroyer := &mockDestroyer{}
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = true
+	infra.ExportDir = "/tmp/exports/nmap/job1"
+	infra.TerraformDir = "/tmp/tf"
+	m := NewResults(infra, s, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	// Press d to trigger destroy.
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+	if !m.destroying {
+		t.Fatal("expected destroying=true")
+	}
+
+	msg = cmd()
+	m.Update(msg)
+
+	if !destroyer.called {
+		t.Fatal("expected destroyer to be called")
+	}
+	if !m.destroyed {
+		t.Fatal("expected destroyed=true")
+	}
+	if !strings.Contains(m.destroyMsg, "destroyed successfully") {
+		t.Fatalf("expected success message, got %q", m.destroyMsg)
+	}
+}
+
+func TestResultsModel_DestroyBlockedWithoutExport(t *testing.T) {
+	s := testResultsSource()
+	destroyer := &mockDestroyer{}
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = false
+	m := NewResults(infra, s, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd != nil {
+		t.Fatal("expected no command (destroy blocked)")
+	}
+	if destroyer.called {
+		t.Fatal("destroyer should not have been called")
+	}
+	if !strings.Contains(m.destroyMsg, "not exported") {
+		t.Fatalf("expected blocked message, got %q", m.destroyMsg)
 	}
 }

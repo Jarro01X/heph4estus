@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 )
 
@@ -110,6 +111,10 @@ func NewConfig(toolName string) *ConfigModel {
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
 
+	cfg, _ := operator.LoadConfig()
+	workers := operator.ResolveWorkers(0, cfg)
+	computeMode := operator.ResolveComputeMode("", cfg)
+
 	m := &ConfigModel{
 		toolName:   toolName,
 		mod:        mod,
@@ -119,18 +124,18 @@ func NewConfig(toolName string) *ConfigModel {
 
 	if isWordlist {
 		m.fieldCount = wlFieldSubmit + 1
-		m.wlInputs = buildWordlistInputs(mod)
+		m.wlInputs = buildWordlistInputs(mod, workers, computeMode)
 		m.wlInputs[0].Focus()
 	} else {
 		m.fieldCount = cfgFieldSubmit + 1
-		m.inputs = buildTargetListInputs()
+		m.inputs = buildTargetListInputs(workers, computeMode)
 		m.inputs[0].Focus()
 	}
 
 	return m
 }
 
-func buildTargetListInputs() [4]textinput.Model {
+func buildTargetListInputs(workers int, computeMode string) [4]textinput.Model {
 	targetInput := textinput.New()
 	targetInput.Placeholder = "/path/to/targets.txt"
 	targetInput.CharLimit = 256
@@ -141,18 +146,18 @@ func buildTargetListInputs() [4]textinput.Model {
 
 	workerInput := textinput.New()
 	workerInput.Placeholder = "10"
-	workerInput.SetValue("10")
+	workerInput.SetValue(strconv.Itoa(workers))
 	workerInput.CharLimit = 6
 
 	modeInput := textinput.New()
 	modeInput.Placeholder = "auto"
-	modeInput.SetValue("auto")
+	modeInput.SetValue(computeMode)
 	modeInput.CharLimit = 7
 
 	return [4]textinput.Model{targetInput, optsInput, workerInput, modeInput}
 }
 
-func buildWordlistInputs(mod *modules.ModuleDefinition) [6]textinput.Model {
+func buildWordlistInputs(mod *modules.ModuleDefinition, workers int, computeMode string) [6]textinput.Model {
 	wlInput := textinput.New()
 	wlInput.Placeholder = "/path/to/wordlist.txt"
 	wlInput.CharLimit = 256
@@ -175,12 +180,12 @@ func buildWordlistInputs(mod *modules.ModuleDefinition) [6]textinput.Model {
 
 	workerInput := textinput.New()
 	workerInput.Placeholder = "10"
-	workerInput.SetValue("10")
+	workerInput.SetValue(strconv.Itoa(workers))
 	workerInput.CharLimit = 6
 
 	modeInput := textinput.New()
 	modeInput.Placeholder = "auto"
-	modeInput.SetValue("auto")
+	modeInput.SetValue(computeMode)
 	modeInput.CharLimit = 7
 
 	return [6]textinput.Model{wlInput, targetInput, optsInput, chunksInput, workerInput, modeInput}
@@ -268,6 +273,9 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
 		return nil
 	}
+	opCfg, _ := operator.LoadConfig()
+	cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
+	outputDir := operator.ResolveOutputDir("", opCfg)
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
@@ -286,6 +294,8 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 				ToolName:       m.toolName,
 				ToolOptions:    strings.TrimSpace(m.inputs[cfgFieldOptions].Value()),
 				PostDeployView: core.ViewGenericStatus,
+				CleanupPolicy:  cleanupPolicy,
+				OutputDir:      outputDir,
 			},
 		}
 	}
@@ -328,6 +338,9 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		return nil
 	}
 
+	wlCfg, _ := operator.LoadConfig()
+	wlCleanup := operator.ResolveCleanupPolicy("", wlCfg)
+	wlOutDir := operator.ResolveOutputDir("", wlCfg)
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
@@ -348,6 +361,8 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 				WordlistContent: msg.content,
 				RuntimeTarget:   runtimeTarget,
 				ChunkCount:      chunkCount,
+				CleanupPolicy:   wlCleanup,
+				OutputDir:       wlOutDir,
 			},
 		}
 	}
