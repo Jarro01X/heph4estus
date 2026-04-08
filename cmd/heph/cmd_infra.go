@@ -9,6 +9,7 @@ import (
 
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/operator"
 )
 
 // resolveToolConfig validates the backend flag and delegates to infra.ResolveToolConfig.
@@ -57,9 +58,9 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 		return err
 	}
 
-	if *region == "" {
-		*region = infra.AWSRegion()
-	}
+	// Resolve region from operator config when not explicitly set.
+	opCfg, _ := operator.LoadConfig()
+	*region = operator.ResolveRegion(*region, opCfg)
 
 	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
 		ToolConfig:  cfg,

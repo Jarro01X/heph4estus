@@ -148,9 +148,15 @@ func RunDestroy(ctx context.Context, cfg *ToolConfig, stream io.Writer, log logg
 	return nil
 }
 
+// EnsureResult holds the outputs and lifecycle metadata from EnsureInfra.
+type EnsureResult struct {
+	Outputs map[string]string
+	Reused  bool // true when existing infrastructure was reused without deploy
+}
+
 // EnsureInfra runs the lifecycle check and, if needed, deploys infrastructure.
-// Returns the terraform outputs ready for use by scan commands.
-func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, region string, stream io.Writer, promptFunc func(string) bool, log logger.Logger) (map[string]string, error) {
+// Returns the terraform outputs and whether infra was reused.
+func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, region string, stream io.Writer, promptFunc func(string) bool, log logger.Logger) (*EnsureResult, error) {
 	tf := NewTerraformClient(log)
 
 	// Probe current state.
@@ -163,7 +169,7 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 
 	switch decision.Decision {
 	case DecisionReuse:
-		return probe.Outputs, nil
+		return &EnsureResult{Outputs: probe.Outputs, Reused: true}, nil
 
 	case DecisionBlock:
 		return nil, fmt.Errorf("lifecycle blocked: %s", decision.Message)
@@ -179,7 +185,7 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 		if err != nil {
 			return nil, err
 		}
-		return result.Outputs, nil
+		return &EnsureResult{Outputs: result.Outputs, Reused: false}, nil
 
 	default:
 		return nil, fmt.Errorf("unexpected lifecycle decision: %s", decision.Decision)

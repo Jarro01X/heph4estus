@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/operator"
 	nmaptool "heph4estus/internal/tools/nmap"
 )
 
@@ -131,6 +132,7 @@ func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
 		testOutputs(),
 		"results-bucket",
 		"queue-url",
+		operator.NoopTracker(),
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -157,6 +159,7 @@ func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
 		testOutputs(),
 		"results-bucket",
 		"queue-url",
+		operator.NoopTracker(),
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -184,6 +187,8 @@ func TestRunNmapScanWithDepsStartedFalseOnLaunchFailure(t *testing.T) {
 		&mockQueue{},
 		&mockStorage{},
 		&mockCompute{runContainerErr: errors.New("launch failed")},
+		operator.NoopTracker(),
+		"job-1",
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -211,11 +216,72 @@ func TestRunNmapScanWithDepsStartedTrueOnOutputFailure(t *testing.T) {
 		&mockQueue{},
 		&mockStorage{count: 1, listErr: errors.New("list failed")},
 		&mockCompute{},
+		operator.NoopTracker(),
+		"job-1",
 	)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !started {
 		t.Fatal("expected started=true after successful worker launch")
+	}
+}
+
+func TestPrintRunSummaryReused(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	printRunSummary("nmap-20260408-abc", "nmap", true, "reuse", "")
+
+	w.Close()
+	os.Stderr = old
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	checks := []string{
+		"Run Summary",
+		"Job:      nmap-20260408-abc",
+		"Tool:     nmap",
+		"Infra:    reused existing",
+		"Cleanup:  reuse",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("summary missing %q\ngot:\n%s", check, output)
+		}
+	}
+	if strings.Contains(output, "Output:") {
+		t.Error("summary should not show Output when empty")
+	}
+}
+
+func TestPrintRunSummaryDeployedWithOutput(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	printRunSummary("httpx-20260408-def", "httpx", false, "destroy-after", "/tmp/results/httpx/httpx-20260408-def")
+
+	w.Close()
+	os.Stderr = old
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	checks := []string{
+		"Job:      httpx-20260408-def",
+		"Tool:     httpx",
+		"Infra:    freshly deployed",
+		"Cleanup:  destroy-after",
+		"Output:   /tmp/results/httpx/httpx-20260408-def",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("summary missing %q\ngot:\n%s", check, output)
+		}
 	}
 }

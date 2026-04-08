@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -82,13 +84,16 @@ func TestNmapInvalidFormat(t *testing.T) {
 	}
 }
 
-func TestNmapInvalidWorkers(t *testing.T) {
-	err := run([]string{"nmap", "--file", "targets.txt", "--workers", "0"}, testLogger())
+func TestNmapZeroWorkersResolvesToDefault(t *testing.T) {
+	// --workers 0 should resolve to the built-in default (10), not error.
+	// The command will fail later when reading the target file, proving
+	// it got past the workers validation.
+	err := run([]string{"nmap", "--file", "/nonexistent/targets.txt", "--workers", "0"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for zero workers")
+		t.Fatal("expected error (file not found)")
 	}
-	if !strings.Contains(err.Error(), "--workers must be positive") {
-		t.Fatalf("unexpected error: %v", err)
+	if strings.Contains(err.Error(), "--workers must be positive") {
+		t.Fatal("--workers 0 should resolve to default, not error")
 	}
 }
 
@@ -194,13 +199,16 @@ func TestScanInvalidComputeMode(t *testing.T) {
 	}
 }
 
-func TestScanInvalidWorkers(t *testing.T) {
-	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--workers", "0"}, testLogger())
+func TestScanZeroWorkersResolvesToDefault(t *testing.T) {
+	// --workers 0 should resolve to the built-in default (10), not error.
+	// The command will fail later when reading the target file, proving
+	// it got past the workers validation.
+	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt", "--workers", "0"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for zero workers")
+		t.Fatal("expected error (file not found)")
 	}
-	if !strings.Contains(err.Error(), "--workers must be positive") {
-		t.Fatalf("unexpected error: %v", err)
+	if strings.Contains(err.Error(), "--workers must be positive") {
+		t.Fatal("--workers 0 should resolve to default, not error")
 	}
 }
 
@@ -301,10 +309,65 @@ func TestInfraDestroyUnknownTool(t *testing.T) {
 
 // --- status subcommand ---
 
-func TestStatusPlaceholder(t *testing.T) {
+func TestStatusRequiresJobID(t *testing.T) {
 	err := run([]string{"status"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error when --job-id is missing")
+	}
+	if !strings.Contains(err.Error(), "--job-id flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --- doctor subcommand ---
+
+func TestDoctorHelp(t *testing.T) {
+	err := run([]string{"doctor", "--help"}, testLogger())
+	if err == nil {
+		t.Fatal("expected flag.ErrHelp wrapped error")
+	}
+	if !strings.Contains(err.Error(), "flag: help requested") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDoctorInvalidFormat(t *testing.T) {
+	err := run([]string{"doctor", "--format", "xml"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid format")
+	}
+	if !strings.Contains(err.Error(), "--format must be") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDoctorRuns(t *testing.T) {
+	// Doctor should run without panicking. It may return an exitError if
+	// some checks fail (which is expected in a test environment), but it
+	// should not return a random unexpected error.
+	err := run([]string{"doctor", "--format", "json"}, testLogger())
 	if err != nil {
-		t.Fatalf("status placeholder returned error: %v", err)
+		var ee exitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("unexpected error type: %v", err)
+		}
+	}
+}
+
+// --- init subcommand ---
+
+func TestInitShowFlag(t *testing.T) {
+	// init --show should not error even with no config file.
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := run([]string{"init", "--show"}, testLogger())
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("init --show returned error: %v", err)
 	}
 }
 
