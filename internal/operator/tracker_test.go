@@ -59,7 +59,7 @@ func TestTracker_Complete(t *testing.T) {
 	store := NewJobStoreAt(t.TempDir())
 	tr := NewTracker(store)
 
-	store.Create(&JobRecord{
+	_ = store.Create(&JobRecord{
 		JobID:     "complete-job",
 		ToolName:  "httpx",
 		Phase:     PhaseScanning,
@@ -83,7 +83,7 @@ func TestTracker_Fail(t *testing.T) {
 	store := NewJobStoreAt(t.TempDir())
 	tr := NewTracker(store)
 
-	store.Create(&JobRecord{
+	_ = store.Create(&JobRecord{
 		JobID:    "fail-job",
 		ToolName: "nmap",
 		Phase:    PhaseLaunching,
@@ -106,7 +106,7 @@ func TestTracker_FailWithNilError(t *testing.T) {
 	store := NewJobStoreAt(t.TempDir())
 	tr := NewTracker(store)
 
-	store.Create(&JobRecord{
+	_ = store.Create(&JobRecord{
 		JobID:    "fail-nil",
 		ToolName: "nmap",
 		Phase:    PhaseScanning,
@@ -158,7 +158,7 @@ func TestTracker_CreateAutoPopulatesPrefixes(t *testing.T) {
 		ToolName: "httpx",
 		Phase:    PhaseEnqueuing,
 	}
-	tr.Create(rec)
+	_ = tr.Create(rec)
 
 	loaded, _ := store.Load("prefix-test")
 	if loaded.ResultPrefix != "scans/httpx/prefix-test/results/" {
@@ -180,7 +180,7 @@ func TestTracker_CreatePreservesExplicitPrefixes(t *testing.T) {
 		ResultPrefix:   "custom/results/",
 		ArtifactPrefix: "custom/artifacts/",
 	}
-	tr.Create(rec)
+	_ = tr.Create(rec)
 
 	loaded, _ := store.Load("custom-prefix")
 	if loaded.ResultPrefix != "custom/results/" {

@@ -92,7 +92,7 @@ func SaveConfigTo(cfg *OperatorConfig, path string) error {
 		return fmt.Errorf("writing operator config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("committing operator config: %w", err)
 	}
 	return nil
@@ -176,15 +176,15 @@ func ResolveRegion(explicit string, cfg *OperatorConfig) string {
 func ApplyEnvDefaults(cfg *OperatorConfig) {
 	if cfg.Region != "" {
 		if os.Getenv("AWS_REGION") == "" {
-			os.Setenv("AWS_REGION", cfg.Region)
+			_ = os.Setenv("AWS_REGION", cfg.Region)
 		}
 		if os.Getenv("AWS_DEFAULT_REGION") == "" {
-			os.Setenv("AWS_DEFAULT_REGION", cfg.Region)
+			_ = os.Setenv("AWS_DEFAULT_REGION", cfg.Region)
 		}
 	}
 	if cfg.Profile != "" {
 		if os.Getenv("AWS_PROFILE") == "" {
-			os.Setenv("AWS_PROFILE", cfg.Profile)
+			_ = os.Setenv("AWS_PROFILE", cfg.Profile)
 		}
 	}
 }

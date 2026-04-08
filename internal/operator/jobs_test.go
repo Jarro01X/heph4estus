@@ -89,7 +89,7 @@ func TestJobStore_Update(t *testing.T) {
 		ToolName: "nmap",
 		Phase:    PhaseEnqueuing,
 	}
-	store.Create(rec)
+	_ = store.Create(rec)
 
 	rec.Phase = PhaseScanning
 	rec.TotalTasks = 50
@@ -117,9 +117,9 @@ func TestJobStore_UpdateNotFound(t *testing.T) {
 func TestJobStore_List(t *testing.T) {
 	store := NewJobStoreAt(t.TempDir())
 
-	store.Create(&JobRecord{JobID: "job-a", ToolName: "nmap", Phase: PhaseEnqueuing})
-	store.Create(&JobRecord{JobID: "job-b", ToolName: "httpx", Phase: PhaseComplete})
-	store.Create(&JobRecord{JobID: "job-c", ToolName: "ffuf", Phase: PhaseFailed})
+	_ = store.Create(&JobRecord{JobID: "job-a", ToolName: "nmap", Phase: PhaseEnqueuing})
+	_ = store.Create(&JobRecord{JobID: "job-b", ToolName: "httpx", Phase: PhaseComplete})
+	_ = store.Create(&JobRecord{JobID: "job-c", ToolName: "ffuf", Phase: PhaseFailed})
 
 	ids, err := store.List()
 	if err != nil {
@@ -162,7 +162,7 @@ func TestJobStore_CreatedAtPreserved(t *testing.T) {
 		Phase:     PhaseEnqueuing,
 		CreatedAt: custom,
 	}
-	store.Create(rec)
+	_ = store.Create(rec)
 
 	loaded, _ := store.Load("time-test")
 	if !loaded.CreatedAt.Equal(custom) {
@@ -189,7 +189,7 @@ func TestJobRecord_AllFields(t *testing.T) {
 		LastError:      "",
 		LocalOutputDir: "/tmp/out",
 	}
-	store.Create(rec)
+	_ = store.Create(rec)
 
 	loaded, _ := store.Load("full-test")
 	if loaded.TotalWords != 5000 {

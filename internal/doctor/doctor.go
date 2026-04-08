@@ -245,7 +245,7 @@ func checkConfigDirWritable(deps Deps) CheckResult {
 			Fix:     fmt.Sprintf("Fix permissions on %s.", dir),
 		}
 	}
-	os.Remove(probe)
+	_ = os.Remove(probe)
 
 	return CheckResult{
 		Name:    "config_dir",

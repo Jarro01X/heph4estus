@@ -27,7 +27,7 @@ func TestInitShowEmptyConfig(t *testing.T) {
 
 	cfg := &operator.OperatorConfig{}
 	err := printConfig(cfg)
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -60,7 +60,7 @@ func TestInitShowPopulatedConfig(t *testing.T) {
 		OutputDir:     "/tmp/results",
 	}
 	err := printConfig(cfg)
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -102,7 +102,7 @@ func TestInitNonInteractiveWritesConfig(t *testing.T) {
 	os.Stdout = w
 
 	err := runInitNonInteractive(cfg, explicit, "eu-west-1", "", 25, "", "", "")
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	// The function saves to the default path, but we test the in-memory cfg.

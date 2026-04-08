@@ -78,7 +78,9 @@ func TestSaveConfig_CreatesDirectory(t *testing.T) {
 func TestLoadConfigFrom_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte("{invalid json"), 0o600)
+	if err := os.WriteFile(path, []byte("{invalid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := LoadConfigFrom(path)
 	if err == nil {
@@ -118,8 +120,8 @@ func TestApplyEnvDefaults_SetsWhenEmpty(t *testing.T) {
 	// Save and restore env.
 	for _, k := range []string{"AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"} {
 		old := os.Getenv(k)
-		t.Cleanup(func() { os.Setenv(k, old) })
-		os.Unsetenv(k)
+		t.Cleanup(func() { _ = os.Setenv(k, old) })
+		_ = os.Unsetenv(k)
 	}
 
 	cfg := &OperatorConfig{Region: "eu-central-1", Profile: "dev"}
@@ -139,12 +141,12 @@ func TestApplyEnvDefaults_SetsWhenEmpty(t *testing.T) {
 func TestApplyEnvDefaults_DoesNotOverride(t *testing.T) {
 	for _, k := range []string{"AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"} {
 		old := os.Getenv(k)
-		t.Cleanup(func() { os.Setenv(k, old) })
+		t.Cleanup(func() { _ = os.Setenv(k, old) })
 	}
 
-	os.Setenv("AWS_REGION", "existing-region")
-	os.Setenv("AWS_DEFAULT_REGION", "existing-default")
-	os.Setenv("AWS_PROFILE", "existing-profile")
+	t.Setenv("AWS_REGION", "existing-region")
+	t.Setenv("AWS_DEFAULT_REGION", "existing-default")
+	t.Setenv("AWS_PROFILE", "existing-profile")
 
 	cfg := &OperatorConfig{Region: "new-region", Profile: "new-profile"}
 	ApplyEnvDefaults(cfg)
@@ -208,8 +210,8 @@ func TestResolveRegion(t *testing.T) {
 	// Clear env for clean tests.
 	for _, k := range []string{"AWS_REGION", "AWS_DEFAULT_REGION"} {
 		old := os.Getenv(k)
-		t.Cleanup(func() { os.Setenv(k, old) })
-		os.Unsetenv(k)
+		t.Cleanup(func() { _ = os.Setenv(k, old) })
+		_ = os.Unsetenv(k)
 	}
 
 	t.Run("explicit wins", func(t *testing.T) {
@@ -220,8 +222,7 @@ func TestResolveRegion(t *testing.T) {
 	})
 
 	t.Run("env wins over config", func(t *testing.T) {
-		os.Setenv("AWS_REGION", "ap-south-1")
-		t.Cleanup(func() { os.Unsetenv("AWS_REGION") })
+		t.Setenv("AWS_REGION", "ap-south-1")
 		got := ResolveRegion("", &OperatorConfig{Region: "us-west-2"})
 		if got != "ap-south-1" {
 			t.Errorf("got %q, want ap-south-1", got)
@@ -229,8 +230,8 @@ func TestResolveRegion(t *testing.T) {
 	})
 
 	t.Run("config used when env empty", func(t *testing.T) {
-		os.Unsetenv("AWS_REGION")
-		os.Unsetenv("AWS_DEFAULT_REGION")
+		_ = os.Unsetenv("AWS_REGION")
+		_ = os.Unsetenv("AWS_DEFAULT_REGION")
 		got := ResolveRegion("", &OperatorConfig{Region: "us-west-2"})
 		if got != "us-west-2" {
 			t.Errorf("got %q, want us-west-2", got)
@@ -238,8 +239,8 @@ func TestResolveRegion(t *testing.T) {
 	})
 
 	t.Run("falls back to us-east-1", func(t *testing.T) {
-		os.Unsetenv("AWS_REGION")
-		os.Unsetenv("AWS_DEFAULT_REGION")
+		_ = os.Unsetenv("AWS_REGION")
+		_ = os.Unsetenv("AWS_DEFAULT_REGION")
 		got := ResolveRegion("", &OperatorConfig{})
 		if got != "us-east-1" {
 			t.Errorf("got %q, want us-east-1", got)
@@ -294,8 +295,8 @@ func TestResolveOutputDir(t *testing.T) {
 func TestApplyEnvDefaults_EmptyConfig(t *testing.T) {
 	for _, k := range []string{"AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"} {
 		old := os.Getenv(k)
-		t.Cleanup(func() { os.Setenv(k, old) })
-		os.Unsetenv(k)
+		t.Cleanup(func() { _ = os.Setenv(k, old) })
+		_ = os.Unsetenv(k)
 	}
 
 	cfg := &OperatorConfig{}

@@ -47,7 +47,7 @@ func runStatus(args []string, log logger.Logger) error {
 	}
 
 	if *jobID == "" {
-		return fmt.Errorf("--job-id flag is required\n\nUsage: heph status --job-id <id> [--format text|json]\n\nTip: job IDs are printed when a scan starts (e.g. nmap-20260407t... )")
+		return fmt.Errorf("--job-id flag is required; usage: heph status --job-id <id> [--format text|json]")
 	}
 	if *format != "text" && *format != "json" {
 		return fmt.Errorf("--format must be text or json")
@@ -142,26 +142,26 @@ func outputStatusJSON(snap statusSnapshot) error {
 }
 
 func outputStatusText(snap statusSnapshot) error {
-	fmt.Fprintf(os.Stdout, "Job:       %s\n", snap.JobID)
-	fmt.Fprintf(os.Stdout, "Tool:      %s\n", snap.Tool)
-	fmt.Fprintf(os.Stdout, "Phase:     %s\n", snap.Phase)
-	fmt.Fprintf(os.Stdout, "Progress:  %d / %d  (%.1f%%)\n", snap.Progress.Completed, snap.Progress.Total, snap.Progress.Percent)
-	fmt.Fprintf(os.Stdout, "Elapsed:   %s\n", snap.Elapsed)
+	_, _ = fmt.Fprintf(os.Stdout, "Job:       %s\n", snap.JobID)
+	_, _ = fmt.Fprintf(os.Stdout, "Tool:      %s\n", snap.Tool)
+	_, _ = fmt.Fprintf(os.Stdout, "Phase:     %s\n", snap.Phase)
+	_, _ = fmt.Fprintf(os.Stdout, "Progress:  %d / %d  (%.1f%%)\n", snap.Progress.Completed, snap.Progress.Total, snap.Progress.Percent)
+	_, _ = fmt.Fprintf(os.Stdout, "Elapsed:   %s\n", snap.Elapsed)
 
 	if snap.CleanupPolicy != "" {
-		fmt.Fprintf(os.Stdout, "Cleanup:   %s\n", snap.CleanupPolicy)
+		_, _ = fmt.Fprintf(os.Stdout, "Cleanup:   %s\n", snap.CleanupPolicy)
 	}
 	if snap.ResultPrefix != "" {
-		fmt.Fprintf(os.Stdout, "Results:   %s\n", s3PrefixURI(snap.Bucket, snap.ResultPrefix))
+		_, _ = fmt.Fprintf(os.Stdout, "Results:   %s\n", s3PrefixURI(snap.Bucket, snap.ResultPrefix))
 	}
 	if snap.ArtifactPrefix != "" {
-		fmt.Fprintf(os.Stdout, "Artifacts: %s\n", s3PrefixURI(snap.Bucket, snap.ArtifactPrefix))
+		_, _ = fmt.Fprintf(os.Stdout, "Artifacts: %s\n", s3PrefixURI(snap.Bucket, snap.ArtifactPrefix))
 	}
 	if snap.LocalOutputDir != "" {
-		fmt.Fprintf(os.Stdout, "Local:     %s\n", snap.LocalOutputDir)
+		_, _ = fmt.Fprintf(os.Stdout, "Local:     %s\n", snap.LocalOutputDir)
 	}
 	if snap.LastError != "" {
-		fmt.Fprintf(os.Stdout, "Error:     %s\n", snap.LastError)
+		_, _ = fmt.Fprintf(os.Stdout, "Error:     %s\n", snap.LastError)
 	}
 	return nil
 }
