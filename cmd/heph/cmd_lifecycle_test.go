@@ -234,7 +234,7 @@ func TestPrintRunSummaryReused(t *testing.T) {
 
 	printRunSummary("nmap-20260408-abc", "nmap", true, "reuse", "")
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = old
 
 	buf := make([]byte, 4096)
@@ -265,7 +265,7 @@ func TestPrintRunSummaryDeployedWithOutput(t *testing.T) {
 
 	printRunSummary("httpx-20260408-def", "httpx", false, "destroy-after", "/tmp/results/httpx/httpx-20260408-def")
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = old
 
 	buf := make([]byte, 4096)

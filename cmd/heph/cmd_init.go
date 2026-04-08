@@ -141,16 +141,16 @@ func promptField(reader *bufio.Reader, label, current, fallback string) string {
 }
 
 func printConfig(cfg *operator.OperatorConfig) error {
-	fmt.Fprintf(os.Stdout, "region:         %s\n", valueOrDash(cfg.Region))
-	fmt.Fprintf(os.Stdout, "profile:        %s\n", valueOrDash(cfg.Profile))
-	fmt.Fprintf(os.Stdout, "worker_count:   %s\n", intValueOrDash(cfg.WorkerCount))
-	fmt.Fprintf(os.Stdout, "compute_mode:   %s\n", valueOrDash(cfg.ComputeMode))
-	fmt.Fprintf(os.Stdout, "cleanup_policy: %s\n", valueOrDash(cfg.CleanupPolicy))
-	fmt.Fprintf(os.Stdout, "output_dir:     %s\n", valueOrDash(cfg.OutputDir))
+	_, _ = fmt.Fprintf(os.Stdout, "region:         %s\n", valueOrDash(cfg.Region))
+	_, _ = fmt.Fprintf(os.Stdout, "profile:        %s\n", valueOrDash(cfg.Profile))
+	_, _ = fmt.Fprintf(os.Stdout, "worker_count:   %s\n", intValueOrDash(cfg.WorkerCount))
+	_, _ = fmt.Fprintf(os.Stdout, "compute_mode:   %s\n", valueOrDash(cfg.ComputeMode))
+	_, _ = fmt.Fprintf(os.Stdout, "cleanup_policy: %s\n", valueOrDash(cfg.CleanupPolicy))
+	_, _ = fmt.Fprintf(os.Stdout, "output_dir:     %s\n", valueOrDash(cfg.OutputDir))
 
 	dir, err := operator.ConfigDir()
 	if err == nil {
-		fmt.Fprintf(os.Stdout, "\nConfig path: %s/config.json\n", dir)
+		_, _ = fmt.Fprintf(os.Stdout, "\nConfig path: %s/config.json\n", dir)
 	}
 	return nil
 }

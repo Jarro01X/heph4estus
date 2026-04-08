@@ -61,7 +61,7 @@ func runStatus(args []string, log logger.Logger) error {
 
 	rec, err := store.Load(*jobID)
 	if err != nil {
-		return fmt.Errorf("%w\n\nHint: run 'heph status' only for jobs started on this machine.\nJob records are stored locally and cannot be reconstructed from S3 alone.", err)
+		return fmt.Errorf("%w — run 'heph status' only for jobs started on this machine", err)
 	}
 
 	// Query live cloud progress if the job has a bucket and result prefix.
