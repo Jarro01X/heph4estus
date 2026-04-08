@@ -363,7 +363,7 @@ func TestInitShowFlag(t *testing.T) {
 	os.Stdout = w
 
 	err := run([]string{"init", "--show"}, testLogger())
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
