@@ -162,7 +162,7 @@ func runScan(args []string, log logger.Logger) error {
 	if *destroyAfter {
 		cleanupPolicy = "destroy-after"
 	}
-	tracker.Create(&operator.JobRecord{
+	_ = tracker.Create(&operator.JobRecord{
 		JobID:         jobID,
 		ToolName:      *tool,
 		Phase:         operator.PhaseEnqueuing,
@@ -183,9 +183,9 @@ func runScan(args []string, log logger.Logger) error {
 	}
 
 	if scanErr != nil {
-		tracker.Fail(jobID, scanErr)
+		_ = tracker.Fail(jobID, scanErr)
 	} else if started {
-		tracker.Complete(jobID)
+		_ = tracker.Complete(jobID)
 	}
 
 	// Export results locally before any cleanup.
@@ -203,7 +203,7 @@ func runScan(args []string, log logger.Logger) error {
 		if store := tracker.Store(); store != nil {
 			if rec, loadErr := store.Load(jobID); loadErr == nil {
 				rec.LocalOutputDir = result.Dir
-				store.Update(rec)
+				_ = store.Update(rec)
 			}
 		}
 	}
@@ -268,17 +268,17 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	if store := tracker.Store(); store != nil {
 		if rec, loadErr := store.Load(jobID); loadErr == nil {
 			rec.TotalTasks = len(tasks)
-			store.Update(rec)
+			_ = store.Update(rec)
 		}
 	}
-	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
 		return false, err
 	}
 
-	tracker.UpdatePhase(jobID, operator.PhaseScanning)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
@@ -300,13 +300,13 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 
 	// Update job record with wordlist metadata.
-	tracker.UpdatePhase(jobID, operator.PhaseUploading)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseUploading)
 	if store := tracker.Store(); store != nil {
 		if rec, loadErr := store.Load(jobID); loadErr == nil {
 			rec.TotalTasks = len(plan.Tasks)
 			rec.TotalWords = plan.TotalWords
 			rec.RuntimeTarget = runtimeTarget
-			store.Update(rec)
+			_ = store.Update(rec)
 		}
 	}
 
@@ -319,7 +319,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 
 	// Enqueue tasks.
-	tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
 	logStatus("Enqueueing %d chunk tasks...", len(plan.Tasks))
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
@@ -337,14 +337,14 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
 
-	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
 		return false, err
 	}
 
-	tracker.UpdatePhase(jobID, operator.PhaseScanning)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)

@@ -150,7 +150,7 @@ func (s *JobStore) write(rec *JobRecord) error {
 		return fmt.Errorf("writing job record: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("committing job record: %w", err)
 	}
 	return nil

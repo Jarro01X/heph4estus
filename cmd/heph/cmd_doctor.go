@@ -53,14 +53,14 @@ func outputDoctorText(results []doctor.CheckResult) error {
 			icon = "[FAIL]"
 			failCount++
 		}
-		fmt.Fprintf(os.Stdout, "  %s %s\n", icon, r.Summary)
+		_, _ = fmt.Fprintf(os.Stdout, "  %s %s\n", icon, r.Summary)
 		if r.Fix != "" {
-			fmt.Fprintf(os.Stdout, "         -> %s\n", r.Fix)
+			_, _ = fmt.Fprintf(os.Stdout, "         -> %s\n", r.Fix)
 		}
 	}
 
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintf(os.Stdout, "Results: %d passed, %d warnings, %d failed\n", passCount, warnCount, failCount)
+	_, _ = fmt.Fprintln(os.Stdout)
+	_, _ = fmt.Fprintf(os.Stdout, "Results: %d passed, %d warnings, %d failed\n", passCount, warnCount, failCount)
 
 	if failCount > 0 {
 		return exitError{code: 1}

@@ -127,7 +127,7 @@ func runNmap(args []string, log logger.Logger) error {
 	if *destroyAfter {
 		cleanupPolicy = "destroy-after"
 	}
-	tracker.Create(&operator.JobRecord{
+	_ = tracker.Create(&operator.JobRecord{
 		JobID:         jobID,
 		ToolName:      "nmap",
 		Phase:         operator.PhaseEnqueuing,
@@ -160,7 +160,7 @@ func runNmap(args []string, log logger.Logger) error {
 	if store := tracker.Store(); store != nil {
 		if rec, loadErr := store.Load(jobID); loadErr == nil {
 			rec.Bucket = outputs["s3_bucket_name"]
-			store.Update(rec)
+			_ = store.Update(rec)
 		}
 	}
 
@@ -168,9 +168,9 @@ func runNmap(args []string, log logger.Logger) error {
 	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID)
 
 	if scanErr != nil {
-		tracker.Fail(jobID, scanErr)
+		_ = tracker.Fail(jobID, scanErr)
 	} else if started {
-		tracker.Complete(jobID)
+		_ = tracker.Complete(jobID)
 	}
 
 	// Export results locally before any cleanup.
@@ -196,7 +196,7 @@ func runNmap(args []string, log logger.Logger) error {
 		if store := tracker.Store(); store != nil {
 			if rec, loadErr := store.Load(jobID); loadErr == nil {
 				rec.LocalOutputDir = result.Dir
-				store.Update(rec)
+				_ = store.Update(rec)
 			}
 		}
 	}
@@ -274,7 +274,7 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 	}
 	logStatus("Enqueued %d targets", len(tasks))
 
-	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
 	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
@@ -330,7 +330,7 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 		logStatus("Launched %d Fargate tasks", workers)
 	}
 
-	tracker.UpdatePhase(jobID, operator.PhaseScanning)
+	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
 	logStatus("Scanning...")
@@ -454,22 +454,22 @@ func splitOutputList(s string) []string {
 
 // logStatus prints a status line to stderr (keeps stdout clean for results).
 func logStatus(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
 
 // printRunSummary writes a concise post-run summary to stderr.
 func printRunSummary(jobID, tool string, reused bool, cleanupPolicy, localOutputDir string) {
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "── Run Summary ──")
-	fmt.Fprintf(os.Stderr, "  Job:      %s\n", jobID)
-	fmt.Fprintf(os.Stderr, "  Tool:     %s\n", tool)
+	_, _ = fmt.Fprintln(os.Stderr, "")
+	_, _ = fmt.Fprintln(os.Stderr, "── Run Summary ──")
+	_, _ = fmt.Fprintf(os.Stderr, "  Job:      %s\n", jobID)
+	_, _ = fmt.Fprintf(os.Stderr, "  Tool:     %s\n", tool)
 	if reused {
-		fmt.Fprintln(os.Stderr, "  Infra:    reused existing")
+		_, _ = fmt.Fprintln(os.Stderr, "  Infra:    reused existing")
 	} else {
-		fmt.Fprintln(os.Stderr, "  Infra:    freshly deployed")
+		_, _ = fmt.Fprintln(os.Stderr, "  Infra:    freshly deployed")
 	}
-	fmt.Fprintf(os.Stderr, "  Cleanup:  %s\n", cleanupPolicy)
+	_, _ = fmt.Fprintf(os.Stderr, "  Cleanup:  %s\n", cleanupPolicy)
 	if localOutputDir != "" {
-		fmt.Fprintf(os.Stderr, "  Output:   %s\n", localOutputDir)
+		_, _ = fmt.Fprintf(os.Stderr, "  Output:   %s\n", localOutputDir)
 	}
 }

@@ -223,14 +223,14 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub JobSubmitter, tracker Progre
 // trackPhase updates the job record if a tracker is available.
 func (m *StatusModel) trackPhase(phase operator.Phase) {
 	if m.jobTracker != nil && m.infra.JobID != "" {
-		m.jobTracker.UpdatePhase(m.infra.JobID, phase)
+		_ = m.jobTracker.UpdatePhase(m.infra.JobID, phase)
 	}
 }
 
 // trackFail marks the job as failed if a tracker is available.
 func (m *StatusModel) trackFail(err error) {
 	if m.jobTracker != nil && m.infra.JobID != "" {
-		m.jobTracker.Fail(m.infra.JobID, err)
+		_ = m.jobTracker.Fail(m.infra.JobID, err)
 	}
 }
 
@@ -238,7 +238,7 @@ func (m *StatusModel) trackCreate() {
 	if m.jobTracker == nil || m.infra.JobID == "" {
 		return
 	}
-	m.jobTracker.Create(&operator.JobRecord{
+	_ = m.jobTracker.Create(&operator.JobRecord{
 		JobID:       m.infra.JobID,
 		ToolName:    "nmap",
 		Phase:       operator.PhaseEnqueuing,
@@ -363,7 +363,7 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 
 		if m.completed >= m.totalTargets {
 			if m.jobTracker != nil && m.infra.JobID != "" {
-				m.jobTracker.Complete(m.infra.JobID)
+				_ = m.jobTracker.Complete(m.infra.JobID)
 			}
 			// Export gating: if destroy-after is set, export locally first.
 			if m.shouldExport() {

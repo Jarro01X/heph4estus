@@ -231,14 +231,14 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker Ge
 
 func (m *StatusModel) trackPhase(phase operator.Phase) {
 	if m.jobTracker != nil && m.infra.JobID != "" {
-		m.jobTracker.UpdatePhase(m.infra.JobID, phase)
+		_ = m.jobTracker.UpdatePhase(m.infra.JobID, phase)
 	}
 }
 
 // trackFail marks the job as failed if a tracker is available.
 func (m *StatusModel) trackFail(err error) {
 	if m.jobTracker != nil && m.infra.JobID != "" {
-		m.jobTracker.Fail(m.infra.JobID, err)
+		_ = m.jobTracker.Fail(m.infra.JobID, err)
 	}
 }
 
@@ -260,7 +260,7 @@ func (m *StatusModel) trackCreate() {
 	if m.isWordlist {
 		rec.Phase = operator.PhaseUploading
 	}
-	m.jobTracker.Create(rec)
+	_ = m.jobTracker.Create(rec)
 }
 
 func (m *StatusModel) Init() tea.Cmd {
@@ -418,7 +418,7 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 
 		if m.completed >= m.totalTargets {
 			if m.jobTracker != nil && m.infra.JobID != "" {
-				m.jobTracker.Complete(m.infra.JobID)
+				_ = m.jobTracker.Complete(m.infra.JobID)
 			}
 			if m.shouldExport() {
 				m.phase = phaseExporting
