@@ -206,7 +206,7 @@ func TestOutputStatusJSON(t *testing.T) {
 	os.Stdout = w
 
 	err := outputStatusJSON(snap)
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
