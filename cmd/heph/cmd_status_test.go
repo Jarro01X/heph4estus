@@ -252,7 +252,7 @@ func TestOutputStatusText(t *testing.T) {
 	os.Stdout = w
 
 	err := outputStatusText(snap)
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
