@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/worker"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
@@ -28,9 +29,10 @@ func runScan(args []string, log logger.Logger) error {
 	runtimeTarget := fs.String("target", "", "Runtime target / URL (wordlist modules, e.g. https://example.com/FUZZ)")
 	chunks := fs.Int("chunks", 0, "Number of wordlist chunks (default: worker count)")
 	options := fs.String("options", "", "Extra tool-specific options")
-	workers := fs.Int("workers", 10, "Number of worker tasks to launch")
-	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
+	workers := fs.Int("workers", 0, "Number of worker tasks to launch (default: from config or 10)")
+	computeMode := fs.String("compute-mode", "", "Compute mode: auto, fargate, or spot (default: from config or auto)")
 	format := fs.String("format", "text", "Output format: text or json")
+	outDir := fs.String("out", "", "Download results/artifacts to this directory after completion")
 
 	// Lifecycle flags.
 	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
@@ -39,6 +41,14 @@ func runScan(args []string, log logger.Logger) error {
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Resolve defaults from operator config.
+	opCfg, _ := operator.LoadConfig()
+	*workers = operator.ResolveWorkers(*workers, opCfg)
+	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
+	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
+		*outDir = opCfg.OutputDir
 	}
 
 	if *tool == "" {
@@ -118,7 +128,7 @@ func runScan(args []string, log logger.Logger) error {
 	ctx := mainContext()
 	region := infra.AWSRegion()
 
-	outputs, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
+	ensureResult, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
 		NoDeploy:     *noDeploy,
 		AutoApprove:  *autoApprove,
 		DestroyAfter: *destroyAfter,
@@ -126,6 +136,7 @@ func runScan(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
+	outputs := ensureResult.Outputs
 
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
@@ -145,17 +156,59 @@ func runScan(args []string, log logger.Logger) error {
 
 	jobID := jobs.NewID(*tool)
 
+	// Track the job.
+	tracker := newTracker()
+	cleanupPolicy := "reuse"
+	if *destroyAfter {
+		cleanupPolicy = "destroy-after"
+	}
+	tracker.Create(&operator.JobRecord{
+		JobID:         jobID,
+		ToolName:      *tool,
+		Phase:         operator.PhaseEnqueuing,
+		WorkerCount:   *workers,
+		ComputeMode:   *computeMode,
+		CleanupPolicy: cleanupPolicy,
+		Bucket:        bucket,
+	})
+
 	var (
 		scanErr error
 		started bool
 	)
 	if mod.InputType == modules.InputTypeWordlist {
-		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker)
 	} else {
-		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL)
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker)
 	}
 
-	// Destroy only after execution has actually started.
+	if scanErr != nil {
+		tracker.Fail(jobID, scanErr)
+	} else if started {
+		tracker.Complete(jobID)
+	}
+
+	// Export results locally before any cleanup.
+	var exportDir string
+	if *outDir != "" && scanErr == nil && started {
+		logStatus("Exporting results to %s...", *outDir)
+		result, exportErr := operator.ExportJob(ctx, storage, bucket, *tool, jobID, *outDir)
+		if exportErr != nil {
+			return fmt.Errorf("export failed: %w", exportErr)
+		}
+		exportDir = result.Dir
+		logStatus("Exported %d results, %d artifacts to %s", result.ResultCount, result.ArtifactCount, result.Dir)
+
+		// Record the local output path in the job record.
+		if store := tracker.Store(); store != nil {
+			if rec, loadErr := store.Load(jobID); loadErr == nil {
+				rec.LocalOutputDir = result.Dir
+				store.Update(rec)
+			}
+		}
+	}
+
+	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
 		logStatus("Destroying infrastructure (--destroy-after)...")
 		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
@@ -166,10 +219,15 @@ func runScan(args []string, log logger.Logger) error {
 		}
 	}
 
+	// Print run summary.
+	if started {
+		printRunSummary(jobID, *tool, ensureResult.Reused, cleanupPolicy, exportDir)
+	}
+
 	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) (bool, error) {
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker) (bool, error) {
 	targets := parseTargetLines(content)
 	if len(targets) == 0 {
 		return false, fmt.Errorf("no targets found in %s", inputFile)
@@ -206,16 +264,27 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	}
 	logStatus("Enqueued %d targets", len(tasks))
 
+	// Update job record with total task count.
+	if store := tracker.Store(); store != nil {
+		if rec, loadErr := store.Load(jobID); loadErr == nil {
+			rec.TotalTasks = len(tasks)
+			store.Update(rec)
+		}
+	}
+	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
+
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
 		return false, err
 	}
 
+	tracker.UpdatePhase(jobID, operator.PhaseScanning)
+
 	// Poll for progress.
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
 }
 
-func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string) (bool, error) {
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker) (bool, error) {
 	if chunks <= 0 {
 		chunks = workers
 	}
@@ -230,6 +299,17 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 		logStatus("Target: %s", runtimeTarget)
 	}
 
+	// Update job record with wordlist metadata.
+	tracker.UpdatePhase(jobID, operator.PhaseUploading)
+	if store := tracker.Store(); store != nil {
+		if rec, loadErr := store.Load(jobID); loadErr == nil {
+			rec.TotalTasks = len(plan.Tasks)
+			rec.TotalWords = plan.TotalWords
+			rec.RuntimeTarget = runtimeTarget
+			store.Update(rec)
+		}
+	}
+
 	// Upload chunks.
 	logStatus("Uploading %d chunks to s3://%s/...", len(plan.Tasks), bucket)
 	uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
@@ -239,6 +319,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 
 	// Enqueue tasks.
+	tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
 	logStatus("Enqueueing %d chunk tasks...", len(plan.Tasks))
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
@@ -256,10 +337,14 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
 
+	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
+
 	// Launch workers.
 	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
 		return false, err
 	}
+
+	tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)

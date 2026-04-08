@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"heph4estus/internal/logger"
+	"heph4estus/internal/operator"
 )
 
 // mainContext returns a background context for top-level CLI operations.
@@ -21,7 +22,9 @@ Commands:
   nmap     Run an nmap scan (auto-deploys infrastructure if needed)
   scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
   infra    Manage cloud infrastructure explicitly (deploy/destroy)
-  status   Check job status (planned)
+  status   Check job status (--job-id required)
+  doctor   Check prerequisites and environment health
+  init     Set up or update operator defaults (region, profile, workers, etc.)
 
 Run 'heph <command> --help' for command-specific usage.`
 
@@ -43,6 +46,10 @@ func run(args []string, log logger.Logger) error {
 		return runInfra(cmdArgs, log)
 	case "status":
 		return runStatus(cmdArgs, log)
+	case "doctor":
+		return runDoctor(cmdArgs, log)
+	case "init":
+		return runInit(cmdArgs, log)
 	case "--help", "-help", "-h":
 		fmt.Fprintln(os.Stderr, usage)
 		return nil
@@ -52,13 +59,33 @@ func run(args []string, log logger.Logger) error {
 	}
 }
 
+// newTracker returns a job tracker backed by the default store.
+// If the config directory is unavailable, returns a noop tracker
+// so CLI commands still work without job persistence.
+func newTracker() *operator.Tracker {
+	store, err := operator.NewJobStore()
+	if err != nil {
+		return operator.NoopTracker()
+	}
+	return operator.NewTracker(store)
+}
+
 func main() {
 	log := logger.NewSimpleLogger()
+
+	// Apply saved operator defaults (region, profile) when env is unset.
+	if cfg, err := operator.LoadConfig(); err == nil {
+		operator.ApplyEnvDefaults(cfg)
+	}
 
 	err := run(os.Args[1:], log)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
+		}
+		var ee exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
 		}
 		log.Error("%v", err)
 		os.Exit(1)

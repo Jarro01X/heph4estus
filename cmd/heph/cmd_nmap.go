@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tools/nmap"
 	"heph4estus/internal/worker"
 
@@ -32,8 +33,8 @@ func runNmap(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("nmap", flag.ContinueOnError)
 	inputFile := fs.String("file", "", "Path to file containing targets (required)")
 	defaultOptions := fs.String("default-options", "-sS", "Default nmap options")
-	workers := fs.Int("workers", 10, "Number of worker tasks to launch")
-	computeMode := fs.String("compute-mode", "auto", "Compute mode: auto, fargate, or spot")
+	workers := fs.Int("workers", 0, "Number of worker tasks to launch (default: from config or 10)")
+	computeMode := fs.String("compute-mode", "", "Compute mode: auto, fargate, or spot (default: from config or auto)")
 	mode := fs.String("mode", "target-only", "Distribution mode: target-only or target-ports")
 	portChunks := fs.Int("port-chunks", 5, "Number of port chunks per target (target-ports mode only)")
 	dnsServers := fs.String("dns-servers", "", "DNS servers for nmap (comma-separated)")
@@ -42,6 +43,8 @@ func runNmap(args []string, log logger.Logger) error {
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
 
+	outDir := fs.String("out", "", "Download results/artifacts to this directory after completion")
+
 	// Lifecycle flags.
 	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
 	autoApprove := fs.Bool("auto-approve", false, "Skip deploy confirmation prompts when lifecycle requires deploy")
@@ -49,6 +52,14 @@ func runNmap(args []string, log logger.Logger) error {
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Resolve defaults from operator config.
+	opCfg, _ := operator.LoadConfig()
+	*workers = operator.ResolveWorkers(*workers, opCfg)
+	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
+	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
+		*outDir = opCfg.OutputDir
 	}
 
 	if *inputFile == "" {
@@ -110,6 +121,22 @@ func runNmap(args []string, log logger.Logger) error {
 		logStatus("Parsed %d targets from %s [job %s]", len(tasks), *inputFile, jobID)
 	}
 
+	// Track the job.
+	tracker := newTracker()
+	cleanupPolicy := "reuse"
+	if *destroyAfter {
+		cleanupPolicy = "destroy-after"
+	}
+	tracker.Create(&operator.JobRecord{
+		JobID:         jobID,
+		ToolName:      "nmap",
+		Phase:         operator.PhaseEnqueuing,
+		TotalTasks:    len(tasks),
+		WorkerCount:   *workers,
+		ComputeMode:   *computeMode,
+		CleanupPolicy: cleanupPolicy,
+	})
+
 	// Resolve tool config and ensure infrastructure.
 	cfg, err := infra.ResolveToolConfig("nmap")
 	if err != nil {
@@ -119,7 +146,7 @@ func runNmap(args []string, log logger.Logger) error {
 	ctx := mainContext()
 	region := infra.AWSRegion()
 
-	outputs, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
+	ensureResult, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
 		NoDeploy:     *noDeploy,
 		AutoApprove:  *autoApprove,
 		DestroyAfter: *destroyAfter,
@@ -127,10 +154,54 @@ func runNmap(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
+	outputs := ensureResult.Outputs
 
-	// Run the scan. Destroy only after execution has actually started.
-	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log)
+	// Update job record with infra outputs.
+	if store := tracker.Store(); store != nil {
+		if rec, loadErr := store.Load(jobID); loadErr == nil {
+			rec.Bucket = outputs["s3_bucket_name"]
+			store.Update(rec)
+		}
+	}
 
+	// Run the scan.
+	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID)
+
+	if scanErr != nil {
+		tracker.Fail(jobID, scanErr)
+	} else if started {
+		tracker.Complete(jobID)
+	}
+
+	// Export results locally before any cleanup.
+	var exportDir string
+	if *outDir != "" && scanErr == nil && started {
+		bucket := outputs["s3_bucket_name"]
+		logStatus("Exporting results to %s...", *outDir)
+
+		awsConfig, awsErr := awscfg.LoadDefaultConfig(ctx)
+		if awsErr != nil {
+			return fmt.Errorf("loading AWS config for export: %w", awsErr)
+		}
+		storage := awscloud.NewProvider(awsConfig, log).Storage()
+
+		result, exportErr := operator.ExportJob(ctx, storage, bucket, "nmap", jobID, *outDir)
+		if exportErr != nil {
+			return fmt.Errorf("export failed: %w", exportErr)
+		}
+		exportDir = result.Dir
+		logStatus("Exported %d results, %d artifacts to %s", result.ResultCount, result.ArtifactCount, result.Dir)
+
+		// Record the local output path in the job record.
+		if store := tracker.Store(); store != nil {
+			if rec, loadErr := store.Load(jobID); loadErr == nil {
+				rec.LocalOutputDir = result.Dir
+				store.Update(rec)
+			}
+		}
+	}
+
+	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
 		logStatus("Destroying infrastructure (--destroy-after)...")
 		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
@@ -141,10 +212,15 @@ func runNmap(args []string, log logger.Logger) error {
 		}
 	}
 
+	// Print run summary.
+	if started {
+		printRunSummary(jobID, "nmap", ensureResult.Reused, cleanupPolicy, exportDir)
+	}
+
 	return scanErr
 }
 
-func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger) (bool, error) {
+func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
@@ -157,17 +233,15 @@ func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, comput
 		return false, fmt.Errorf("loading AWS config: %w", err)
 	}
 	provider := awscloud.NewProvider(awsConfig, log)
-	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute())
+	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID)
 }
 
-func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute) (bool, error) {
+func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
 		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
-
-	jobID := tasks[0].JobID
 
 	// Enqueue targets.
 	logStatus("Enqueueing %d targets...", len(tasks))
@@ -199,6 +273,8 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
 	logStatus("Enqueued %d targets", len(tasks))
+
+	tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
 	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
@@ -253,6 +329,8 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 		}
 		logStatus("Launched %d Fargate tasks", workers)
 	}
+
+	tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
 	logStatus("Scanning...")
@@ -377,4 +455,21 @@ func splitOutputList(s string) []string {
 // logStatus prints a status line to stderr (keeps stdout clean for results).
 func logStatus(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
+// printRunSummary writes a concise post-run summary to stderr.
+func printRunSummary(jobID, tool string, reused bool, cleanupPolicy, localOutputDir string) {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "── Run Summary ──")
+	fmt.Fprintf(os.Stderr, "  Job:      %s\n", jobID)
+	fmt.Fprintf(os.Stderr, "  Tool:     %s\n", tool)
+	if reused {
+		fmt.Fprintln(os.Stderr, "  Infra:    reused existing")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Infra:    freshly deployed")
+	}
+	fmt.Fprintf(os.Stderr, "  Cleanup:  %s\n", cleanupPolicy)
+	if localOutputDir != "" {
+		fmt.Fprintf(os.Stderr, "  Output:   %s\n", localOutputDir)
+	}
 }
