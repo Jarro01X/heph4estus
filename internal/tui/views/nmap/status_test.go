@@ -536,3 +536,223 @@ func (s *mockExportStorage) Upload(context.Context, string, string, []byte) erro
 func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
 func (s *mockExportStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
 func (s *mockExportStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+
+// --- Track 1 PR 5.12: auto-destroy lifecycle tests ---
+
+func TestStatusModel_ExportSuccess_DestroyAfter_TriggersDestroy(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = &mockDestroyer{}
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/nmap/job-123", count: 5})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+	if !m.infra.Exported {
+		t.Fatal("expected Exported to be true")
+	}
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+}
+
+func TestStatusModel_ExportSuccess_ReusePolicySkipsDestroy(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "reuse"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = &mockDestroyer{}
+	m.phase = phaseExporting
+
+	// Reuse policy export doesn't happen (shouldExport is false), but if it did,
+	// it would not trigger destroy because the exportCompleteMsg only fires when
+	// cleanup_policy is destroy-after. Simulate export complete for a non-destroy
+	// path — this shouldn't reach phaseDestroying because the code only reaches
+	// phaseExporting when shouldExport() returns true (which requires destroy-after).
+	// Instead, verify the reuse path goes directly to complete.
+	infra2 := testInfra()
+	infra2.CleanupPolicy = "reuse"
+	infra2.OutputDir = "/tmp/export"
+	m2 := NewStatusWithDeps(infra2, &mockSubmitter{}, &mockTracker{})
+	m2.totalTargets = 2
+	m2.phase = phaseScanning
+
+	_, _ = m2.Update(scanProgressMsg{completed: 2})
+	if m2.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete for reuse policy, got %d", m2.phase)
+	}
+}
+
+func TestStatusModel_ExportSuccess_NoDestroyer_ShowsWarning(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.storage = &mockExportStorage{}
+	// destroyer is nil
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/nmap/job-123", count: 5})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete when destroyer is nil, got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "no terraform directory") {
+		t.Fatalf("expected terraform warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestStatusModel_DestroySuccess_SetsDestroyed(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.phase = phaseDestroying
+
+	_, cmd := m.Update(autoDestroyCompleteMsg{err: nil})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !m.infra.Destroyed {
+		t.Fatal("expected Destroyed to be true")
+	}
+	if m.infra.DestroyErr != "" {
+		t.Fatalf("expected no DestroyErr, got %q", m.infra.DestroyErr)
+	}
+	if m.cleanupWarning != "" {
+		t.Fatalf("expected no cleanup warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestStatusModel_DestroyFailure_SetsDestroyErr(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.phase = phaseDestroying
+
+	_, cmd := m.Update(autoDestroyCompleteMsg{err: context.DeadlineExceeded})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if m.infra.Destroyed {
+		t.Fatal("expected Destroyed to remain false")
+	}
+	if m.infra.DestroyErr == "" {
+		t.Fatal("expected DestroyErr to be set")
+	}
+	if !strings.Contains(m.cleanupWarning, "destroy failed") {
+		t.Fatalf("expected destroy failure warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestStatusModel_ViewShowsDestroyingPhase(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = true
+	infra.ExportDir = "/tmp/export/nmap/job-123"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.totalTargets = 10
+	m.completed = 10
+	m.phase = phaseDestroying
+
+	v := m.View()
+	if !strings.Contains(v, "Destroying") {
+		t.Fatal("expected 'Destroying' in view during phaseDestroying")
+	}
+	if !strings.Contains(v, "/tmp/export/nmap/job-123") {
+		t.Fatal("expected export dir in view during phaseDestroying")
+	}
+}
+
+func TestStatusModel_ViewShowsDestroyedOnComplete(t *testing.T) {
+	infra := testInfra()
+	infra.Exported = true
+	infra.ExportDir = "/tmp/export/nmap/job-123"
+	infra.Destroyed = true
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.totalTargets = 10
+	m.completed = 10
+	m.phase = phaseComplete
+
+	v := m.View()
+	if !strings.Contains(v, "destroyed") {
+		t.Fatal("expected 'destroyed' label in view")
+	}
+}
+
+func TestStatusModel_AutoDestroyEndToEnd(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	destroyer := &mockDestroyer{}
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = destroyer
+	m.totalTargets = 2
+	m.phase = phaseScanning
+
+	// Scan complete triggers export.
+	_, cmd := m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseExporting {
+		t.Fatalf("expected phaseExporting, got %d", m.phase)
+	}
+
+	// Export succeeds, triggers destroy.
+	_, cmd = m.Update(exportCompleteMsg{dir: "/tmp/export/nmap/job-123", count: 2})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+
+	// Execute the destroy command.
+	msg := cmd()
+	destroyMsg, ok := msg.(autoDestroyCompleteMsg)
+	if !ok {
+		t.Fatalf("expected autoDestroyCompleteMsg, got %T", msg)
+	}
+	if destroyMsg.err != nil {
+		t.Fatalf("expected no destroy error, got %v", destroyMsg.err)
+	}
+	if !destroyer.called {
+		t.Fatal("expected destroyer to be called")
+	}
+
+	// Destroy complete, navigates to results.
+	_, cmd = m.Update(destroyMsg)
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !m.infra.Destroyed {
+		t.Fatal("expected Destroyed to be true")
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	navMsg := cmd()
+	nav, ok := navMsg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", navMsg)
+	}
+	if nav.Target != core.ViewNmapResults {
+		t.Fatalf("expected ViewNmapResults, got %v", nav.Target)
+	}
+	// Verify infra carries the cleanup outcome.
+	navInfra, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs in nav data, got %T", nav.Data)
+	}
+	if !navInfra.Destroyed {
+		t.Fatal("expected nav data to carry Destroyed=true")
+	}
+}

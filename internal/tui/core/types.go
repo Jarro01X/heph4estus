@@ -124,6 +124,10 @@ type InfraOutputs struct {
 	// Export state — set by status view after successful local export.
 	Exported  bool   // true if results were exported locally
 	ExportDir string // directory where results were exported
+
+	// Cleanup outcome — set by status view after auto-destroy attempt.
+	Destroyed  bool   // true if infra was automatically destroyed after export
+	DestroyErr string // non-empty if auto-destroy was attempted but failed
 }
 
 // LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.
