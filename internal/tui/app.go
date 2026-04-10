@@ -122,7 +122,7 @@ func (a *App) createStatusView(infra core.InfraOutputs) core.View {
 	provider := aws.NewProvider(awsCfg, log)
 	// counter is nil — falls back to Storage.Count(). A DynamoDB counter
 	// implementation can be wired here for 1M+ target scale.
-	return nmapview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker())
+	return nmapview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker(), a.buildDestroyer(infra.TerraformDir))
 }
 
 
@@ -146,12 +146,28 @@ func (a *App) createGenericStatusView(infra core.InfraOutputs) core.View {
 	}
 	log := nopLogger{}
 	provider := aws.NewProvider(awsCfg, log)
-	return genericview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker())
+	return genericview.NewStatus(infra, provider.Queue(), provider.Storage(), provider.Compute(), nil, a.newTracker(), a.buildDestroyer(infra.TerraformDir))
 }
 
 func (a *App) createGenericResultsView(infra core.InfraOutputs) core.View {
 	source, destroyer := a.buildResultsDeps(infra, infra.ToolName)
 	return genericview.NewResults(infra, source, destroyer)
+}
+
+// buildDestroyer creates a Destroyer for the given terraform directory, or nil
+// if no directory is provided.
+func (a *App) buildDestroyer(terraformDir string) core.Destroyer {
+	if terraformDir == "" {
+		return nil
+	}
+	log := nopLogger{}
+	tf := infraPkg.NewTerraformClient(log)
+	return &core.TerraformDestroyer{
+		DestroyFunc: func(ctx context.Context, workDir string) error {
+			return tf.Destroy(ctx, workDir, io.Discard)
+		},
+		WorkDir: terraformDir,
+	}
 }
 
 // buildResultsDeps returns the appropriate ResultsSource and Destroyer for a
@@ -181,18 +197,7 @@ func (a *App) buildResultsDeps(infra core.InfraOutputs, toolName string) (core.R
 		}
 	}
 
-	var destroyer core.Destroyer
-	if infra.TerraformDir != "" {
-		log := nopLogger{}
-		tf := infraPkg.NewTerraformClient(log)
-		destroyer = &core.TerraformDestroyer{
-			DestroyFunc: func(ctx context.Context, workDir string) error {
-				return tf.Destroy(ctx, workDir, io.Discard)
-			},
-			WorkDir: infra.TerraformDir,
-		}
-	}
-
+	destroyer := a.buildDestroyer(infra.TerraformDir)
 	return source, destroyer
 }
 

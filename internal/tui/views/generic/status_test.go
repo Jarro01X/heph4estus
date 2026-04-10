@@ -451,6 +451,191 @@ func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, e
 func (s *mockExportStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
 func (s *mockExportStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
 
+// --- Track 1 PR 5.12: auto-destroy lifecycle tests ---
+
+func TestGenericStatusExportSuccess_DestroyAfter_TriggersDestroy(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = &mockDestroyer{}
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 3})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+	if !m.infra.Exported {
+		t.Fatal("expected Exported to be true")
+	}
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+}
+
+func TestGenericStatusExportSuccess_NoDestroyer_ShowsWarning(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.storage = &mockExportStorage{}
+	// destroyer is nil
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 3})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete when destroyer is nil, got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "no terraform directory") {
+		t.Fatalf("expected terraform warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestGenericStatusDestroySuccess_SetsDestroyed(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.phase = phaseDestroying
+
+	_, cmd := m.Update(autoDestroyCompleteMsg{err: nil})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !m.infra.Destroyed {
+		t.Fatal("expected Destroyed to be true")
+	}
+	if m.infra.DestroyErr != "" {
+		t.Fatalf("expected no DestroyErr, got %q", m.infra.DestroyErr)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestGenericStatusDestroyFailure_SetsDestroyErr(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.phase = phaseDestroying
+
+	_, cmd := m.Update(autoDestroyCompleteMsg{err: fmt.Errorf("terraform timeout")})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if m.infra.Destroyed {
+		t.Fatal("expected Destroyed to remain false")
+	}
+	if m.infra.DestroyErr == "" {
+		t.Fatal("expected DestroyErr to be set")
+	}
+	if !strings.Contains(m.cleanupWarning, "destroy failed") {
+		t.Fatalf("expected destroy failure warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
+func TestGenericStatusViewShowsDestroyingPhase(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.Exported = true
+	infra.ExportDir = "/tmp/export/httpx/job-1"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 10
+	m.completed = 10
+	m.phase = phaseDestroying
+
+	v := m.View()
+	if !strings.Contains(v, "Destroying") {
+		t.Fatal("expected 'Destroying' in view during phaseDestroying")
+	}
+	if !strings.Contains(v, "/tmp/export/httpx/job-1") {
+		t.Fatal("expected export dir in view during phaseDestroying")
+	}
+}
+
+func TestGenericStatusViewShowsDestroyedOnComplete(t *testing.T) {
+	infra := testInfra()
+	infra.Exported = true
+	infra.ExportDir = "/tmp/export/httpx/job-1"
+	infra.Destroyed = true
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 10
+	m.completed = 10
+	m.phase = phaseComplete
+
+	v := m.View()
+	if !strings.Contains(v, "destroyed") {
+		t.Fatal("expected 'destroyed' label in view")
+	}
+}
+
+func TestGenericStatusAutoDestroyEndToEnd(t *testing.T) {
+	infra := testInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	destroyer := &mockDestroyer{}
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = destroyer
+	m.totalTargets = 2
+	m.phase = phaseScanning
+
+	// Scan complete triggers export.
+	_, cmd := m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseExporting {
+		t.Fatalf("expected phaseExporting, got %d", m.phase)
+	}
+
+	// Export succeeds, triggers destroy.
+	_, cmd = m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 2})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+
+	// Execute the destroy command.
+	msg := cmd()
+	destroyMsg, ok := msg.(autoDestroyCompleteMsg)
+	if !ok {
+		t.Fatalf("expected autoDestroyCompleteMsg, got %T", msg)
+	}
+	if !destroyer.called {
+		t.Fatal("expected destroyer to be called")
+	}
+
+	// Destroy complete, navigates to results.
+	_, cmd = m.Update(destroyMsg)
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !m.infra.Destroyed {
+		t.Fatal("expected Destroyed to be true")
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	navMsg := cmd()
+	nav, ok := navMsg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", navMsg)
+	}
+	if nav.Target != core.ViewGenericResults {
+		t.Fatalf("expected ViewGenericResults, got %v", nav.Target)
+	}
+	navInfra, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs in nav data, got %T", nav.Data)
+	}
+	if !navInfra.Destroyed {
+		t.Fatal("expected nav data to carry Destroyed=true")
+	}
+}
+
 func TestParseTargetLines(t *testing.T) {
 	tests := []struct {
 		content string

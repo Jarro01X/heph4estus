@@ -28,7 +28,8 @@ const (
 	phaseEnqueuing statusPhase = iota
 	phaseLaunching
 	phaseScanning
-	phaseExporting // exporting results locally before cleanup
+	phaseExporting  // exporting results locally before cleanup
+	phaseDestroying // auto-destroying infrastructure after export
 	phaseComplete
 )
 
@@ -57,6 +58,11 @@ type exportCompleteMsg struct {
 	dir   string
 	count int
 	err   error
+}
+
+// autoDestroyCompleteMsg reports the outcome of auto-destroy in the status view.
+type autoDestroyCompleteMsg struct {
+	err error
 }
 
 // SpotThreshold is the worker count at or above which auto mode selects spot
@@ -146,7 +152,8 @@ type StatusModel struct {
 	submitter  JobSubmitter
 	tracker    ProgressTracker
 	jobTracker *operator.Tracker
-	storage    cloud.Storage // for local export on completion
+	storage    cloud.Storage    // for local export on completion
+	destroyer  core.Destroyer   // for auto-destroy after export (nil = no destroy)
 	infra      core.InfraOutputs
 
 	phase        statusPhase
@@ -179,7 +186,7 @@ type rateSample struct {
 // counter may be nil — falls back to Storage.Count() for progress tracking.
 // When counter is provided and the target count is >= CounterThreshold, the
 // counter is used automatically for O(1) progress polling.
-func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter, jt *operator.Tracker) *StatusModel {
+func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter, jt *operator.Tracker, destroyer core.Destroyer) *StatusModel {
 	// Pre-count targets to decide tracking strategy.
 	scanner := nmaptool.NewScanner(nil)
 	targets := scanner.ParseTargets(infra.TargetsContent, infra.NmapOptions)
@@ -191,6 +198,7 @@ func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.
 		jt,
 	)
 	m.storage = s
+	m.destroyer = destroyer
 	return m
 }
 
@@ -381,9 +389,26 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	case exportCompleteMsg:
 		if msg.err != nil {
 			m.cleanupWarning = fmt.Sprintf("destroy-after skipped: export failed (%v)", msg.err)
+			m.phase = phaseComplete
+			return m, m.navigateToResults()
+		}
+		m.infra.Exported = true
+		m.infra.ExportDir = msg.dir
+		// Auto-destroy if destroy-after policy and destroyer is available.
+		if m.destroyer != nil {
+			m.phase = phaseDestroying
+			return m, m.runAutoDestroy()
+		}
+		m.cleanupWarning = "destroy-after skipped: no terraform directory"
+		m.phase = phaseComplete
+		return m, m.navigateToResults()
+
+	case autoDestroyCompleteMsg:
+		if msg.err != nil {
+			m.infra.DestroyErr = msg.err.Error()
+			m.cleanupWarning = fmt.Sprintf("destroy failed: %v", msg.err)
 		} else {
-			m.infra.Exported = true
-			m.infra.ExportDir = msg.dir
+			m.infra.Destroyed = true
 		}
 		m.phase = phaseComplete
 		return m, m.navigateToResults()
@@ -447,12 +472,23 @@ func (m *StatusModel) View() string {
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Output:"), m.infra.OutputDir)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 
+	case phaseDestroying:
+		b.WriteString(core.SelectedStyle.Render("  Destroying infrastructure...") + "\n\n")
+		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
+		if m.infra.Exported {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Exported:"), m.infra.ExportDir)
+		}
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
+
 	case phaseComplete:
 		b.WriteString(core.SuccessStyle.Render("  Scan complete!") + "\n\n")
 		fmt.Fprintf(&b, "  %s%d / %d\n", labelStyle.Render("Completed:"), m.completed, m.totalTargets)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 		if m.infra.Exported {
 			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Exported:"), m.infra.ExportDir)
+		}
+		if m.infra.Destroyed {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Infra:"), "destroyed")
 		}
 	}
 
@@ -579,6 +615,14 @@ func (m *StatusModel) exportResults() tea.Cmd {
 			return exportCompleteMsg{err: err}
 		}
 		return exportCompleteMsg{dir: result.Dir, count: result.ResultCount + result.ArtifactCount}
+	}
+}
+
+func (m *StatusModel) runAutoDestroy() tea.Cmd {
+	d := m.destroyer
+	return func() tea.Msg {
+		err := d.Destroy(context.Background())
+		return autoDestroyCompleteMsg{err: err}
 	}
 }
 
