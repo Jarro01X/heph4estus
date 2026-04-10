@@ -587,13 +587,13 @@ func TestGenericStatusAutoDestroyEndToEnd(t *testing.T) {
 	m.phase = phaseScanning
 
 	// Scan complete triggers export.
-	_, cmd := m.Update(scanProgressMsg{completed: 2})
+	_, _ = m.Update(scanProgressMsg{completed: 2})
 	if m.phase != phaseExporting {
 		t.Fatalf("expected phaseExporting, got %d", m.phase)
 	}
 
 	// Export succeeds, triggers destroy.
-	_, cmd = m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 2})
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 2})
 	if m.phase != phaseDestroying {
 		t.Fatalf("expected phaseDestroying, got %d", m.phase)
 	}
