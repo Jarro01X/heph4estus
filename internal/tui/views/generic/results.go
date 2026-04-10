@@ -103,13 +103,23 @@ func NewResults(infra core.InfraOutputs, source core.ResultsSource, destroyer co
 		FullSeparator:  lipgloss.NewStyle().Foreground(core.Steel),
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
-	return &ResultsModel{
+	m := &ResultsModel{
 		source:    source,
 		destroyer: destroyer,
 		infra:     infra,
 		results:   make(map[string]*worker.Result),
 		help:      h,
 	}
+
+	// Seed cleanup outcome from auto-destroy (set by status view).
+	if infra.Destroyed {
+		m.destroyed = true
+		m.destroyMsg = "Infrastructure destroyed successfully"
+	} else if infra.DestroyErr != "" {
+		m.destroyMsg = fmt.Sprintf("Auto-destroy failed: %s", infra.DestroyErr)
+	}
+
+	return m
 }
 
 func (m *ResultsModel) Init() tea.Cmd {
@@ -215,10 +225,11 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 
 	case destroyCompleteMsg:
 		m.destroying = false
-		m.destroyed = true
 		if msg.err != nil {
-			m.destroyMsg = fmt.Sprintf("Destroy failed: %v", msg.err)
+			m.destroyed = false // allow manual retry via 'd'
+			m.destroyMsg = fmt.Sprintf("Destroy failed: %v — press d to retry", msg.err)
 		} else {
+			m.destroyed = true
 			m.destroyMsg = "Infrastructure destroyed successfully"
 		}
 	}
@@ -234,7 +245,7 @@ func (m *ResultsModel) View() string {
 	b.WriteString("\n\n")
 
 	// Cleanup / export summary.
-	if m.infra.CleanupPolicy != "" || m.infra.Exported {
+	if m.infra.CleanupPolicy != "" || m.infra.Exported || m.destroyed {
 		summaryStyle := lipgloss.NewStyle().Foreground(core.Steel)
 		var parts []string
 		if m.infra.Reused {
@@ -245,6 +256,11 @@ func (m *ResultsModel) View() string {
 		}
 		if m.infra.Exported {
 			parts = append(parts, "exported: "+m.infra.ExportDir)
+		}
+		if m.destroyed {
+			parts = append(parts, "infra: destroyed")
+		} else if m.infra.DestroyErr != "" && !m.destroying {
+			parts = append(parts, "infra: retained (destroy failed)")
 		}
 		if len(parts) > 0 {
 			b.WriteString("  " + summaryStyle.Render(strings.Join(parts, "  |  ")) + "\n\n")
@@ -316,7 +332,11 @@ func (m *ResultsModel) View() string {
 	}
 
 	b.WriteString("\n\n")
-	helpBar := core.StatusBarStyle.Render(m.help.View(resultsKeys))
+	keys := resultsKeys
+	if m.destroyed {
+		keys.Destroy = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "destroy infra"), key.WithDisabled())
+	}
+	helpBar := core.StatusBarStyle.Render(m.help.View(keys))
 	b.WriteString(helpBar)
 
 	content := b.String()

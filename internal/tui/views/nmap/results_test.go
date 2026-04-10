@@ -219,6 +219,108 @@ func TestResultsModel_DestroyExecutes(t *testing.T) {
 	}
 }
 
+func TestResultsModel_DestroyFailureAllowsRetry(t *testing.T) {
+	s := testResultsSource()
+	destroyer := &mockDestroyer{err: fmt.Errorf("terraform error")}
+	infra := testInfra()
+	infra.Exported = true
+	infra.ExportDir = "/tmp/out"
+	m := NewResults(infra, s, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	msg = cmd()
+	m.Update(msg)
+
+	if m.destroyed {
+		t.Fatal("expected destroyed=false after failure")
+	}
+	if !strings.Contains(m.destroyMsg, "press d to retry") {
+		t.Fatalf("expected retry hint, got %q", m.destroyMsg)
+	}
+
+	// Retry should work.
+	destroyer.err = nil
+	destroyer.called = false
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("expected destroy command on retry")
+	}
+	msg = cmd()
+	m.Update(msg)
+
+	if !m.destroyed {
+		t.Fatal("expected destroyed=true after successful retry")
+	}
+}
+
+func TestResultsModel_AutoDestroyedHidesKey(t *testing.T) {
+	s := testResultsSource()
+	infra := testInfra()
+	infra.Destroyed = true
+	infra.Exported = true
+	infra.ExportDir = "/tmp/out"
+	infra.CleanupPolicy = "destroy-after"
+	m := NewResults(infra, s, nil)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	if !m.destroyed {
+		t.Fatal("expected destroyed=true from InfraOutputs")
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "infra: destroyed") {
+		t.Fatal("expected 'infra: destroyed' in summary")
+	}
+
+	// Press d — should be a no-op.
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd != nil {
+		t.Fatal("expected no command (already destroyed)")
+	}
+}
+
+func TestResultsModel_AutoDestroyFailureShowsMessage(t *testing.T) {
+	s := testResultsSource()
+	destroyer := &mockDestroyer{}
+	infra := testInfra()
+	infra.DestroyErr = "timeout waiting for resources"
+	infra.Exported = true
+	infra.ExportDir = "/tmp/out"
+	m := NewResults(infra, s, destroyer)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	if !strings.Contains(m.destroyMsg, "Auto-destroy failed") {
+		t.Fatalf("expected auto-destroy failure message, got %q", m.destroyMsg)
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "infra: retained") {
+		t.Fatal("expected 'infra: retained' in summary")
+	}
+
+	// Manual retry via d should work.
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("expected destroy command (manual retry)")
+	}
+	msg = cmd()
+	m.Update(msg)
+
+	if !destroyer.called {
+		t.Fatal("expected destroyer to be called on retry")
+	}
+	if !m.destroyed {
+		t.Fatal("expected destroyed=true after successful retry")
+	}
+}
+
 func TestResultsModel_DestroyBlockedWithoutExport(t *testing.T) {
 	s := testResultsSource()
 	destroyer := &mockDestroyer{}
