@@ -1,6 +1,10 @@
 package core
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"heph4estus/internal/cloud"
+)
 
 // View is the interface that all TUI views implement.
 // Views return a string from View(); the App wraps it in tea.View with alt screen.
@@ -39,6 +43,9 @@ type NavigateWithDataMsg struct {
 
 // DeployConfig carries all parameters needed by the deploy view.
 type DeployConfig struct {
+	// Cloud is the selected provider family. Empty means cloud.DefaultKind.
+	Cloud cloud.Kind
+
 	TerraformDir  string
 	Dockerfile    string
 	DockerContext string
@@ -81,6 +88,10 @@ type DeployConfig struct {
 
 // InfraOutputs holds terraform outputs needed by downstream views.
 type InfraOutputs struct {
+	// Cloud is the provider family these outputs belong to. Empty means
+	// cloud.DefaultKind so existing AWS-only call sites stay valid.
+	Cloud cloud.Kind
+
 	SQSQueueURL       string
 	ECRRepoURL        string
 	S3BucketName      string
