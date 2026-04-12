@@ -181,6 +181,7 @@ func TestJobRecord_AllFields(t *testing.T) {
 		TotalWords:     5000,
 		WorkerCount:    5,
 		ComputeMode:    "spot",
+		Cloud:          "selfhosted",
 		CleanupPolicy:  "destroy-after",
 		Bucket:         "my-bucket",
 		ResultPrefix:   "scans/ffuf/full-test/results/",
@@ -195,10 +196,63 @@ func TestJobRecord_AllFields(t *testing.T) {
 	if loaded.TotalWords != 5000 {
 		t.Errorf("total_words = %d, want 5000", loaded.TotalWords)
 	}
+	if loaded.Cloud != "selfhosted" {
+		t.Errorf("cloud = %q, want selfhosted", loaded.Cloud)
+	}
 	if loaded.RuntimeTarget != "https://example.com/FUZZ" {
 		t.Errorf("runtime_target = %q", loaded.RuntimeTarget)
 	}
 	if loaded.LocalOutputDir != "/tmp/out" {
 		t.Errorf("local_output_dir = %q", loaded.LocalOutputDir)
+	}
+}
+
+func TestJobRecord_CloudPersistence(t *testing.T) {
+	store := NewJobStoreAt(t.TempDir())
+
+	for _, cloud := range []string{"aws", "selfhosted", ""} {
+		jobID := "cloud-" + cloud
+		if cloud == "" {
+			jobID = "cloud-empty"
+		}
+		rec := &JobRecord{
+			JobID:    jobID,
+			ToolName: "nmap",
+			Phase:    PhaseEnqueuing,
+			Cloud:    cloud,
+		}
+		if err := store.Create(rec); err != nil {
+			t.Fatalf("create %q: %v", jobID, err)
+		}
+		loaded, err := store.Load(jobID)
+		if err != nil {
+			t.Fatalf("load %q: %v", jobID, err)
+		}
+		if loaded.Cloud != cloud {
+			t.Errorf("job %q: cloud = %q, want %q", jobID, loaded.Cloud, cloud)
+		}
+	}
+}
+
+func TestJobRecord_CloudUpdatePersists(t *testing.T) {
+	store := NewJobStoreAt(t.TempDir())
+
+	rec := &JobRecord{
+		JobID:    "cloud-update",
+		ToolName: "nmap",
+		Phase:    PhaseEnqueuing,
+		Cloud:    "aws",
+	}
+	_ = store.Create(rec)
+
+	rec.Cloud = "selfhosted"
+	rec.Phase = PhaseScanning
+	if err := store.Update(rec); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	loaded, _ := store.Load("cloud-update")
+	if loaded.Cloud != "selfhosted" {
+		t.Errorf("cloud = %q, want selfhosted", loaded.Cloud)
 	}
 }

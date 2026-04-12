@@ -319,6 +319,112 @@ func TestStatusRequiresJobID(t *testing.T) {
 	}
 }
 
+// --- --cloud flag (PR 6.1 Track 0) ---
+
+func TestNmapCloudInvalidValue(t *testing.T) {
+	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "gcp"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid --cloud")
+	}
+	if !strings.Contains(err.Error(), "unsupported cloud") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNmapCloudSelfhostedRejected(t *testing.T) {
+	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "selfhosted"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for selfhosted cloud (compute not supported)")
+	}
+	if !strings.Contains(err.Error(), "selfhosted compute") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanCloudInvalidValue(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--cloud", "gcp"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid --cloud")
+	}
+	if !strings.Contains(err.Error(), "unsupported cloud") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestScanCloudSelfhostedRejected(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--cloud", "selfhosted"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for selfhosted cloud")
+	}
+	if !strings.Contains(err.Error(), "selfhosted compute") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraDeployCloudSelfhostedRejected(t *testing.T) {
+	err := run([]string{"infra", "deploy", "--tool", "nmap", "--cloud", "selfhosted"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for selfhosted cloud")
+	}
+	if !strings.Contains(err.Error(), "selfhosted infrastructure deploy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraDestroyCloudSelfhostedRejected(t *testing.T) {
+	err := run([]string{"infra", "destroy", "--tool", "nmap", "--auto-approve", "--cloud", "selfhosted"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for selfhosted cloud")
+	}
+	if !strings.Contains(err.Error(), "selfhosted infrastructure deploy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStatusCloudSelfhostedAccepted(t *testing.T) {
+	// status --cloud selfhosted should not be rejected at the cloud validation
+	// layer — only compute/deploy paths reject selfhosted. status needs a
+	// valid job record to proceed, so it will fail on that instead.
+	err := run([]string{"status", "--job-id", "nonexistent-job", "--cloud", "selfhosted"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (job not found)")
+	}
+	if strings.Contains(err.Error(), "selfhosted") && strings.Contains(err.Error(), "compute") {
+		t.Fatalf("status should not reject selfhosted cloud: %v", err)
+	}
+}
+
+func TestNmapCloudAWSExplicitAccepted(t *testing.T) {
+	// Explicit --cloud aws should pass cloud validation and proceed to file read.
+	err := run([]string{"nmap", "--file", "/nonexistent/targets.txt", "--cloud", "aws"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), "selfhosted") {
+		t.Fatalf("--cloud aws should be accepted: %v", err)
+	}
+}
+
+func TestScanCloudAWSExplicitAccepted(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt", "--cloud", "aws"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), "selfhosted") {
+		t.Fatalf("--cloud aws should be accepted: %v", err)
+	}
+}
+
+func TestInfraDestroyCloudInvalid(t *testing.T) {
+	err := run([]string{"infra", "destroy", "--tool", "nmap", "--auto-approve", "--cloud", "azure"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid --cloud")
+	}
+	if !strings.Contains(err.Error(), "unsupported cloud") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- doctor subcommand ---
 
 func TestDoctorHelp(t *testing.T) {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"heph4estus/internal/cloud"
 )
 
 func TestLoadConfigFrom_MissingFile(t *testing.T) {
@@ -289,6 +291,51 @@ func TestResolveOutputDir(t *testing.T) {
 				t.Errorf("ResolveOutputDir(%q, cfg) = %q, want %q", tt.explicit, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveCloud(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit string
+		cfg      *OperatorConfig
+		want     cloud.Kind
+		wantErr  bool
+	}{
+		{"explicit aws wins", "aws", &OperatorConfig{Cloud: "selfhosted"}, cloud.KindAWS, false},
+		{"explicit selfhosted wins", "selfhosted", &OperatorConfig{Cloud: "aws"}, cloud.KindSelfhosted, false},
+		{"config used when explicit empty", "", &OperatorConfig{Cloud: "selfhosted"}, cloud.KindSelfhosted, false},
+		{"defaults to aws when both empty", "", &OperatorConfig{}, cloud.KindAWS, false},
+		{"nil config defaults to aws", "", nil, cloud.KindAWS, false},
+		{"invalid explicit errors", "gcp", &OperatorConfig{}, "", true},
+		{"invalid persisted errors", "", &OperatorConfig{Cloud: "gcp"}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveCloud(tt.explicit, tt.cfg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ResolveCloud(%q) err = %v, wantErr %v", tt.explicit, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("ResolveCloud(%q) = %q, want %q", tt.explicit, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSaveAndLoadConfig_Cloud(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	cfg := &OperatorConfig{Cloud: "selfhosted"}
+	if err := SaveConfigTo(cfg, path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, err := LoadConfigFrom(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Cloud != "selfhosted" {
+		t.Errorf("cloud = %q, want selfhosted", loaded.Cloud)
 	}
 }
 

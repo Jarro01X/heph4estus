@@ -9,26 +9,25 @@ import (
 	"os"
 	"time"
 
-	awscloud "heph4estus/internal/cloud/aws"
+	"heph4estus/internal/cloud"
+	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
-
-	awscfg "github.com/aws/aws-sdk-go-v2/config"
 )
 
 // statusSnapshot is the structured output of heph status.
 type statusSnapshot struct {
-	JobID          string          `json:"job_id"`
-	Tool           string          `json:"tool"`
-	Phase          operator.Phase  `json:"phase"`
-	Bucket         string          `json:"bucket,omitempty"`
-	Progress       statusProgress  `json:"progress"`
-	Elapsed        string          `json:"elapsed"`
-	CleanupPolicy  string          `json:"cleanup_policy,omitempty"`
-	ResultPrefix   string          `json:"result_prefix,omitempty"`
-	ArtifactPrefix string          `json:"artifact_prefix,omitempty"`
-	LocalOutputDir string          `json:"local_output_dir,omitempty"`
-	LastError      string          `json:"last_error,omitempty"`
+	JobID          string         `json:"job_id"`
+	Tool           string         `json:"tool"`
+	Phase          operator.Phase `json:"phase"`
+	Bucket         string         `json:"bucket,omitempty"`
+	Progress       statusProgress `json:"progress"`
+	Elapsed        string         `json:"elapsed"`
+	CleanupPolicy  string         `json:"cleanup_policy,omitempty"`
+	ResultPrefix   string         `json:"result_prefix,omitempty"`
+	ArtifactPrefix string         `json:"artifact_prefix,omitempty"`
+	LocalOutputDir string         `json:"local_output_dir,omitempty"`
+	LastError      string         `json:"last_error,omitempty"`
 }
 
 type statusProgress struct {
@@ -41,6 +40,7 @@ func runStatus(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	jobID := fs.String("job-id", "", "Job ID to query (required)")
 	format := fs.String("format", "text", "Output format: text or json")
+	cloudFlag := fs.String("cloud", "", "Override the cloud provider used to query live progress (default: job record or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -64,11 +64,23 @@ func runStatus(args []string, log logger.Logger) error {
 		return fmt.Errorf("%w — run 'heph status' only for jobs started on this machine", err)
 	}
 
+	// Resolve effective cloud: explicit flag overrides the value persisted in
+	// the job record, which in turn overrides the operator default.
+	opCfg, _ := operator.LoadConfig()
+	effectiveCloud := *cloudFlag
+	if effectiveCloud == "" {
+		effectiveCloud = rec.Cloud
+	}
+	cloudKind, err := resolveCLICloud(effectiveCloud, opCfg)
+	if err != nil {
+		return err
+	}
+
 	// Query live cloud progress if the job has a bucket and result prefix.
 	completed := 0
 	if rec.Bucket != "" && rec.ResultPrefix != "" && !isTerminalPhase(rec.Phase) {
 		ctx := context.Background()
-		count, cloudErr := countResults(ctx, rec.Bucket, rec.ResultPrefix, log)
+		count, cloudErr := countResults(ctx, rec.Bucket, rec.ResultPrefix, cloudKind, log)
 		if cloudErr != nil {
 			log.Error("Warning: could not query live progress: %v", cloudErr)
 		} else {
@@ -100,8 +112,6 @@ func buildSnapshot(rec *operator.JobRecord, liveCompleted int) statusSnapshot {
 	// Infer phase from live data.
 	phase := rec.Phase
 	if phase == operator.PhaseComplete && total > 0 {
-		// Completed jobs should render as fully complete even when we skip
-		// live cloud counting for terminal phases.
 		completed = total
 	}
 	if !isTerminalPhase(phase) {
@@ -166,13 +176,13 @@ func outputStatusText(snap statusSnapshot) error {
 	return nil
 }
 
-// countResults queries S3 for the current result count.
-func countResults(ctx context.Context, bucket, prefix string, log logger.Logger) (int, error) {
-	awsConfig, err := awscfg.LoadDefaultConfig(ctx)
+// countResults queries storage for the current result count using the
+// provider family recorded in the job record.
+func countResults(ctx context.Context, bucket, prefix string, cloudKind cloud.Kind, log logger.Logger) (int, error) {
+	provider, err := factory.BuildForKind(ctx, cloudKind, log)
 	if err != nil {
-		return 0, fmt.Errorf("loading AWS config: %w", err)
+		return 0, fmt.Errorf("building cloud provider: %w", err)
 	}
-	provider := awscloud.NewProvider(awsConfig, log)
 	return provider.Storage().Count(ctx, bucket, prefix)
 }
 
