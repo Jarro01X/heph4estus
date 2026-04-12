@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"heph4estus/internal/cloud"
 )
 
 const appName = "heph4estus"
@@ -17,6 +19,9 @@ type OperatorConfig struct {
 	ComputeMode   string `json:"compute_mode,omitempty"`
 	CleanupPolicy string `json:"cleanup_policy,omitempty"` // "reuse" or "destroy-after"
 	OutputDir     string `json:"output_dir,omitempty"`
+	// Cloud is the persisted default cloud kind ("aws" or "selfhosted").
+	// Empty means "use the built-in default" (AWS).
+	Cloud string `json:"cloud,omitempty"`
 }
 
 // ConfigDir returns the operator config directory path.
@@ -138,6 +143,19 @@ func ResolveCleanupPolicy(explicit string, cfg *OperatorConfig) string {
 		return cfg.CleanupPolicy
 	}
 	return "reuse"
+}
+
+// ResolveCloud returns the effective cloud kind given an explicit flag
+// value ("" means unset) and saved operator config. The result is validated
+// through cloud.ParseKind so callers receive a typed Kind.
+func ResolveCloud(explicit string, cfg *OperatorConfig) (cloud.Kind, error) {
+	if explicit != "" {
+		return cloud.ParseKind(explicit)
+	}
+	if cfg != nil && cfg.Cloud != "" {
+		return cloud.ParseKind(cfg.Cloud)
+	}
+	return cloud.DefaultKind, nil
 }
 
 // ResolveOutputDir returns the effective output directory given an explicit

@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-
 	"heph4estus/internal/cloud"
-	"heph4estus/internal/cloud/aws"
+	"heph4estus/internal/cloud/factory"
 	appconfig "heph4estus/internal/config"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
@@ -31,7 +29,7 @@ func main() {
 		log.Fatal("Failed to load configuration: %v", err)
 	}
 
-	log.Info("Tool: %s, Queue: %s, Bucket: %s", cfg.ToolName, cfg.QueueURL, cfg.S3Bucket)
+	log.Info("Tool: %s, Queue: %s, Bucket: %s, Cloud: %s", cfg.ToolName, cfg.QueueID, cfg.Bucket, cfg.Cloud)
 
 	registry, err := modules.NewDefaultRegistry()
 	if err != nil {
@@ -43,13 +41,17 @@ func main() {
 		log.Fatal("Unknown tool %q: %v", cfg.ToolName, err)
 	}
 
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+	cloudKind, err := cloud.ParseKind(cfg.Cloud)
 	if err != nil {
-		log.Fatal("Unable to load SDK config: %v", err)
+		log.Fatal("Invalid CLOUD value: %v", err)
 	}
 
-	provider := aws.NewProvider(awsCfg, log)
-	executor := worker.NewExecutor(log, provider.Storage(), cfg.S3Bucket)
+	provider, err := factory.BuildForKind(context.TODO(), cloudKind, log)
+	if err != nil {
+		log.Fatal("Failed to build cloud provider: %v", err)
+	}
+
+	executor := worker.NewExecutor(log, provider.Storage(), cfg.Bucket)
 
 	ctx := context.Background()
 	for {
@@ -75,7 +77,7 @@ func processMessage(
 	storage cloud.Storage,
 	executor taskExecutor,
 ) (bool, error) {
-	msg, err := queue.Receive(ctx, cfg.QueueURL)
+	msg, err := queue.Receive(ctx, cfg.QueueID)
 	if err != nil {
 		return false, fmt.Errorf("receiving message: %w", err)
 	}
@@ -88,7 +90,7 @@ func processMessage(
 	var task worker.Task
 	if err := json.Unmarshal([]byte(msg.Body), &task); err != nil {
 		log.Error("Error unmarshaling task: %v", err)
-		if delErr := queue.Delete(ctx, cfg.QueueURL, msg.ReceiptHandle); delErr != nil {
+		if delErr := queue.Delete(ctx, cfg.QueueID, msg.ReceiptHandle); delErr != nil {
 			log.Error("Error deleting malformed message: %v", delErr)
 		}
 		return true, fmt.Errorf("unmarshaling task: %w", err)
@@ -125,7 +127,7 @@ func processMessage(
 	if result.Error != "" {
 		kind := worker.ClassifyError(result.Output, result.Error)
 		if kind == worker.ErrorTransient {
-			log.Info("Transient error for %s (attempt %d), will retry via SQS: %s",
+			log.Info("Transient error for %s (attempt %d), will retry via queue: %s",
 				task.Target, msg.ReceiveCount, result.Error)
 			return true, nil
 		}
@@ -139,27 +141,27 @@ func processMessage(
 	// Upload output file first so the structured result can point to it explicitly.
 	if len(outputBytes) > 0 {
 		outputKey := jobs.ArtifactKey(mod.Name, task.JobID, task.Target, task.GroupID, task.ChunkIdx, task.TotalChunks, ts, mod.OutputExt)
-		if err := storage.Upload(uploadCtx, cfg.S3Bucket, outputKey, outputBytes); err != nil {
-			return true, fmt.Errorf("uploading output to S3 for %s: %w", task.Target, err)
+		if err := storage.Upload(uploadCtx, cfg.Bucket, outputKey, outputBytes); err != nil {
+			return true, fmt.Errorf("uploading output for %s: %w", task.Target, err)
 		}
 		result.OutputKey = outputKey
-		log.Info("Output file uploaded to S3: %s", outputKey)
+		log.Info("Output file uploaded: %s", outputKey)
 	}
 
-	// Upload result JSON to S3.
+	// Upload result JSON.
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return true, fmt.Errorf("marshaling result for %s: %w", task.Target, err)
 	}
 
 	s3Key := jobs.ResultKey(mod.Name, task.JobID, task.Target, task.GroupID, task.ChunkIdx, task.TotalChunks, ts, "json")
-	if err := storage.Upload(uploadCtx, cfg.S3Bucket, s3Key, resultJSON); err != nil {
-		return true, fmt.Errorf("uploading result to S3 for %s: %w", task.Target, err)
+	if err := storage.Upload(uploadCtx, cfg.Bucket, s3Key, resultJSON); err != nil {
+		return true, fmt.Errorf("uploading result for %s: %w", task.Target, err)
 	}
-	log.Info("Result uploaded to S3: %s", s3Key)
+	log.Info("Result uploaded: %s", s3Key)
 
 	// Delete message only after successful upload.
-	if err := queue.Delete(ctx, cfg.QueueURL, msg.ReceiptHandle); err != nil {
+	if err := queue.Delete(ctx, cfg.QueueID, msg.ReceiptHandle); err != nil {
 		log.Error("Error deleting message for target %s: %v", task.Target, err)
 	}
 

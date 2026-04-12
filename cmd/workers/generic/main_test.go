@@ -85,8 +85,9 @@ func (e *mockExecutor) Execute(ctx context.Context, mod *modules.ModuleDefinitio
 
 func testConfig() *appconfig.WorkerConfig {
 	return &appconfig.WorkerConfig{
-		QueueURL: "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
-		S3Bucket: "test-bucket",
+		Cloud:    "aws",
+		QueueID:  "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
+		Bucket:   "test-bucket",
 		ToolName: "nmap",
 	}
 }

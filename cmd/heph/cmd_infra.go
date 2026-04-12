@@ -42,6 +42,7 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
 	region := fs.String("region", "", "AWS region (default: from AWS_REGION or us-east-1)")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -62,6 +63,14 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 	opCfg, _ := operator.LoadConfig()
 	*region = operator.ResolveRegion(*region, opCfg)
 
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if err := requireDeploySupport(cloudKind); err != nil {
+		return err
+	}
+
 	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
 		ToolConfig:  cfg,
 		Region:      *region,
@@ -77,6 +86,7 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 	tool := fs.String("tool", "", "Tool whose infrastructure to destroy")
 	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -90,6 +100,15 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 
 	cfg, err := resolveToolConfig(*tool, *backend)
 	if err != nil {
+		return err
+	}
+
+	opCfg, _ := operator.LoadConfig()
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if err := requireDeploySupport(cloudKind); err != nil {
 		return err
 	}
 

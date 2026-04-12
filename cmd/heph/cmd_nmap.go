@@ -12,14 +12,13 @@ import (
 
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
+	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/tools/nmap"
 	"heph4estus/internal/worker"
-
-	awscfg "github.com/aws/aws-sdk-go-v2/config"
 )
 
 const (
@@ -42,6 +41,7 @@ func runNmap(args []string, log logger.Logger) error {
 	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
 
 	outDir := fs.String("out", "", "Download results/artifacts to this directory after completion")
 
@@ -60,6 +60,14 @@ func runNmap(args []string, log logger.Logger) error {
 	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
 	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
 		*outDir = opCfg.OutputDir
+	}
+
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if err := requireComputeSupport(cloudKind); err != nil {
+		return err
 	}
 
 	if *inputFile == "" {
@@ -134,6 +142,7 @@ func runNmap(args []string, log logger.Logger) error {
 		TotalTasks:    len(tasks),
 		WorkerCount:   *workers,
 		ComputeMode:   *computeMode,
+		Cloud:         string(cloudKind),
 		CleanupPolicy: cleanupPolicy,
 	})
 
@@ -165,7 +174,7 @@ func runNmap(args []string, log logger.Logger) error {
 	}
 
 	// Run the scan.
-	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID)
+	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID, cloudKind)
 
 	if scanErr != nil {
 		_ = tracker.Fail(jobID, scanErr)
@@ -179,11 +188,11 @@ func runNmap(args []string, log logger.Logger) error {
 		bucket := outputs["s3_bucket_name"]
 		logStatus("Exporting results to %s...", *outDir)
 
-		awsConfig, awsErr := awscfg.LoadDefaultConfig(ctx)
-		if awsErr != nil {
-			return fmt.Errorf("loading AWS config for export: %w", awsErr)
+		exportProvider, provErr := factory.BuildForKind(ctx, cloudKind, log)
+		if provErr != nil {
+			return fmt.Errorf("building cloud provider for export: %w", provErr)
 		}
-		storage := awscloud.NewProvider(awsConfig, log).Storage()
+		storage := exportProvider.Storage()
 
 		result, exportErr := operator.ExportJob(ctx, storage, bucket, "nmap", jobID, *outDir)
 		if exportErr != nil {
@@ -220,19 +229,17 @@ func runNmap(args []string, log logger.Logger) error {
 	return scanErr
 }
 
-func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string) (bool, error) {
+func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string, cloudKind cloud.Kind) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
 		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
 
-	// Initialize AWS provider.
-	awsConfig, err := awscfg.LoadDefaultConfig(ctx)
+	provider, err := factory.BuildForKind(ctx, cloudKind, log)
 	if err != nil {
-		return false, fmt.Errorf("loading AWS config: %w", err)
+		return false, fmt.Errorf("building cloud provider: %w", err)
 	}
-	provider := awscloud.NewProvider(awsConfig, log)
 	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID)
 }
 

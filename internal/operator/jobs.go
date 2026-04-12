@@ -33,6 +33,7 @@ type JobRecord struct {
 	TotalWords     int       `json:"total_words,omitempty"`
 	WorkerCount    int       `json:"worker_count,omitempty"`
 	ComputeMode    string    `json:"compute_mode,omitempty"`
+	Cloud          string    `json:"cloud,omitempty"`
 	CleanupPolicy  string    `json:"cleanup_policy,omitempty"`
 	Bucket         string    `json:"bucket,omitempty"`
 	ResultPrefix   string    `json:"result_prefix,omitempty"`

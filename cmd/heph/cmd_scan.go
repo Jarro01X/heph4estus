@@ -11,14 +11,13 @@ import (
 
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
+	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/worker"
-
-	awscfg "github.com/aws/aws-sdk-go-v2/config"
 )
 
 func runScan(args []string, log logger.Logger) error {
@@ -38,6 +37,7 @@ func runScan(args []string, log logger.Logger) error {
 	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
 	autoApprove := fs.Bool("auto-approve", false, "Skip deploy confirmation prompts when lifecycle requires deploy")
 	destroyAfter := fs.Bool("destroy-after", false, "Destroy infrastructure after the run completes")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -49,6 +49,14 @@ func runScan(args []string, log logger.Logger) error {
 	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
 	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
 		*outDir = opCfg.OutputDir
+	}
+
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if err := requireComputeSupport(cloudKind); err != nil {
+		return err
 	}
 
 	if *tool == "" {
@@ -144,12 +152,10 @@ func runScan(args []string, log logger.Logger) error {
 		return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
 
-	// Initialize AWS provider.
-	awsConfig, err := awscfg.LoadDefaultConfig(ctx)
+	provider, err := factory.BuildForKind(ctx, cloudKind, log)
 	if err != nil {
-		return fmt.Errorf("loading AWS config: %w", err)
+		return fmt.Errorf("building cloud provider: %w", err)
 	}
-	provider := awscloud.NewProvider(awsConfig, log)
 	queue := provider.Queue()
 	storage := provider.Storage()
 	compute := provider.Compute()
@@ -168,6 +174,7 @@ func runScan(args []string, log logger.Logger) error {
 		Phase:         operator.PhaseEnqueuing,
 		WorkerCount:   *workers,
 		ComputeMode:   *computeMode,
+		Cloud:         string(cloudKind),
 		CleanupPolicy: cleanupPolicy,
 		Bucket:        bucket,
 	})
