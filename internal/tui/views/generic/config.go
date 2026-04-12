@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
@@ -56,6 +57,7 @@ const (
 	cfgFieldOptions
 	cfgFieldWorkerCount
 	cfgFieldComputeMode
+	cfgFieldCloud
 	cfgFieldSubmit
 )
 
@@ -67,6 +69,7 @@ const (
 	wlFieldChunks
 	wlFieldWorkerCount
 	wlFieldComputeMode
+	wlFieldCloud
 	wlFieldSubmit
 )
 
@@ -76,11 +79,11 @@ type ConfigModel struct {
 	mod        *modules.ModuleDefinition
 	isWordlist bool
 
-	// target_list inputs (4 fields)
-	inputs [4]textinput.Model
+	// target_list inputs (5 fields)
+	inputs [5]textinput.Model
 
-	// wordlist inputs (6 fields)
-	wlInputs [6]textinput.Model
+	// wordlist inputs (7 fields)
+	wlInputs [7]textinput.Model
 
 	focus      int
 	fieldCount int
@@ -114,6 +117,10 @@ func NewConfig(toolName string) *ConfigModel {
 	cfg, _ := operator.LoadConfig()
 	workers := operator.ResolveWorkers(0, cfg)
 	computeMode := operator.ResolveComputeMode("", cfg)
+	savedCloud := ""
+	if cfg != nil {
+		savedCloud = cfg.Cloud
+	}
 
 	m := &ConfigModel{
 		toolName:   toolName,
@@ -124,18 +131,18 @@ func NewConfig(toolName string) *ConfigModel {
 
 	if isWordlist {
 		m.fieldCount = wlFieldSubmit + 1
-		m.wlInputs = buildWordlistInputs(mod, workers, computeMode)
+		m.wlInputs = buildWordlistInputs(mod, workers, computeMode, savedCloud)
 		m.wlInputs[0].Focus()
 	} else {
 		m.fieldCount = cfgFieldSubmit + 1
-		m.inputs = buildTargetListInputs(workers, computeMode)
+		m.inputs = buildTargetListInputs(workers, computeMode, savedCloud)
 		m.inputs[0].Focus()
 	}
 
 	return m
 }
 
-func buildTargetListInputs(workers int, computeMode string) [4]textinput.Model {
+func buildTargetListInputs(workers int, computeMode, savedCloud string) [5]textinput.Model {
 	targetInput := textinput.New()
 	targetInput.Placeholder = "/path/to/targets.txt"
 	targetInput.CharLimit = 256
@@ -154,10 +161,17 @@ func buildTargetListInputs(workers int, computeMode string) [4]textinput.Model {
 	modeInput.SetValue(computeMode)
 	modeInput.CharLimit = 7
 
-	return [4]textinput.Model{targetInput, optsInput, workerInput, modeInput}
+	cloudInput := textinput.New()
+	cloudInput.Placeholder = "aws"
+	if savedCloud != "" {
+		cloudInput.SetValue(savedCloud)
+	}
+	cloudInput.CharLimit = 12
+
+	return [5]textinput.Model{targetInput, optsInput, workerInput, modeInput, cloudInput}
 }
 
-func buildWordlistInputs(mod *modules.ModuleDefinition, workers int, computeMode string) [6]textinput.Model {
+func buildWordlistInputs(mod *modules.ModuleDefinition, workers int, computeMode, savedCloud string) [7]textinput.Model {
 	wlInput := textinput.New()
 	wlInput.Placeholder = "/path/to/wordlist.txt"
 	wlInput.CharLimit = 256
@@ -188,7 +202,14 @@ func buildWordlistInputs(mod *modules.ModuleDefinition, workers int, computeMode
 	modeInput.SetValue(computeMode)
 	modeInput.CharLimit = 7
 
-	return [6]textinput.Model{wlInput, targetInput, optsInput, chunksInput, workerInput, modeInput}
+	cloudInput := textinput.New()
+	cloudInput.Placeholder = "aws"
+	if savedCloud != "" {
+		cloudInput.SetValue(savedCloud)
+	}
+	cloudInput.CharLimit = 12
+
+	return [7]textinput.Model{wlInput, targetInput, optsInput, chunksInput, workerInput, modeInput, cloudInput}
 }
 
 func (m *ConfigModel) Init() tea.Cmd {
@@ -267,6 +288,15 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		m.errMsg = "Compute mode must be auto, fargate, or spot"
 		return nil
 	}
+	cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.inputs[cfgFieldCloud].Value()))
+	if cloudErr != nil {
+		m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
+		return nil
+	}
+	if cloudKind == cloud.KindSelfhosted {
+		m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
+		return nil
+	}
 
 	tc, err := infra.ResolveToolConfig(m.toolName)
 	if err != nil {
@@ -280,9 +310,10 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
 			Data: core.DeployConfig{
+				Cloud:          cloudKind,
 				TerraformDir:   tc.TerraformDir,
 				Dockerfile:     tc.Dockerfile,
-				DockerContext:   tc.DockerCtx,
+				DockerContext:  tc.DockerCtx,
 				DockerTag:      tc.DockerTag,
 				ECRRepoName:    tc.ECRRepoName,
 				AWSRegion:      infra.AWSRegion(),
@@ -331,6 +362,15 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		m.errMsg = "Compute mode must be auto, fargate, or spot"
 		return nil
 	}
+	cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.wlInputs[wlFieldCloud].Value()))
+	if cloudErr != nil {
+		m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
+		return nil
+	}
+	if cloudKind == cloud.KindSelfhosted {
+		m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
+		return nil
+	}
 
 	tc, err := infra.ResolveToolConfig(m.toolName)
 	if err != nil {
@@ -345,9 +385,10 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
 			Data: core.DeployConfig{
+				Cloud:           cloudKind,
 				TerraformDir:    tc.TerraformDir,
 				Dockerfile:      tc.Dockerfile,
-				DockerContext:    tc.DockerCtx,
+				DockerContext:   tc.DockerCtx,
 				DockerTag:       tc.DockerTag,
 				ECRRepoName:     tc.ECRRepoName,
 				AWSRegion:       infra.AWSRegion(),
@@ -383,7 +424,7 @@ func (m *ConfigModel) View() string {
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
 	if m.isWordlist {
-		labels := []string{"Wordlist File:*", "Target / URL:*", "Extra Options:", "Chunks:", "Worker Count:", "Compute Mode:"}
+		labels := []string{"Wordlist File:*", "Target / URL:*", "Extra Options:", "Chunks:", "Worker Count:", "Compute Mode:", "Cloud:"}
 		if m.mod != nil && !m.mod.NeedsTarget() {
 			labels[1] = "Target / URL:"
 		}
@@ -395,7 +436,7 @@ func (m *ConfigModel) View() string {
 			fmt.Fprintf(&b, "  %s%s\n", ls.Render(label), m.wlInputs[i].View())
 		}
 	} else {
-		labels := []string{"Target File:*", "Extra Options:", "Worker Count:", "Compute Mode:"}
+		labels := []string{"Target File:*", "Extra Options:", "Worker Count:", "Compute Mode:", "Cloud:"}
 		for i, label := range labels {
 			ls := labelStyle
 			if m.focus == i {
@@ -521,4 +562,3 @@ func (m *ConfigModel) submitWordlist() tea.Cmd {
 		return wordlistReadMsg{content: string(data)}
 	}
 }
-

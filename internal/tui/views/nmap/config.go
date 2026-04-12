@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
@@ -64,6 +65,7 @@ const (
 	fieldJitterMax
 	fieldTimingTemplate
 	fieldDNSServers
+	fieldCloud
 	fieldNoRDNS
 	fieldSubmit
 	fieldCount
@@ -71,7 +73,7 @@ const (
 
 // ConfigModel is the nmap configuration form view.
 type ConfigModel struct {
-	inputs     [7]textinput.Model
+	inputs     [8]textinput.Model
 	noRDNS     bool
 	focusIndex int
 	help       help.Model
@@ -120,6 +122,17 @@ func NewConfig() *ConfigModel {
 	dnsInput.Placeholder = ""
 	dnsInput.CharLimit = 128
 
+	savedCloud := ""
+	if cfg != nil {
+		savedCloud = cfg.Cloud
+	}
+	cloudInput := textinput.New()
+	cloudInput.Placeholder = "aws"
+	if savedCloud != "" {
+		cloudInput.SetValue(savedCloud)
+	}
+	cloudInput.CharLimit = 12
+
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -132,7 +145,7 @@ func NewConfig() *ConfigModel {
 	}
 
 	return &ConfigModel{
-		inputs: [7]textinput.Model{targetInput, optsInput, workerInput, modeInput, jitterInput, timingInput, dnsInput},
+		inputs: [8]textinput.Model{targetInput, optsInput, workerInput, modeInput, jitterInput, timingInput, dnsInput, cloudInput},
 		help:   h,
 	}
 }
@@ -199,6 +212,15 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		if jitterMax < 0 {
 			jitterMax = 0
 		}
+		cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.inputs[fieldCloud].Value()))
+		if cloudErr != nil {
+			m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
+			return m, nil
+		}
+		if cloudKind == cloud.KindSelfhosted {
+			m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
+			return m, nil
+		}
 
 		tc, err := infra.ResolveToolConfig("nmap")
 		if err != nil {
@@ -212,9 +234,10 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
 				Data: core.DeployConfig{
+					Cloud:              cloudKind,
 					TerraformDir:       tc.TerraformDir,
 					Dockerfile:         tc.Dockerfile,
-					DockerContext:       tc.DockerCtx,
+					DockerContext:      tc.DockerCtx,
 					DockerTag:          tc.DockerTag,
 					ECRRepoName:        tc.ECRRepoName,
 					AWSRegion:          infra.AWSRegion(),
@@ -254,7 +277,7 @@ func (m *ConfigModel) View() string {
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(18)
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
-	labels := []string{"Target File:*", "Nmap Options:", "Worker Count:", "Compute Mode:", "Jitter Max (s):", "Timing (-T):", "DNS Servers:"}
+	labels := []string{"Target File:*", "Nmap Options:", "Worker Count:", "Compute Mode:", "Jitter Max (s):", "Timing (-T):", "DNS Servers:", "Cloud:"}
 	for i, label := range labels {
 		ls := labelStyle
 		if m.focusIndex == i {
@@ -334,4 +357,3 @@ func (m *ConfigModel) submit() tea.Cmd {
 		return fileReadMsg{content: string(data)}
 	}
 }
-

@@ -25,6 +25,7 @@ const (
 	fieldComputeMode
 	fieldCleanupPolicy
 	fieldOutputDir
+	fieldCloud
 	fieldSave
 	fieldRefreshDiag
 	fieldCount
@@ -95,13 +96,13 @@ func DefaultDeps() Deps {
 // Model is the editable settings view with diagnostics.
 type Model struct {
 	deps       Deps
-	inputs     [6]textinput.Model
+	inputs     [7]textinput.Model
 	focusIndex int
 	help       help.Model
 	width      int
 	height     int
 
-	statusMsg string // feedback after save
+	statusMsg   string // feedback after save
 	diagResults []doctor.CheckResult
 	diagLoading bool
 }
@@ -155,6 +156,13 @@ func NewWithDeps(deps Deps) *Model {
 	outputInput.CharLimit = 256
 	outputInput.SetValue(cfg.OutputDir)
 
+	cloudInput := textinput.New()
+	cloudInput.Placeholder = "aws"
+	cloudInput.CharLimit = 12
+	if cfg.Cloud != "" {
+		cloudInput.SetValue(cfg.Cloud)
+	}
+
 	h := help.New()
 	h.Styles = help.Styles{
 		ShortKey:       lipgloss.NewStyle().Foreground(core.Steel),
@@ -168,7 +176,7 @@ func NewWithDeps(deps Deps) *Model {
 
 	return &Model{
 		deps:   deps,
-		inputs: [6]textinput.Model{regionInput, profileInput, workerInput, modeInput, cleanupInput, outputInput},
+		inputs: [7]textinput.Model{regionInput, profileInput, workerInput, modeInput, cleanupInput, outputInput, cloudInput},
 		help:   h,
 	}
 }
@@ -245,7 +253,7 @@ func (m *Model) View() string {
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
 	// Editable fields
-	labels := []string{"Region:", "Profile:", "Worker Count:", "Compute Mode:", "Cleanup Policy:", "Output Dir:"}
+	labels := []string{"Region:", "Profile:", "Worker Count:", "Compute Mode:", "Cleanup Policy:", "Output Dir:", "Cloud:"}
 	for i, label := range labels {
 		ls := labelStyle
 		if m.focusIndex == i {
@@ -355,6 +363,7 @@ func (m *Model) buildConfig() *operator.OperatorConfig {
 		ComputeMode:   strings.TrimSpace(m.inputs[fieldComputeMode].Value()),
 		CleanupPolicy: strings.TrimSpace(m.inputs[fieldCleanupPolicy].Value()),
 		OutputDir:     strings.TrimSpace(m.inputs[fieldOutputDir].Value()),
+		Cloud:         strings.TrimSpace(m.inputs[fieldCloud].Value()),
 	}
 }
 
