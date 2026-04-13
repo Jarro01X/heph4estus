@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 )
 
@@ -9,7 +8,7 @@ func TestNewWorkerConfig_DefaultCloud(t *testing.T) {
 	t.Setenv("QUEUE_URL", "https://sqs.example.com/queue")
 	t.Setenv("S3_BUCKET", "test-bucket")
 	t.Setenv("TOOL_NAME", "nmap")
-	os.Unsetenv("CLOUD")
+	t.Setenv("CLOUD", "")
 
 	cfg, err := NewWorkerConfig()
 	if err != nil {
@@ -64,9 +63,9 @@ func TestNewWorkerConfig_MissingRequired(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv("QUEUE_URL")
-			os.Unsetenv("S3_BUCKET")
-			os.Unsetenv("TOOL_NAME")
+			t.Setenv("QUEUE_URL", "")
+			t.Setenv("S3_BUCKET", "")
+			t.Setenv("TOOL_NAME", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
