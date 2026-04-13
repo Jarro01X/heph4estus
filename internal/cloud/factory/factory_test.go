@@ -1,7 +1,6 @@
 package factory
 
 import (
-	"os"
 	"testing"
 
 	"heph4estus/internal/cloud"
@@ -138,7 +137,7 @@ func TestSelfhostedConfigFromEnv(t *testing.T) {
 
 func TestSelfhostedConfigFromEnv_Defaults(t *testing.T) {
 	for _, k := range []string{"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE"} {
-		os.Unsetenv(k)
+		t.Setenv(k, "")
 	}
 
 	cfg := SelfhostedConfigFromEnv()
