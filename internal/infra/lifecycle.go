@@ -3,6 +3,8 @@ package infra
 import (
 	"context"
 	"fmt"
+
+	"heph4estus/internal/cloud"
 )
 
 // InfraStatus classifies the current state of deployed infrastructure.
@@ -47,9 +49,11 @@ type ProbeResult struct {
 	Err          error             // the underlying error when Status is Error
 }
 
-// Probe inspects existing Terraform outputs and classifies the infrastructure state
-// relative to the requested tool.
-func Probe(ctx context.Context, tf *TerraformClient, terraformDir, requestedTool string) ProbeResult {
+// Probe inspects existing Terraform outputs and classifies the infrastructure
+// state relative to the requested tool. The kind parameter selects the
+// required-output set so that AWS and selfhosted infrastructure are evaluated
+// against the correct contract.
+func Probe(ctx context.Context, tf *TerraformClient, kind cloud.Kind, terraformDir, requestedTool string) ProbeResult {
 	outputs, err := tf.ReadOutputs(ctx, terraformDir)
 	if err != nil {
 		// Distinguish "no state" from real Terraform failures.
@@ -78,7 +82,7 @@ func Probe(ctx context.Context, tf *TerraformClient, terraformDir, requestedTool
 
 	// Check for missing required keys.
 	var missing []string
-	for _, key := range RequiredOutputKeys {
+	for _, key := range RequiredOutputKeysForCloud(kind) {
 		if outputs[key] == "" {
 			missing = append(missing, key)
 		}

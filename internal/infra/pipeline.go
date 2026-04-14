@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
 )
 
@@ -16,6 +17,7 @@ type DeployResult struct {
 // DeployOpts configures a deploy pipeline run.
 type DeployOpts struct {
 	ToolConfig  *ToolConfig
+	Cloud       cloud.Kind // Provider family (empty defaults to AWS)
 	Region      string
 	AutoApprove bool
 	Stream      io.Writer // where to write progress (typically os.Stderr)
@@ -69,7 +71,7 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 		return nil, err
 	}
 
-	// 5. Read outputs
+	// 5. Read outputs (redact sensitive values for display)
 	if err := writeLine(opts.Stream, "==> Reading outputs"); err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 		return nil, err
 	}
 	for k, v := range outputs {
-		if err := writef(opts.Stream, "    %s = %s\n", k, v); err != nil {
+		if err := writef(opts.Stream, "    %s = %s\n", k, RedactOutputValue(k, v)); err != nil {
 			return nil, err
 		}
 	}
@@ -97,28 +99,20 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 		}
 	}
 
-	// 7. ECR auth
-	if err := writeLine(opts.Stream, "==> ECR authenticate"); err != nil {
+	// 7. Registry auth (provider-aware: ECR for AWS, docker login for selfhosted)
+	if err := writeLine(opts.Stream, "==> Registry auth"); err != nil {
 		return nil, err
 	}
-	if err := ecr.Authenticate(ctx, opts.Region); err != nil {
+	publisher := NewPublisher(opts.Cloud, docker, ecr, outputs, opts.Region)
+	if err := publisher.Authenticate(ctx); err != nil {
 		return nil, err
 	}
 
-	// 8. Docker tag + push
-	ecrURL := outputs["ecr_repo_url"]
-	if ecrURL == "" {
-		return nil, fmt.Errorf("terraform output missing ecr_repo_url")
-	}
-	remoteTag := ecrURL + ":latest"
-
-	if err := writeLine(opts.Stream, "==> Docker push"); err != nil {
+	// 8. Image publish (provider-aware: tag+push to ECR or selfhosted registry)
+	if err := writeLine(opts.Stream, "==> Image publish"); err != nil {
 		return nil, err
 	}
-	if err := docker.Tag(ctx, cfg.DockerTag, remoteTag); err != nil {
-		return nil, err
-	}
-	if err := docker.Push(ctx, remoteTag, opts.Stream); err != nil {
+	if _, err := publisher.Publish(ctx, cfg.DockerTag, opts.Stream); err != nil {
 		return nil, err
 	}
 
@@ -160,7 +154,10 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 	tf := NewTerraformClient(log)
 
 	// Probe current state.
-	probe := Probe(ctx, tf, cfg.TerraformDir, cfg.ToolName)
+	// EnsureInfra is currently only called from AWS paths (selfhosted
+	// compute is blocked). Default to AWS required outputs. Track 2 will
+	// thread cloud.Kind through ToolConfig when selfhosted scan paths open.
+	probe := Probe(ctx, tf, cloud.DefaultKind, cfg.TerraformDir, cfg.ToolName)
 	decision := Decide(probe, policy)
 
 	if err := writef(stream, "==> Lifecycle: %s\n", decision.Message); err != nil {
