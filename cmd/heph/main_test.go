@@ -69,7 +69,7 @@ func TestNmapInvalidComputeMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid compute mode")
 	}
-	if !strings.Contains(err.Error(), "--compute-mode must be") {
+	if !strings.Contains(err.Error(), "compute-mode must be") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestScanInvalidComputeMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid compute mode")
 	}
-	if !strings.Contains(err.Error(), "--compute-mode must be") {
+	if !strings.Contains(err.Error(), "compute-mode must be") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -331,12 +331,19 @@ func TestNmapCloudInvalidValue(t *testing.T) {
 	}
 }
 
-func TestNmapCloudSelfhostedRejected(t *testing.T) {
-	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "selfhosted"}, testLogger())
+func TestNmapCloudProviderRequiresEnv(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "")
+	t.Setenv("SELFHOSTED_BUCKET", "")
+
+	dir := t.TempDir()
+	f := dir + "/targets.txt"
+	_ = os.WriteFile(f, []byte("1.1.1.1\n"), 0o644)
+
+	err := run([]string{"nmap", "--file", f, "--cloud", "manual"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for selfhosted cloud (compute not supported)")
+		t.Fatal("expected error for manual without env config")
 	}
-	if !strings.Contains(err.Error(), "selfhosted compute") {
+	if !strings.Contains(err.Error(), "manual requires SELFHOSTED_QUEUE_ID") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -351,46 +358,73 @@ func TestScanCloudInvalidValue(t *testing.T) {
 	}
 }
 
-func TestScanCloudSelfhostedRejected(t *testing.T) {
-	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--cloud", "selfhosted"}, testLogger())
+func TestScanCloudProviderRequiresEnv(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "")
+	t.Setenv("SELFHOSTED_BUCKET", "")
+
+	dir := t.TempDir()
+	f := dir + "/targets.txt"
+	_ = os.WriteFile(f, []byte("example.com\n"), 0o644)
+
+	err := run([]string{"scan", "--tool", "httpx", "--file", f, "--cloud", "hetzner"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for selfhosted cloud")
+		t.Fatal("expected error for provider without env config")
 	}
-	if !strings.Contains(err.Error(), "selfhosted compute") {
+	if !strings.Contains(err.Error(), "hetzner requires SELFHOSTED_QUEUE_ID") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestInfraDeployCloudSelfhostedRejected(t *testing.T) {
-	err := run([]string{"infra", "deploy", "--tool", "nmap", "--cloud", "selfhosted"}, testLogger())
+func TestNmapCloudManualRejectsFargate(t *testing.T) {
+	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "manual", "--compute-mode", "fargate"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for selfhosted cloud")
+		t.Fatal("expected error for manual + fargate")
 	}
-	if !strings.Contains(err.Error(), "selfhosted infrastructure deploy") {
+	if !strings.Contains(err.Error(), `provider "manual" only supports`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestInfraDestroyCloudSelfhostedRejected(t *testing.T) {
-	err := run([]string{"infra", "destroy", "--tool", "nmap", "--auto-approve", "--cloud", "selfhosted"}, testLogger())
+func TestScanCloudProviderRejectsSpot(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--cloud", "linode", "--compute-mode", "spot"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for selfhosted cloud")
+		t.Fatal("expected error for VPS provider + spot")
 	}
-	if !strings.Contains(err.Error(), "selfhosted infrastructure deploy") {
+	if !strings.Contains(err.Error(), `provider "linode" only supports`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestStatusCloudSelfhostedAccepted(t *testing.T) {
-	// status --cloud selfhosted should not be rejected at the cloud validation
-	// layer — only compute/deploy paths reject selfhosted. status needs a
+func TestInfraDeployCloudProviderRejected(t *testing.T) {
+	err := run([]string{"infra", "deploy", "--tool", "nmap", "--cloud", "hetzner"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for VPS provider")
+	}
+	if !strings.Contains(err.Error(), "hetzner infrastructure deploy/destroy lands in PR 6.3") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraDestroyCloudProviderRejected(t *testing.T) {
+	err := run([]string{"infra", "destroy", "--tool", "nmap", "--auto-approve", "--cloud", "manual"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for manual cloud")
+	}
+	if !strings.Contains(err.Error(), "manual infrastructure deploy/destroy lands in PR 6.3") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStatusCloudProviderAccepted(t *testing.T) {
+	// status --cloud manual should not be rejected at the cloud validation
+	// layer — only compute/deploy paths reject VPS providers. status needs a
 	// valid job record to proceed, so it will fail on that instead.
-	err := run([]string{"status", "--job-id", "nonexistent-job", "--cloud", "selfhosted"}, testLogger())
+	err := run([]string{"status", "--job-id", "nonexistent-job", "--cloud", "manual"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error (job not found)")
 	}
-	if strings.Contains(err.Error(), "selfhosted") && strings.Contains(err.Error(), "compute") {
-		t.Fatalf("status should not reject selfhosted cloud: %v", err)
+	if strings.Contains(err.Error(), "manual") && strings.Contains(err.Error(), "compute") {
+		t.Fatalf("status should not reject manual cloud: %v", err)
 	}
 }
 
@@ -412,6 +446,39 @@ func TestScanCloudAWSExplicitAccepted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), "selfhosted") {
 		t.Fatalf("--cloud aws should be accepted: %v", err)
+	}
+}
+
+func TestNmapCloudProviderAutoAccepted(t *testing.T) {
+	// manual + auto (default) should pass cloud/compute validation
+	// and proceed to file read. It fails there because the file doesn't exist.
+	err := run([]string{"nmap", "--file", "/nonexistent/targets.txt", "--cloud", "manual"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	// Should NOT fail on cloud or compute-mode validation.
+	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), `provider "manual" only supports`) {
+		t.Fatalf("manual + auto should pass validation: %v", err)
+	}
+}
+
+func TestScanCloudNamedProviderAutoAccepted(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt", "--cloud", "hetzner"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), `provider "hetzner" only supports`) {
+		t.Fatalf("hetzner + auto should pass validation: %v", err)
+	}
+}
+
+func TestNmapCloudProviderRejectsSpot(t *testing.T) {
+	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "vultr", "--compute-mode", "spot"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for VPS provider + spot")
+	}
+	if !strings.Contains(err.Error(), `provider "vultr" only supports`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

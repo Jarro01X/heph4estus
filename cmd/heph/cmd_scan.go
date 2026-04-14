@@ -37,7 +37,7 @@ func runScan(args []string, log logger.Logger) error {
 	noDeploy := fs.Bool("no-deploy", false, "Fail instead of deploying or redeploying infrastructure")
 	autoApprove := fs.Bool("auto-approve", false, "Skip deploy confirmation prompts when lifecycle requires deploy")
 	destroyAfter := fs.Bool("destroy-after", false, "Destroy infrastructure after the run completes")
-	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -55,7 +55,7 @@ func runScan(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := requireComputeSupport(cloudKind); err != nil {
+	if err := ValidateComputeMode(cloudKind, *computeMode); err != nil {
 		return err
 	}
 
@@ -64,9 +64,6 @@ func runScan(args []string, log logger.Logger) error {
 	}
 	if *format != "text" && *format != "json" {
 		return fmt.Errorf("--format must be text or json")
-	}
-	if *computeMode != "auto" && *computeMode != "fargate" && *computeMode != "spot" {
-		return fmt.Errorf("--compute-mode must be auto, fargate, or spot")
 	}
 	if *workers <= 0 {
 		return fmt.Errorf("--workers must be positive")
@@ -127,31 +124,49 @@ func runScan(args []string, log logger.Logger) error {
 		}
 	}
 
-	// Resolve tool config and ensure infrastructure.
-	cfg, err := infra.ResolveToolConfig(*tool)
-	if err != nil {
-		return err
-	}
-
 	ctx := mainContext()
-	region := infra.AWSRegion()
 
-	ensureResult, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
-		NoDeploy:     *noDeploy,
-		AutoApprove:  *autoApprove,
-		DestroyAfter: *destroyAfter,
-	}, region, os.Stderr, deployPrompt, log)
-	if err != nil {
-		return err
+	var (
+		queueURL string
+		bucket   string
+		outputs  map[string]string
+		reused   bool
+		toolCfg  *infra.ToolConfig
+	)
+
+	if cloudKind.IsSelfhostedFamily() {
+		// Selfhosted: no Terraform/deploy — read queue ID and bucket from config.
+		shCfg := factory.SelfhostedConfigFromEnv()
+		queueURL = shCfg.QueueID
+		bucket = shCfg.Bucket
+		if queueURL == "" || bucket == "" {
+			return fmt.Errorf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
+		}
+	} else {
+		// AWS: resolve tool config and ensure infrastructure.
+		toolCfg, err = infra.ResolveToolConfig(*tool)
+		if err != nil {
+			return err
+		}
+		region := infra.AWSRegion()
+		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
+			NoDeploy:     *noDeploy,
+			AutoApprove:  *autoApprove,
+			DestroyAfter: *destroyAfter,
+		}, region, os.Stderr, deployPrompt, log)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		outputs = ensureResult.Outputs
+		reused = ensureResult.Reused
+		queueURL = outputs["sqs_queue_url"]
+		bucket = outputs["s3_bucket_name"]
+		if queueURL == "" || bucket == "" {
+			return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
+		}
 	}
-	outputs := ensureResult.Outputs
 
-	queueURL := outputs["sqs_queue_url"]
-	bucket := outputs["s3_bucket_name"]
-	if queueURL == "" || bucket == "" {
-		return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-	}
-
+	// Build the cloud provider.
 	provider, err := factory.BuildForKind(ctx, cloudKind, log)
 	if err != nil {
 		return fmt.Errorf("building cloud provider: %w", err)
@@ -184,9 +199,9 @@ func runScan(args []string, log logger.Logger) error {
 		started bool
 	)
 	if mod.InputType == modules.InputTypeWordlist {
-		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind)
 	} else {
-		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker)
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind)
 	}
 
 	if scanErr != nil {
@@ -217,24 +232,28 @@ func runScan(args []string, log logger.Logger) error {
 
 	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
-		logStatus("Destroying infrastructure (--destroy-after)...")
-		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
-			if scanErr != nil {
-				return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+		if cloudKind.IsSelfhostedFamily() {
+			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
+		} else {
+			logStatus("Destroying infrastructure (--destroy-after)...")
+			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
+				if scanErr != nil {
+					return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+				}
+				return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
 			}
-			return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
 		}
 	}
 
 	// Print run summary.
 	if started {
-		printRunSummary(jobID, *tool, ensureResult.Reused, cleanupPolicy, exportDir)
+		printRunSummary(jobID, *tool, reused, cleanupPolicy, exportDir)
 	}
 
 	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker) (bool, error) {
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind) (bool, error) {
 	targets := parseTargetLines(content)
 	if len(targets) == 0 {
 		return false, fmt.Errorf("no targets found in %s", inputFile)
@@ -281,7 +300,7 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind); err != nil {
 		return false, err
 	}
 
@@ -291,7 +310,7 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
 }
 
-func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker) (bool, error) {
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind) (bool, error) {
 	if chunks <= 0 {
 		chunks = workers
 	}
@@ -347,7 +366,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket); err != nil {
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind); err != nil {
 		return false, err
 	}
 
@@ -382,7 +401,7 @@ func preflightWordlistFile(tool, path, runtimeTarget, options string, chunks, wo
 	return string(content), nil
 }
 
-func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string) error {
+func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string, cloudKind cloud.Kind) error {
 	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
@@ -394,7 +413,8 @@ func launchGenericWorkers(ctx context.Context, tool string, workers int, compute
 		"TOOL_NAME": tool,
 	}
 
-	useSpot := resolveComputeMode(computeMode, workers)
+	// Selfhosted only supports RunContainer (no spot instances).
+	useSpot := !cloudKind.IsSelfhostedFamily() && resolveComputeMode(computeMode, workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
@@ -430,9 +450,9 @@ func launchGenericWorkers(ctx context.Context, tool string, workers int, compute
 			Count:          workers,
 		})
 		if err != nil {
-			return fmt.Errorf("launching Fargate tasks: %w", err)
+			return fmt.Errorf("launching workers: %w", err)
 		}
-		logStatus("Launched %d Fargate tasks", workers)
+		logStatus("Launched %d workers", workers)
 	}
 	return nil
 }
