@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
@@ -124,7 +125,7 @@ func NewConfig() *ConfigModel {
 
 	savedCloud := ""
 	if cfg != nil {
-		savedCloud = cfg.Cloud
+		savedCloud = normalizeCloudValue(cfg.Cloud)
 	}
 	cloudInput := textinput.New()
 	cloudInput.Placeholder = "aws"
@@ -204,22 +205,56 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		if computeMode == "" {
 			computeMode = "auto"
 		}
-		if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
-			m.errMsg = "Compute mode must be auto, fargate, or spot"
+		cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.inputs[fieldCloud].Value()))
+		if cloudErr != nil {
+			m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
+			return m, nil
+		}
+		if err := cloud.ValidateComputeMode(cloudKind, computeMode); err != nil {
+			m.errMsg = err.Error()
 			return m, nil
 		}
 		jitterMax, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldJitterMax].Value()))
 		if jitterMax < 0 {
 			jitterMax = 0
 		}
-		cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.inputs[fieldCloud].Value()))
-		if cloudErr != nil {
-			m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
-			return m, nil
-		}
-		if cloudKind == cloud.KindSelfhosted {
-			m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
-			return m, nil
+
+		opCfg, _ := operator.LoadConfig()
+		cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
+		outputDir := operator.ResolveOutputDir("", opCfg)
+
+		if cloudKind.IsSelfhostedFamily() {
+			// Selfhosted: bypass deploy view, go directly to status.
+			shCfg := factory.SelfhostedConfigFromEnv()
+			if shCfg.QueueID == "" || shCfg.Bucket == "" {
+				m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				return core.NavigateWithDataMsg{
+					Target: core.ViewNmapStatus,
+					Data: core.InfraOutputs{
+						Cloud:              cloudKind,
+						SQSQueueURL:        shCfg.QueueID,
+						S3BucketName:       shCfg.Bucket,
+						TargetsContent:     msg.content,
+						NmapOptions:        m.inputs[fieldNmapOptions].Value(),
+						WorkerCount:        workerCount,
+						ComputeMode:        computeMode,
+						JitterMaxSeconds:   jitterMax,
+						NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
+						DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
+						NoRDNS:             m.noRDNS,
+						CleanupPolicy:      cleanupPolicy,
+						OutputDir:          outputDir,
+						Selfhosted: &core.SelfhostedRuntime{
+							WorkerHosts: shCfg.WorkerHosts,
+							SSHUser:     shCfg.SSHUser,
+							DockerImage: shCfg.DockerImage,
+						},
+					},
+				}
+			}
 		}
 
 		tc, err := infra.ResolveToolConfig("nmap")
@@ -227,9 +262,6 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("Error resolving nmap config: %v", err)
 			return m, nil
 		}
-		opCfg, _ := operator.LoadConfig()
-		cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
-		outputDir := operator.ResolveOutputDir("", opCfg)
 		return m, func() tea.Msg {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewDeploy,
@@ -356,4 +388,12 @@ func (m *ConfigModel) submit() tea.Cmd {
 		}
 		return fileReadMsg{content: string(data)}
 	}
+}
+
+func normalizeCloudValue(value string) string {
+	kind, err := cloud.ParseKind(value)
+	if err != nil {
+		return strings.TrimSpace(value)
+	}
+	return string(kind.Canonical())
 }

@@ -446,10 +446,12 @@ func TestGenericStatusViewShowsExportingPhase(t *testing.T) {
 // mockExportStorage is a minimal cloud.Storage for export gating tests.
 type mockExportStorage struct{}
 
-func (s *mockExportStorage) Upload(context.Context, string, string, []byte) error    { return nil }
-func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
-func (s *mockExportStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
-func (s *mockExportStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+func (s *mockExportStorage) Upload(context.Context, string, string, []byte) error { return nil }
+func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) {
+	return nil, nil
+}
+func (s *mockExportStorage) List(context.Context, string, string) ([]string, error) { return nil, nil }
+func (s *mockExportStorage) Count(context.Context, string, string) (int, error)     { return 0, nil }
 
 // --- Track 1 PR 5.12: auto-destroy lifecycle tests ---
 
@@ -633,6 +635,89 @@ func TestGenericStatusAutoDestroyEndToEnd(t *testing.T) {
 	}
 	if !navInfra.Destroyed {
 		t.Fatal("expected nav data to carry Destroyed=true")
+	}
+}
+
+func testSelfhostedInfra() core.InfraOutputs {
+	return core.InfraOutputs{
+		Cloud:          cloud.KindHetzner,
+		SQSQueueURL:    "test-stream",
+		S3BucketName:   "test-bucket",
+		ToolName:       "httpx",
+		ToolOptions:    "-silent",
+		TargetsContent: "example.com\n10.0.0.1\n",
+		WorkerCount:    5,
+		ComputeMode:    "auto",
+	}
+}
+
+func TestGenericStatusSelfhostedUsesLaunchWorkers(t *testing.T) {
+	sub := &mockSubmitter{}
+	tracker := &mockTracker{}
+	m := NewStatusWithDeps(testSelfhostedInfra(), sub, tracker, &mockUploader{})
+	m.Init()
+
+	// Enqueue succeeds → launch phase.
+	_, cmd := m.Update(enqueueProgressMsg{sent: 2, total: 2})
+	if m.phase != phaseLaunching {
+		t.Fatalf("expected phaseLaunching, got %d", m.phase)
+	}
+	if cmd == nil {
+		t.Fatal("expected launch command")
+	}
+	// Execute the launch command — should call LaunchWorkers, not LaunchSpotWorkers.
+	msg := cmd()
+	_, ok := msg.(launchProgressMsg)
+	if !ok {
+		t.Fatalf("expected launchProgressMsg (not spotLaunchMsg), got %T", msg)
+	}
+}
+
+func TestGenericStatusSelfhostedNeverUsesSpot(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.WorkerCount = 200 // above SpotThreshold
+	infra.ComputeMode = "auto"
+	if useSpot(infra) {
+		t.Fatal("selfhosted should never use spot even with high worker count")
+	}
+}
+
+func TestGenericStatusSelfhostedDestroyAfterSkipped(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = ""
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.totalTargets = 2
+	m.phase = phaseScanning
+
+	m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "selfhosted does not support auto-destroy") {
+		t.Fatalf("expected selfhosted destroy warning, got %q", m.cleanupWarning)
+	}
+}
+
+func TestGenericStatusSelfhostedExportComplete_SkipsDestroy(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = &mockDestroyer{} // destroyer exists but should be skipped
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-sh", count: 2})
+	// Selfhosted should skip destroy and go to complete.
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete (selfhosted skips destroy), got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "selfhosted does not support auto-destroy") {
+		t.Fatalf("expected selfhosted destroy warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
 	}
 }
 

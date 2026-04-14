@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 )
@@ -16,9 +17,17 @@ type Deployer interface {
 	TerraformReadOutputs(ctx context.Context, workDir string) (map[string]string, error)
 	DockerBuild(ctx context.Context, dockerfile, buildCtx, tag string, stream io.Writer) error
 	DockerBuildWithArgs(ctx context.Context, dockerfile, buildCtx, tag string, buildArgs map[string]string, stream io.Writer) error
-	ECRAuthenticate(ctx context.Context, region string) error
-	DockerTag(ctx context.Context, source, target string) error
-	DockerPush(ctx context.Context, tag string, stream io.Writer) error
+
+	// RegistryAuth authenticates Docker to the appropriate image registry.
+	// For AWS this does the three-step ECR auth flow; for selfhosted it runs
+	// docker login to the controller registry (or no-ops when no credentials
+	// are configured).
+	RegistryAuth(ctx context.Context, kind cloud.Kind, region string, outputs map[string]string) error
+
+	// ImagePublish tags a local image and pushes it to the provider's registry.
+	// For AWS this pushes to ECR; for selfhosted it pushes to the controller registry.
+	ImagePublish(ctx context.Context, kind cloud.Kind, localTag string, outputs map[string]string, stream io.Writer) error
+
 	TerraformDestroy(ctx context.Context, workDir string, stream io.Writer) error
 }
 
@@ -62,16 +71,15 @@ func (d *RealDeployer) DockerBuildWithArgs(ctx context.Context, dockerfile, buil
 	return d.docker.BuildWithArgs(ctx, dockerfile, buildCtx, tag, buildArgs, stream)
 }
 
-func (d *RealDeployer) ECRAuthenticate(ctx context.Context, region string) error {
-	return d.ecr.Authenticate(ctx, region)
+func (d *RealDeployer) RegistryAuth(ctx context.Context, kind cloud.Kind, region string, outputs map[string]string) error {
+	pub := infra.NewPublisher(kind, d.docker, d.ecr, outputs, region)
+	return pub.Authenticate(ctx)
 }
 
-func (d *RealDeployer) DockerTag(ctx context.Context, source, target string) error {
-	return d.docker.Tag(ctx, source, target)
-}
-
-func (d *RealDeployer) DockerPush(ctx context.Context, tag string, stream io.Writer) error {
-	return d.docker.Push(ctx, tag, stream)
+func (d *RealDeployer) ImagePublish(ctx context.Context, kind cloud.Kind, localTag string, outputs map[string]string, stream io.Writer) error {
+	pub := infra.NewPublisher(kind, d.docker, d.ecr, outputs, "")
+	_, err := pub.Publish(ctx, localTag, stream)
+	return err
 }
 
 func (d *RealDeployer) TerraformDestroy(ctx context.Context, workDir string, stream io.Writer) error {

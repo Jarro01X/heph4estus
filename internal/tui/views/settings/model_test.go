@@ -49,6 +49,7 @@ func TestNew_LoadsSavedConfig(t *testing.T) {
 		Profile:     "staging",
 		WorkerCount: 20,
 		ComputeMode: "spot",
+		Cloud:       "selfhosted",
 	}
 	m := NewWithDeps(testDeps(cfg))
 
@@ -63,6 +64,9 @@ func TestNew_LoadsSavedConfig(t *testing.T) {
 	}
 	if v := m.inputs[fieldComputeMode].Value(); v != "spot" {
 		t.Errorf("compute mode: got %q, want spot", v)
+	}
+	if v := m.inputs[fieldCloud].Value(); v != "manual" {
+		t.Errorf("cloud: got %q, want manual", v)
 	}
 }
 
@@ -108,6 +112,7 @@ func TestSave_PersistsConfig(t *testing.T) {
 	m.inputs[fieldComputeMode].SetValue("fargate")
 	m.inputs[fieldCleanupPolicy].SetValue("destroy-after")
 	m.inputs[fieldOutputDir].SetValue("/tmp/out")
+	m.inputs[fieldCloud].SetValue("selfhosted")
 
 	// Trigger save
 	cmd := m.save()
@@ -138,6 +143,9 @@ func TestSave_PersistsConfig(t *testing.T) {
 	}
 	if saved.OutputDir != "/tmp/out" {
 		t.Errorf("output dir: got %q", saved.OutputDir)
+	}
+	if saved.Cloud != "manual" {
+		t.Errorf("cloud: got %q, want manual", saved.Cloud)
 	}
 }
 

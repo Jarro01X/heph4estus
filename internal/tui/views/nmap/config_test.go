@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/tui/core"
 )
 
@@ -76,6 +77,51 @@ func TestConfigModel_SubmitEmptyShowsError(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.errMsg == "" {
 		t.Fatal("expected error message for empty target file")
+	}
+}
+
+func TestConfigModel_ProviderNavigatesToStatus(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "nmap-stream")
+	t.Setenv("SELFHOSTED_BUCKET", "nmap-bucket")
+	t.Setenv("SELFHOSTED_WORKER_HOSTS", "10.0.0.1")
+	t.Setenv("SELFHOSTED_SSH_USER", "heph")
+	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "worker:latest")
+
+	m := NewConfig()
+	m.Init()
+	m.inputs[fieldCloud].SetValue("manual")
+	_, cmd := m.Update(fileReadMsg{content: "1.1.1.1\n2.2.2.2\n"})
+	if cmd == nil {
+		t.Fatal("expected navigation command for manual provider")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewNmapStatus {
+		t.Fatalf("expected ViewNmapStatus (bypass deploy), got %v", nav.Target)
+	}
+	infra, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+	}
+	if infra.Cloud != cloud.KindManual {
+		t.Fatalf("expected cloud manual, got %q", infra.Cloud)
+	}
+}
+
+func TestConfigModel_ProviderRejectsSpot(t *testing.T) {
+	m := NewConfig()
+	m.Init()
+	m.inputs[fieldCloud].SetValue("linode")
+	m.inputs[fieldComputeMode].SetValue("spot")
+	_, cmd := m.Update(fileReadMsg{content: "1.1.1.1\n"})
+	if cmd != nil {
+		t.Fatal("expected nil command for VPS provider + spot")
+	}
+	if !strings.Contains(m.View(), `provider "linode" only supports`) {
+		t.Fatal("expected provider mode rejection error")
 	}
 }
 

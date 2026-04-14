@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
@@ -119,7 +120,7 @@ func NewConfig(toolName string) *ConfigModel {
 	computeMode := operator.ResolveComputeMode("", cfg)
 	savedCloud := ""
 	if cfg != nil {
-		savedCloud = cfg.Cloud
+		savedCloud = normalizeCloudValue(cfg.Cloud)
 	}
 
 	m := &ConfigModel{
@@ -284,18 +285,50 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 	if computeMode == "" {
 		computeMode = "auto"
 	}
-	if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
-		m.errMsg = "Compute mode must be auto, fargate, or spot"
-		return nil
-	}
 	cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.inputs[cfgFieldCloud].Value()))
 	if cloudErr != nil {
 		m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
 		return nil
 	}
-	if cloudKind == cloud.KindSelfhosted {
-		m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
+	if err := cloud.ValidateComputeMode(cloudKind, computeMode); err != nil {
+		m.errMsg = err.Error()
 		return nil
+	}
+
+	opCfg, _ := operator.LoadConfig()
+	cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
+	outputDir := operator.ResolveOutputDir("", opCfg)
+	toolOptions := strings.TrimSpace(m.inputs[cfgFieldOptions].Value())
+
+	if cloudKind.IsSelfhostedFamily() {
+		// Selfhosted: bypass deploy view, go directly to status.
+		shCfg := factory.SelfhostedConfigFromEnv()
+		if shCfg.QueueID == "" || shCfg.Bucket == "" {
+			m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
+			return nil
+		}
+		return func() tea.Msg {
+			return core.NavigateWithDataMsg{
+				Target: core.ViewGenericStatus,
+				Data: core.InfraOutputs{
+					Cloud:          cloudKind,
+					SQSQueueURL:    shCfg.QueueID,
+					S3BucketName:   shCfg.Bucket,
+					TargetsContent: msg.content,
+					WorkerCount:    workerCount,
+					ComputeMode:    computeMode,
+					ToolName:       m.toolName,
+					ToolOptions:    toolOptions,
+					CleanupPolicy:  cleanupPolicy,
+					OutputDir:      outputDir,
+					Selfhosted: &core.SelfhostedRuntime{
+						WorkerHosts: shCfg.WorkerHosts,
+						SSHUser:     shCfg.SSHUser,
+						DockerImage: shCfg.DockerImage,
+					},
+				},
+			}
+		}
 	}
 
 	tc, err := infra.ResolveToolConfig(m.toolName)
@@ -303,9 +336,6 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
 		return nil
 	}
-	opCfg, _ := operator.LoadConfig()
-	cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
-	outputDir := operator.ResolveOutputDir("", opCfg)
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
@@ -323,7 +353,7 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 				WorkerCount:    workerCount,
 				ComputeMode:    computeMode,
 				ToolName:       m.toolName,
-				ToolOptions:    strings.TrimSpace(m.inputs[cfgFieldOptions].Value()),
+				ToolOptions:    toolOptions,
 				PostDeployView: core.ViewGenericStatus,
 				CleanupPolicy:  cleanupPolicy,
 				OutputDir:      outputDir,
@@ -358,18 +388,52 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 	if computeMode == "" {
 		computeMode = "auto"
 	}
-	if computeMode != "auto" && computeMode != "fargate" && computeMode != "spot" {
-		m.errMsg = "Compute mode must be auto, fargate, or spot"
-		return nil
-	}
 	cloudKind, cloudErr := cloud.ParseKind(strings.TrimSpace(m.wlInputs[wlFieldCloud].Value()))
 	if cloudErr != nil {
 		m.errMsg = fmt.Sprintf("Invalid cloud: %v", cloudErr)
 		return nil
 	}
-	if cloudKind == cloud.KindSelfhosted {
-		m.errMsg = "Selfhosted compute/deploy support lands in PR 6.2/6.3"
+	if err := cloud.ValidateComputeMode(cloudKind, computeMode); err != nil {
+		m.errMsg = err.Error()
 		return nil
+	}
+
+	wlCfg, _ := operator.LoadConfig()
+	wlCleanup := operator.ResolveCleanupPolicy("", wlCfg)
+	wlOutDir := operator.ResolveOutputDir("", wlCfg)
+	toolOptions := strings.TrimSpace(m.wlInputs[wlFieldOptions].Value())
+
+	if cloudKind.IsSelfhostedFamily() {
+		// Selfhosted: bypass deploy view, go directly to status.
+		shCfg := factory.SelfhostedConfigFromEnv()
+		if shCfg.QueueID == "" || shCfg.Bucket == "" {
+			m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
+			return nil
+		}
+		return func() tea.Msg {
+			return core.NavigateWithDataMsg{
+				Target: core.ViewGenericStatus,
+				Data: core.InfraOutputs{
+					Cloud:           cloudKind,
+					SQSQueueURL:     shCfg.QueueID,
+					S3BucketName:    shCfg.Bucket,
+					WorkerCount:     workerCount,
+					ComputeMode:     computeMode,
+					ToolName:        m.toolName,
+					ToolOptions:     toolOptions,
+					WordlistContent: msg.content,
+					RuntimeTarget:   runtimeTarget,
+					ChunkCount:      chunkCount,
+					CleanupPolicy:   wlCleanup,
+					OutputDir:       wlOutDir,
+					Selfhosted: &core.SelfhostedRuntime{
+						WorkerHosts: shCfg.WorkerHosts,
+						SSHUser:     shCfg.SSHUser,
+						DockerImage: shCfg.DockerImage,
+					},
+				},
+			}
+		}
 	}
 
 	tc, err := infra.ResolveToolConfig(m.toolName)
@@ -377,10 +441,6 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
 		return nil
 	}
-
-	wlCfg, _ := operator.LoadConfig()
-	wlCleanup := operator.ResolveCleanupPolicy("", wlCfg)
-	wlOutDir := operator.ResolveOutputDir("", wlCfg)
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: core.ViewDeploy,
@@ -397,7 +457,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 				WorkerCount:     workerCount,
 				ComputeMode:     computeMode,
 				ToolName:        m.toolName,
-				ToolOptions:     strings.TrimSpace(m.wlInputs[wlFieldOptions].Value()),
+				ToolOptions:     toolOptions,
 				PostDeployView:  core.ViewGenericStatus,
 				WordlistContent: msg.content,
 				RuntimeTarget:   runtimeTarget,
@@ -507,6 +567,14 @@ func (m *ConfigModel) updateFocus() tea.Cmd {
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+func normalizeCloudValue(value string) string {
+	kind, err := cloud.ParseKind(value)
+	if err != nil {
+		return strings.TrimSpace(value)
+	}
+	return string(kind.Canonical())
 }
 
 func (m *ConfigModel) submit() tea.Cmd {
