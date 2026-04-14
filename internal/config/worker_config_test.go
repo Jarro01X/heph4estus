@@ -51,6 +51,59 @@ func TestNewWorkerConfig_ProviderNeutralFieldNames(t *testing.T) {
 	}
 }
 
+func TestNewWorkerConfig_JitterParsing(t *testing.T) {
+	t.Setenv("QUEUE_URL", "q")
+	t.Setenv("S3_BUCKET", "b")
+	t.Setenv("TOOL_NAME", "nmap")
+	t.Setenv("JITTER_MAX_SECONDS", "30")
+
+	cfg, err := NewWorkerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JitterMaxSeconds != 30 {
+		t.Errorf("JitterMaxSeconds = %d, want 30", cfg.JitterMaxSeconds)
+	}
+}
+
+func TestNewWorkerConfig_JitterInvalidIgnored(t *testing.T) {
+	t.Setenv("QUEUE_URL", "q")
+	t.Setenv("S3_BUCKET", "b")
+	t.Setenv("TOOL_NAME", "nmap")
+	t.Setenv("JITTER_MAX_SECONDS", "abc")
+
+	cfg, err := NewWorkerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JitterMaxSeconds != 0 {
+		t.Errorf("JitterMaxSeconds = %d, want 0 for invalid input", cfg.JitterMaxSeconds)
+	}
+}
+
+func TestNewWorkerConfig_SelfhostedScanRuntime(t *testing.T) {
+	// Prove a selfhosted worker reads env-driven queue/bucket exactly like AWS.
+	t.Setenv("QUEUE_URL", "nats-subject")
+	t.Setenv("S3_BUCKET", "minio-bucket")
+	t.Setenv("TOOL_NAME", "httpx")
+	t.Setenv("CLOUD", "selfhosted")
+	t.Setenv("JITTER_MAX_SECONDS", "")
+
+	cfg, err := NewWorkerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Cloud != "selfhosted" {
+		t.Errorf("Cloud = %q, want selfhosted", cfg.Cloud)
+	}
+	if cfg.QueueID != "nats-subject" {
+		t.Errorf("QueueID = %q, want nats-subject", cfg.QueueID)
+	}
+	if cfg.Bucket != "minio-bucket" {
+		t.Errorf("Bucket = %q, want minio-bucket", cfg.Bucket)
+	}
+}
+
 func TestNewWorkerConfig_MissingRequired(t *testing.T) {
 	tests := []struct {
 		name    string
