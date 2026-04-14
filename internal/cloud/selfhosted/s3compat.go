@@ -2,8 +2,7 @@
 // operator-owned infrastructure (MinIO for object storage, NATS JetStream
 // for queuing) instead of AWS managed services.
 //
-// Storage and queue are fully implemented. Compute remains a stub until
-// PR 6.2 lands selfhosted compute (docker run over SSH).
+// Storage, queue, and Docker-over-SSH compute are fully implemented.
 package selfhosted
 
 import (

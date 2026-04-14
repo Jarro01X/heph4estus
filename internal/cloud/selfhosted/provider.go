@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
@@ -14,25 +15,33 @@ import (
 // JetStream-backed queue.
 var errQueueNotConfigured = errors.New("selfhosted: queue is not configured — provide NATS_URL to enable queue support")
 
-// errComputeNotImplemented is returned by the stub compute surface.
-// Selfhosted compute (docker run over SSH) lands in PR 6.2.
-var errComputeNotImplemented = errors.New("selfhosted: compute is not implemented (PR 6.2)")
-
 // Compile-time interface check.
 var _ cloud.Provider = (*Provider)(nil)
 
-// Provider is the selfhosted cloud.Provider backed by S3-compatible storage
-// and NATS JetStream queuing. Compute remains a stub until PR 6.2.
+// Provider is the selfhosted cloud.Provider backed by S3-compatible storage,
+// NATS JetStream queuing, and Docker-over-SSH compute.
 type Provider struct {
 	storage *Storage
 	queue   cloud.Queue
 	compute cloud.Compute
 }
 
+// ComputeConfig describes the SSH/Docker compute settings for selfhosted
+// workers. The DockerCompute implementation in docker.go uses these to
+// launch containers on remote hosts over SSH.
+type ComputeConfig struct {
+	WorkerHosts []string // SSH-reachable worker addresses
+	SSHUser     string   // SSH login user
+	SSHKeyPath  string   // path to private key
+	SSHPort     int      // SSH port (0 means default 22)
+	DockerImage string   // Docker image reference for the worker container
+}
+
 // ProviderConfig is the input to NewProvider.
 type ProviderConfig struct {
 	Storage StorageConfig
 	Queue   *QueueConfig
+	Compute *ComputeConfig
 }
 
 // NewProvider builds a selfhosted Provider from explicit configuration.
@@ -51,10 +60,22 @@ func NewProvider(cfg ProviderConfig, log logger.Logger) (*Provider, error) {
 		}
 		q = nq
 	}
+	var comp cloud.Compute
+	if err := validateComputeConfig(cfg.Compute); err != nil {
+		comp = configErrorCompute{err: err}
+	} else {
+		transportEnv := buildTransportEnv(cfg)
+		runner := &sshRunner{
+			user:    cfg.Compute.SSHUser,
+			keyPath: cfg.Compute.SSHKeyPath,
+			port:    cfg.Compute.SSHPort,
+		}
+		comp = newDockerCompute(*cfg.Compute, transportEnv, runner, log)
+	}
 	return &Provider{
 		storage: storage,
 		queue:   q,
-		compute: stubCompute{},
+		compute: comp,
 	}, nil
 }
 
@@ -64,7 +85,8 @@ func (p *Provider) Storage() cloud.Storage { return p.storage }
 // Queue returns the NATS JetStream queue, or a stub if no NATS URL was configured.
 func (p *Provider) Queue() cloud.Queue { return p.queue }
 
-// Compute returns a placeholder compute surface until PR 6.2 lands.
+// Compute returns the Docker-over-SSH compute surface when compute config is
+// present, or a config-error surface otherwise.
 func (p *Provider) Compute() cloud.Compute { return p.compute }
 
 type stubQueue struct{}
@@ -76,14 +98,23 @@ func (stubQueue) Receive(context.Context, string) (*cloud.Message, error) {
 }
 func (stubQueue) Delete(context.Context, string, string) error { return errQueueNotConfigured }
 
-type stubCompute struct{}
-
-func (stubCompute) RunContainer(context.Context, cloud.ContainerOpts) (string, error) {
-	return "", errComputeNotImplemented
-}
-func (stubCompute) RunSpotInstances(context.Context, cloud.SpotOpts) ([]string, error) {
-	return nil, errComputeNotImplemented
-}
-func (stubCompute) GetSpotStatus(context.Context, []string) ([]cloud.SpotStatus, error) {
-	return nil, errComputeNotImplemented
+func buildTransportEnv(cfg ProviderConfig) map[string]string {
+	region := cfg.Storage.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	env := map[string]string{
+		"S3_ENDPOINT":   cfg.Storage.Endpoint,
+		"S3_REGION":     region,
+		"S3_ACCESS_KEY": cfg.Storage.AccessKey,
+		"S3_SECRET_KEY": cfg.Storage.Secret,
+		"S3_PATH_STYLE": strconv.FormatBool(cfg.Storage.PathStyle),
+	}
+	if cfg.Queue != nil {
+		env["NATS_URL"] = cfg.Queue.URL
+		if cfg.Queue.StreamName != "" {
+			env["NATS_STREAM"] = cfg.Queue.StreamName
+		}
+	}
+	return env
 }
