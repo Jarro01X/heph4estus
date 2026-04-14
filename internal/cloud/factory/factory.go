@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
@@ -25,8 +27,8 @@ type AWSConfig struct {
 }
 
 // SelfhostedConfig describes the explicit endpoints and credentials needed
-// for the selfhosted provider. PR 6.1 Track 0 only persists the shape; later
-// tracks attach the actual NATS and S3-compatible client code.
+// for the selfhosted provider (NATS JetStream, S3-compatible storage,
+// Docker-over-SSH compute).
 type SelfhostedConfig struct {
 	// NATS JetStream queue settings.
 	NATSURL        string
@@ -41,6 +43,17 @@ type SelfhostedConfig struct {
 	S3AccessKey string
 	S3Secret    string
 	S3PathStyle bool
+
+	// Scan runtime settings — queue identifier and bucket for scan execution.
+	QueueID string // Queue identifier (SQS URL or NATS subject)
+	Bucket  string // Storage bucket name
+
+	// Compute settings for SSH/Docker workers.
+	WorkerHosts []string // SSH-reachable worker addresses
+	SSHUser     string   // SSH login user
+	SSHKeyPath  string   // path to private key
+	SSHPort     int      // SSH port (0 means default 22)
+	DockerImage string   // Docker image reference for the worker container
 }
 
 // Config is the input to Build. Exactly one of AWS or Selfhosted should be
@@ -59,15 +72,15 @@ func Build(cfg Config) (cloud.Provider, error) {
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("factory: logger is required")
 	}
-	switch cfg.Kind {
+	switch cfg.Kind.RuntimeFamily() {
 	case cloud.KindAWS, "":
 		if cfg.AWS == nil {
 			return nil, fmt.Errorf("factory: AWS config is required for cloud %q", cloud.KindAWS)
 		}
 		return awscloud.NewProvider(cfg.AWS.SDKConfig, cfg.Logger), nil
-	case cloud.KindSelfhosted:
+	case cloud.KindManual:
 		if cfg.Selfhosted == nil {
-			return nil, fmt.Errorf("factory: selfhosted config is required for cloud %q", cloud.KindSelfhosted)
+			return nil, fmt.Errorf("factory: selfhosted config is required for cloud %q", cfg.Kind.Canonical())
 		}
 		pcfg := selfhosted.ProviderConfig{
 			Storage: selfhosted.StorageConfig{
@@ -87,6 +100,15 @@ func Build(cfg Config) (cloud.Provider, error) {
 				MaxDeliver:     cfg.Selfhosted.MaxDeliver,
 			}
 		}
+		if len(cfg.Selfhosted.WorkerHosts) > 0 {
+			pcfg.Compute = &selfhosted.ComputeConfig{
+				WorkerHosts: cfg.Selfhosted.WorkerHosts,
+				SSHUser:     cfg.Selfhosted.SSHUser,
+				SSHKeyPath:  cfg.Selfhosted.SSHKeyPath,
+				SSHPort:     cfg.Selfhosted.SSHPort,
+				DockerImage: cfg.Selfhosted.DockerImage,
+			}
+		}
 		return selfhosted.NewProvider(pcfg, cfg.Logger)
 	default:
 		return nil, fmt.Errorf("factory: unsupported cloud %q", cfg.Kind)
@@ -97,7 +119,7 @@ func Build(cfg Config) (cloud.Provider, error) {
 // environment variables. CLI, TUI, and worker paths use this so endpoint
 // configuration is centralised in one place.
 func SelfhostedConfigFromEnv() *SelfhostedConfig {
-	return &SelfhostedConfig{
+	cfg := &SelfhostedConfig{
 		NATSURL:     os.Getenv("NATS_URL"),
 		StreamName:  os.Getenv("NATS_STREAM"),
 		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
@@ -105,7 +127,25 @@ func SelfhostedConfigFromEnv() *SelfhostedConfig {
 		S3AccessKey: os.Getenv("S3_ACCESS_KEY"),
 		S3Secret:    os.Getenv("S3_SECRET_KEY"),
 		S3PathStyle: os.Getenv("S3_PATH_STYLE") == "true",
+
+		// Scan runtime settings.
+		QueueID: os.Getenv("SELFHOSTED_QUEUE_ID"),
+		Bucket:  os.Getenv("SELFHOSTED_BUCKET"),
+
+		// Compute settings.
+		SSHUser:     os.Getenv("SELFHOSTED_SSH_USER"),
+		SSHKeyPath:  os.Getenv("SELFHOSTED_SSH_KEY_PATH"),
+		DockerImage: os.Getenv("SELFHOSTED_DOCKER_IMAGE"),
 	}
+	if hosts := os.Getenv("SELFHOSTED_WORKER_HOSTS"); hosts != "" {
+		cfg.WorkerHosts = splitCommaList(hosts)
+	}
+	if port := os.Getenv("SELFHOSTED_SSH_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil && p > 0 {
+			cfg.SSHPort = p
+		}
+	}
+	return cfg
 }
 
 // BuildForKind constructs a provider for the given kind, loading
@@ -113,7 +153,7 @@ func SelfhostedConfigFromEnv() *SelfhostedConfig {
 // default SDK credential chain; for selfhosted it reads NATS_URL,
 // S3_ENDPOINT, and related env vars via SelfhostedConfigFromEnv.
 func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (cloud.Provider, error) {
-	switch kind {
+	switch kind.RuntimeFamily() {
 	case cloud.KindAWS, "":
 		sdkCfg, err := awscfg.LoadDefaultConfig(ctx)
 		if err != nil {
@@ -124,9 +164,9 @@ func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (clou
 			AWS:    &AWSConfig{SDKConfig: sdkCfg},
 			Logger: log,
 		})
-	case cloud.KindSelfhosted:
+	case cloud.KindManual:
 		return Build(Config{
-			Kind:       cloud.KindSelfhosted,
+			Kind:       kind.Canonical(),
 			Selfhosted: SelfhostedConfigFromEnv(),
 			Logger:     log,
 		})
@@ -140,4 +180,16 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitCommaList splits a comma-separated string into trimmed, non-empty parts.
+func splitCommaList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

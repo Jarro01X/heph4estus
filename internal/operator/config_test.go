@@ -302,9 +302,10 @@ func TestResolveCloud(t *testing.T) {
 		want     cloud.Kind
 		wantErr  bool
 	}{
-		{"explicit aws wins", "aws", &OperatorConfig{Cloud: "selfhosted"}, cloud.KindAWS, false},
-		{"explicit selfhosted wins", "selfhosted", &OperatorConfig{Cloud: "aws"}, cloud.KindSelfhosted, false},
-		{"config used when explicit empty", "", &OperatorConfig{Cloud: "selfhosted"}, cloud.KindSelfhosted, false},
+		{"explicit aws wins", "aws", &OperatorConfig{Cloud: "manual"}, cloud.KindAWS, false},
+		{"explicit provider wins", "hetzner", &OperatorConfig{Cloud: "aws"}, cloud.KindHetzner, false},
+		{"config used when explicit empty", "", &OperatorConfig{Cloud: "manual"}, cloud.KindManual, false},
+		{"legacy persisted alias still parses", "", &OperatorConfig{Cloud: "selfhosted"}, cloud.KindManual, false},
 		{"defaults to aws when both empty", "", &OperatorConfig{}, cloud.KindAWS, false},
 		{"nil config defaults to aws", "", nil, cloud.KindAWS, false},
 		{"invalid explicit errors", "gcp", &OperatorConfig{}, "", true},
@@ -326,7 +327,7 @@ func TestResolveCloud(t *testing.T) {
 func TestSaveAndLoadConfig_Cloud(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	cfg := &OperatorConfig{Cloud: "selfhosted"}
+	cfg := &OperatorConfig{Cloud: "hetzner"}
 	if err := SaveConfigTo(cfg, path); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -334,8 +335,8 @@ func TestSaveAndLoadConfig_Cloud(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Cloud != "selfhosted" {
-		t.Errorf("cloud = %q, want selfhosted", loaded.Cloud)
+	if loaded.Cloud != "hetzner" {
+		t.Errorf("cloud = %q, want hetzner", loaded.Cloud)
 	}
 }
 

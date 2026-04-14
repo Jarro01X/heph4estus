@@ -19,8 +19,8 @@ type OperatorConfig struct {
 	ComputeMode   string `json:"compute_mode,omitempty"`
 	CleanupPolicy string `json:"cleanup_policy,omitempty"` // "reuse" or "destroy-after"
 	OutputDir     string `json:"output_dir,omitempty"`
-	// Cloud is the persisted default cloud kind ("aws" or "selfhosted").
-	// Empty means "use the built-in default" (AWS).
+	// Cloud is the persisted default cloud kind ("aws", "manual", "hetzner",
+	// etc.). Empty means "use the built-in default" (AWS).
 	Cloud string `json:"cloud,omitempty"`
 }
 

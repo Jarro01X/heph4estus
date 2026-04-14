@@ -136,7 +136,10 @@ func TestSelfhostedConfigFromEnv(t *testing.T) {
 }
 
 func TestSelfhostedConfigFromEnv_Defaults(t *testing.T) {
-	for _, k := range []string{"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE"} {
+	for _, k := range []string{
+		"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE",
+		"SELFHOSTED_WORKER_HOSTS", "SELFHOSTED_SSH_USER", "SELFHOSTED_SSH_KEY_PATH", "SELFHOSTED_SSH_PORT", "SELFHOSTED_DOCKER_IMAGE",
+	} {
 		t.Setenv(k, "")
 	}
 
@@ -150,5 +153,178 @@ func TestSelfhostedConfigFromEnv_Defaults(t *testing.T) {
 	}
 	if cfg.S3PathStyle {
 		t.Error("S3PathStyle should default to false")
+	}
+	if len(cfg.WorkerHosts) != 0 {
+		t.Errorf("WorkerHosts should be empty, got %v", cfg.WorkerHosts)
+	}
+	if cfg.SSHUser != "" {
+		t.Errorf("SSHUser should be empty, got %q", cfg.SSHUser)
+	}
+	if cfg.SSHKeyPath != "" {
+		t.Errorf("SSHKeyPath should be empty, got %q", cfg.SSHKeyPath)
+	}
+	if cfg.SSHPort != 0 {
+		t.Errorf("SSHPort should be 0, got %d", cfg.SSHPort)
+	}
+	if cfg.DockerImage != "" {
+		t.Errorf("DockerImage should be empty, got %q", cfg.DockerImage)
+	}
+}
+
+func TestSelfhostedConfigFromEnv_ComputeFields(t *testing.T) {
+	t.Setenv("SELFHOSTED_WORKER_HOSTS", "10.0.0.1, 10.0.0.2, 10.0.0.3")
+	t.Setenv("SELFHOSTED_SSH_USER", "heph")
+	t.Setenv("SELFHOSTED_SSH_KEY_PATH", "/home/heph/.ssh/id_ed25519")
+	t.Setenv("SELFHOSTED_SSH_PORT", "2222")
+	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "ghcr.io/heph/worker:latest")
+
+	// Clear storage/queue vars to isolate the test.
+	for _, k := range []string{"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE"} {
+		t.Setenv(k, "")
+	}
+
+	cfg := SelfhostedConfigFromEnv()
+
+	if len(cfg.WorkerHosts) != 3 {
+		t.Fatalf("WorkerHosts = %v, want 3 entries", cfg.WorkerHosts)
+	}
+	if cfg.WorkerHosts[0] != "10.0.0.1" || cfg.WorkerHosts[1] != "10.0.0.2" || cfg.WorkerHosts[2] != "10.0.0.3" {
+		t.Errorf("WorkerHosts = %v", cfg.WorkerHosts)
+	}
+	if cfg.SSHUser != "heph" {
+		t.Errorf("SSHUser = %q", cfg.SSHUser)
+	}
+	if cfg.SSHKeyPath != "/home/heph/.ssh/id_ed25519" {
+		t.Errorf("SSHKeyPath = %q", cfg.SSHKeyPath)
+	}
+	if cfg.SSHPort != 2222 {
+		t.Errorf("SSHPort = %d", cfg.SSHPort)
+	}
+	if cfg.DockerImage != "ghcr.io/heph/worker:latest" {
+		t.Errorf("DockerImage = %q", cfg.DockerImage)
+	}
+}
+
+func TestSelfhostedConfigFromEnv_QueueAndBucket(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "scan-stream")
+	t.Setenv("SELFHOSTED_BUCKET", "results-bucket")
+	// Clear other vars.
+	for _, k := range []string{"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE",
+		"SELFHOSTED_WORKER_HOSTS", "SELFHOSTED_SSH_USER", "SELFHOSTED_SSH_KEY_PATH", "SELFHOSTED_SSH_PORT", "SELFHOSTED_DOCKER_IMAGE"} {
+		t.Setenv(k, "")
+	}
+
+	cfg := SelfhostedConfigFromEnv()
+	if cfg.QueueID != "scan-stream" {
+		t.Errorf("QueueID = %q, want scan-stream", cfg.QueueID)
+	}
+	if cfg.Bucket != "results-bucket" {
+		t.Errorf("Bucket = %q, want results-bucket", cfg.Bucket)
+	}
+}
+
+func TestSelfhostedConfigFromEnv_SingleWorkerHost(t *testing.T) {
+	t.Setenv("SELFHOSTED_WORKER_HOSTS", "worker.example.com")
+	for _, k := range []string{"NATS_URL", "NATS_STREAM", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE",
+		"SELFHOSTED_SSH_USER", "SELFHOSTED_SSH_KEY_PATH", "SELFHOSTED_SSH_PORT", "SELFHOSTED_DOCKER_IMAGE"} {
+		t.Setenv(k, "")
+	}
+
+	cfg := SelfhostedConfigFromEnv()
+	if len(cfg.WorkerHosts) != 1 || cfg.WorkerHosts[0] != "worker.example.com" {
+		t.Errorf("WorkerHosts = %v, want [worker.example.com]", cfg.WorkerHosts)
+	}
+}
+
+func TestSelfhostedConfigFromEnv_FullScanRuntime(t *testing.T) {
+	// Prove the full selfhosted scan runtime env contract is parsed correctly.
+	t.Setenv("NATS_URL", "nats://ctrl:4222")
+	t.Setenv("NATS_STREAM", "heph-tasks")
+	t.Setenv("S3_ENDPOINT", "http://ctrl:9000")
+	t.Setenv("S3_REGION", "us-east-1")
+	t.Setenv("S3_ACCESS_KEY", "minioadmin")
+	t.Setenv("S3_SECRET_KEY", "minioadmin")
+	t.Setenv("S3_PATH_STYLE", "true")
+	t.Setenv("SELFHOSTED_QUEUE_ID", "heph-tasks")
+	t.Setenv("SELFHOSTED_BUCKET", "heph-results")
+	t.Setenv("SELFHOSTED_WORKER_HOSTS", "w1.example.com,w2.example.com")
+	t.Setenv("SELFHOSTED_SSH_USER", "heph")
+	t.Setenv("SELFHOSTED_SSH_KEY_PATH", "/home/heph/.ssh/id_ed25519")
+	t.Setenv("SELFHOSTED_SSH_PORT", "22")
+	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "ctrl:5000/heph-nmap-worker:latest")
+
+	cfg := SelfhostedConfigFromEnv()
+
+	// Queue/bucket (scan runtime contract).
+	if cfg.QueueID != "heph-tasks" {
+		t.Errorf("QueueID = %q", cfg.QueueID)
+	}
+	if cfg.Bucket != "heph-results" {
+		t.Errorf("Bucket = %q", cfg.Bucket)
+	}
+
+	// Transport endpoints.
+	if cfg.NATSURL != "nats://ctrl:4222" {
+		t.Errorf("NATSURL = %q", cfg.NATSURL)
+	}
+	if cfg.S3Endpoint != "http://ctrl:9000" {
+		t.Errorf("S3Endpoint = %q", cfg.S3Endpoint)
+	}
+
+	// Compute.
+	if len(cfg.WorkerHosts) != 2 {
+		t.Fatalf("WorkerHosts = %v", cfg.WorkerHosts)
+	}
+	if cfg.SSHUser != "heph" {
+		t.Errorf("SSHUser = %q", cfg.SSHUser)
+	}
+	if cfg.SSHPort != 22 {
+		t.Errorf("SSHPort = %d", cfg.SSHPort)
+	}
+	if cfg.DockerImage != "ctrl:5000/heph-nmap-worker:latest" {
+		t.Errorf("DockerImage = %q", cfg.DockerImage)
+	}
+}
+
+func TestSelfhostedConfigFromEnv_InvalidSSHPortIgnored(t *testing.T) {
+	t.Setenv("SELFHOSTED_SSH_PORT", "not-a-number")
+	for _, k := range []string{"NATS_URL", "S3_ENDPOINT", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PATH_STYLE",
+		"SELFHOSTED_WORKER_HOSTS", "SELFHOSTED_SSH_USER", "SELFHOSTED_SSH_KEY_PATH", "SELFHOSTED_DOCKER_IMAGE",
+		"SELFHOSTED_QUEUE_ID", "SELFHOSTED_BUCKET", "NATS_STREAM"} {
+		t.Setenv(k, "")
+	}
+
+	cfg := SelfhostedConfigFromEnv()
+	if cfg.SSHPort != 0 {
+		t.Errorf("expected SSHPort 0 for invalid input, got %d", cfg.SSHPort)
+	}
+}
+
+func TestBuildSelfhostedWithComputeConfig(t *testing.T) {
+	p, err := Build(Config{
+		Kind: cloud.KindSelfhosted,
+		Selfhosted: &SelfhostedConfig{
+			S3Endpoint:  "https://minio.example:9000",
+			S3Region:    "us-east-1",
+			S3AccessKey: "ak",
+			S3Secret:    "sk",
+			S3PathStyle: true,
+			WorkerHosts: []string{"10.0.0.1", "10.0.0.2"},
+			SSHUser:     "heph",
+			SSHKeyPath:  "/tmp/key",
+			SSHPort:     2222,
+			DockerImage: "ghcr.io/heph/worker:latest",
+		},
+		Logger: logger.NewSimpleLogger(),
+	})
+	if err != nil {
+		t.Fatalf("Build selfhosted with compute: %v", err)
+	}
+	if p == nil || p.Storage() == nil {
+		t.Fatal("expected selfhosted provider with storage")
+	}
+	// Compute is backed by real DockerCompute when config is present.
+	if p.Compute() == nil {
+		t.Fatal("expected compute surface")
 	}
 }

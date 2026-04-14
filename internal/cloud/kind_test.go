@@ -13,7 +13,12 @@ func TestParseKind(t *testing.T) {
 		{"aws lowercase", "aws", KindAWS, false},
 		{"aws mixed case", "AWS", KindAWS, false},
 		{"aws with whitespace", "  aws  ", KindAWS, false},
-		{"selfhosted", "selfhosted", KindSelfhosted, false},
+		{"manual", "manual", KindManual, false},
+		{"legacy selfhosted alias", "selfhosted", KindManual, false},
+		{"hetzner", "hetzner", KindHetzner, false},
+		{"linode", "linode", KindLinode, false},
+		{"scaleway", "scaleway", KindScaleway, false},
+		{"vultr", "vultr", KindVultr, false},
 		{"unknown", "gcp", "", true},
 	}
 	for _, tt := range tests {
@@ -29,15 +34,69 @@ func TestParseKind(t *testing.T) {
 	}
 }
 
-func TestSupportedKindsContainsAWSAndSelfhosted(t *testing.T) {
-	got := SupportedKinds()
-	want := map[Kind]bool{KindAWS: false, KindSelfhosted: false}
-	for _, k := range got {
-		want[k] = true
+func TestValidateComputeMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    Kind
+		mode    string
+		wantErr bool
+	}{
+		{"aws auto", KindAWS, "auto", false},
+		{"aws empty", KindAWS, "", false},
+		{"aws fargate", KindAWS, "fargate", false},
+		{"aws spot", KindAWS, "spot", false},
+		{"aws invalid", KindAWS, "gpu", true},
+		{"manual auto", KindManual, "auto", false},
+		{"manual empty", KindManual, "", false},
+		{"manual fargate rejected", KindManual, "fargate", true},
+		{"hetzner spot rejected", KindHetzner, "spot", true},
 	}
-	for k, present := range want {
-		if !present {
-			t.Errorf("SupportedKinds missing %q", k)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateComputeMode(tt.kind, tt.mode)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateComputeMode(%q, %q) error = %v, wantErr %v", tt.kind, tt.mode, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSupportedKindsReturnsCanonicalUserFacingKinds(t *testing.T) {
+	got := SupportedKinds()
+	want := []Kind{KindAWS, KindManual, KindHetzner, KindLinode, KindScaleway, KindVultr}
+	if len(got) != len(want) {
+		t.Fatalf("SupportedKinds() len = %d, want %d", len(got), len(want))
+	}
+	for i, kind := range want {
+		if got[i] != kind {
+			t.Fatalf("SupportedKinds()[%d] = %q, want %q", i, got[i], kind)
+		}
+	}
+}
+
+func TestSelfhostedFamilyHelpers(t *testing.T) {
+	tests := []struct {
+		kind          Kind
+		wantFamily    bool
+		wantRuntime   Kind
+		wantCanonical Kind
+	}{
+		{KindAWS, false, KindAWS, KindAWS},
+		{KindManual, true, KindManual, KindManual},
+		{KindSelfhosted, true, KindManual, KindManual},
+		{Kind("selfhosted"), true, KindManual, KindManual},
+		{KindHetzner, true, KindManual, KindHetzner},
+		{KindLinode, true, KindManual, KindLinode},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.IsSelfhostedFamily(); got != tt.wantFamily {
+			t.Errorf("%q IsSelfhostedFamily() = %v, want %v", tt.kind, got, tt.wantFamily)
+		}
+		if got := tt.kind.RuntimeFamily(); got != tt.wantRuntime {
+			t.Errorf("%q RuntimeFamily() = %q, want %q", tt.kind, got, tt.wantRuntime)
+		}
+		if got := tt.kind.Canonical(); got != tt.wantCanonical {
+			t.Errorf("%q Canonical() = %q, want %q", tt.kind, got, tt.wantCanonical)
 		}
 	}
 }
