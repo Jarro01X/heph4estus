@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
@@ -42,7 +43,7 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
 	region := fs.String("region", "", "AWS region (default: from AWS_REGION or us-east-1)")
-	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -86,7 +87,7 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 	tool := fs.String("tool", "", "Tool whose infrastructure to destroy")
 	backend := fs.String("backend", "generic", "Infrastructure backend (generic)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
-	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
 
 	if err := fs.Parse(args); err != nil {
 		return err

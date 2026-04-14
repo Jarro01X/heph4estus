@@ -133,6 +133,7 @@ func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
 		"results-bucket",
 		"queue-url",
 		operator.NoopTracker(),
+		cloud.KindAWS,
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -160,6 +161,7 @@ func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
 		"results-bucket",
 		"queue-url",
 		operator.NoopTracker(),
+		cloud.KindAWS,
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -224,6 +226,75 @@ func TestRunNmapScanWithDepsStartedTrueOnOutputFailure(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("expected started=true after successful worker launch")
+	}
+}
+
+func TestRunNmapScanWithDeps_SelfhostedUsesRunContainer(t *testing.T) {
+	tasks := []nmaptool.ScanTask{{
+		JobID:   "job-sh",
+		Target:  "10.0.0.1",
+		Options: "-sS",
+	}}
+
+	comp := &mockCompute{}
+	started, err := runNmapScanWithDeps(
+		context.Background(),
+		tasks,
+		1,
+		"auto", // auto on VPS providers should NOT use spot
+		0,
+		"text",
+		map[string]string{
+			"sqs_queue_url":  "nats-stream",
+			"s3_bucket_name": "minio-bucket",
+		},
+		&mockQueue{},
+		&mockStorage{count: 1},
+		comp,
+		operator.NoopTracker(),
+		"job-sh",
+		cloud.KindHetzner,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Fatal("expected started=true")
+	}
+}
+
+func TestRunNmapScanWithDeps_SelfhostedNeverCallsSpot(t *testing.T) {
+	// Even with 200 workers (above spot threshold), VPS providers should use RunContainer.
+	tasks := []nmaptool.ScanTask{{
+		JobID:   "job-sh",
+		Target:  "10.0.0.1",
+		Options: "-sS",
+	}}
+
+	comp := &mockCompute{runSpotErr: errors.New("spot should not be called")}
+	started, err := runNmapScanWithDeps(
+		context.Background(),
+		tasks,
+		200, // above spot threshold
+		"auto",
+		0,
+		"text",
+		map[string]string{
+			"sqs_queue_url":  "nats-stream",
+			"s3_bucket_name": "minio-bucket",
+		},
+		&mockQueue{},
+		&mockStorage{count: 1},
+		comp,
+		operator.NoopTracker(),
+		"job-sh",
+		cloud.KindManual,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error (spot should not have been called): %v", err)
+	}
+	if !started {
+		t.Fatal("expected started=true")
 	}
 }
 

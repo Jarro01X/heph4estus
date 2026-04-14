@@ -41,7 +41,7 @@ func runNmap(args []string, log logger.Logger) error {
 	jitterMax := fs.Int("jitter-max", 0, "Maximum jitter seconds before each scan (0 = disabled)")
 	noRDNS := fs.Bool("no-rdns", false, "Disable reverse DNS resolution (-n)")
 	format := fs.String("format", "text", "Output format: text or json")
-	cloudFlag := fs.String("cloud", "", "Cloud provider: aws or selfhosted (default: from config or aws)")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
 
 	outDir := fs.String("out", "", "Download results/artifacts to this directory after completion")
 
@@ -66,15 +66,12 @@ func runNmap(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := requireComputeSupport(cloudKind); err != nil {
+	if err := ValidateComputeMode(cloudKind, *computeMode); err != nil {
 		return err
 	}
 
 	if *inputFile == "" {
 		return fmt.Errorf("--file flag is required")
-	}
-	if *computeMode != "auto" && *computeMode != "fargate" && *computeMode != "spot" {
-		return fmt.Errorf("--compute-mode must be auto, fargate, or spot")
 	}
 	if *format != "text" && *format != "json" {
 		return fmt.Errorf("--format must be text or json")
@@ -129,12 +126,53 @@ func runNmap(args []string, log logger.Logger) error {
 		logStatus("Parsed %d targets from %s [job %s]", len(tasks), *inputFile, jobID)
 	}
 
+	ctx := mainContext()
+
 	// Track the job.
 	tracker := newTracker()
 	cleanupPolicy := "reuse"
 	if *destroyAfter {
 		cleanupPolicy = "destroy-after"
 	}
+
+	var (
+		outputs map[string]string
+		bucket  string
+		reused  bool
+		toolCfg *infra.ToolConfig
+	)
+
+	if cloudKind.IsSelfhostedFamily() {
+		// Selfhosted: no Terraform/deploy — read queue ID and bucket from config.
+		shCfg := factory.SelfhostedConfigFromEnv()
+		if shCfg.QueueID == "" || shCfg.Bucket == "" {
+			return fmt.Errorf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
+		}
+		bucket = shCfg.Bucket
+		outputs = map[string]string{
+			"sqs_queue_url":  shCfg.QueueID,
+			"s3_bucket_name": shCfg.Bucket,
+		}
+	} else {
+		// AWS: resolve tool config and ensure infrastructure.
+		toolCfg, err = infra.ResolveToolConfig("nmap")
+		if err != nil {
+			return err
+		}
+		region := infra.AWSRegion()
+		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
+			NoDeploy:     *noDeploy,
+			AutoApprove:  *autoApprove,
+			DestroyAfter: *destroyAfter,
+		}, region, os.Stderr, deployPrompt, log)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		outputs = ensureResult.Outputs
+		reused = ensureResult.Reused
+		bucket = outputs["s3_bucket_name"]
+	}
+
 	_ = tracker.Create(&operator.JobRecord{
 		JobID:         jobID,
 		ToolName:      "nmap",
@@ -144,34 +182,8 @@ func runNmap(args []string, log logger.Logger) error {
 		ComputeMode:   *computeMode,
 		Cloud:         string(cloudKind),
 		CleanupPolicy: cleanupPolicy,
+		Bucket:        bucket,
 	})
-
-	// Resolve tool config and ensure infrastructure.
-	cfg, err := infra.ResolveToolConfig("nmap")
-	if err != nil {
-		return err
-	}
-
-	ctx := mainContext()
-	region := infra.AWSRegion()
-
-	ensureResult, err := infra.EnsureInfra(ctx, cfg, infra.LifecyclePolicy{
-		NoDeploy:     *noDeploy,
-		AutoApprove:  *autoApprove,
-		DestroyAfter: *destroyAfter,
-	}, region, os.Stderr, deployPrompt, log)
-	if err != nil {
-		return err
-	}
-	outputs := ensureResult.Outputs
-
-	// Update job record with infra outputs.
-	if store := tracker.Store(); store != nil {
-		if rec, loadErr := store.Load(jobID); loadErr == nil {
-			rec.Bucket = outputs["s3_bucket_name"]
-			_ = store.Update(rec)
-		}
-	}
 
 	// Run the scan.
 	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID, cloudKind)
@@ -185,7 +197,6 @@ func runNmap(args []string, log logger.Logger) error {
 	// Export results locally before any cleanup.
 	var exportDir string
 	if *outDir != "" && scanErr == nil && started {
-		bucket := outputs["s3_bucket_name"]
 		logStatus("Exporting results to %s...", *outDir)
 
 		exportProvider, provErr := factory.BuildForKind(ctx, cloudKind, log)
@@ -212,18 +223,22 @@ func runNmap(args []string, log logger.Logger) error {
 
 	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
-		logStatus("Destroying infrastructure (--destroy-after)...")
-		if destroyErr := infra.RunDestroy(ctx, cfg, os.Stderr, log); destroyErr != nil {
-			if scanErr != nil {
-				return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+		if cloudKind.IsSelfhostedFamily() {
+			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
+		} else {
+			logStatus("Destroying infrastructure (--destroy-after)...")
+			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
+				if scanErr != nil {
+					return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
+				}
+				return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
 			}
-			return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
 		}
 	}
 
 	// Print run summary.
 	if started {
-		printRunSummary(jobID, "nmap", ensureResult.Reused, cleanupPolicy, exportDir)
+		printRunSummary(jobID, "nmap", reused, cleanupPolicy, exportDir)
 	}
 
 	return scanErr
@@ -240,10 +255,10 @@ func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, comput
 	if err != nil {
 		return false, fmt.Errorf("building cloud provider: %w", err)
 	}
-	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID)
+	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, cloudKind)
 }
 
-func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string) (bool, error) {
+func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, cloudKind ...cloud.Kind) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
@@ -296,7 +311,9 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 		"TOOL_NAME":          "nmap",
 	}
 
-	useSpot := resolveComputeMode(computeMode, workers)
+	// Selfhosted only supports RunContainer (no spot instances).
+	isSelfhosted := len(cloudKind) > 0 && cloudKind[0].IsSelfhostedFamily()
+	useSpot := !isSelfhosted && resolveComputeMode(computeMode, workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
@@ -332,9 +349,9 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 			Count:          workers,
 		})
 		if err != nil {
-			return false, fmt.Errorf("launching Fargate tasks: %w", err)
+			return false, fmt.Errorf("launching workers: %w", err)
 		}
-		logStatus("Launched %d Fargate tasks", workers)
+		logStatus("Launched %d workers", workers)
 	}
 
 	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
