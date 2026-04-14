@@ -62,7 +62,7 @@ func TestStubQueueReturnsError(t *testing.T) {
 	}
 }
 
-func TestStubComputeReturnsError(t *testing.T) {
+func TestComputeNotConfiguredReturnsError(t *testing.T) {
 	p, err := NewProvider(ProviderConfig{
 		Storage: StorageConfig{
 			Endpoint:  "https://minio.local:9000",
@@ -77,14 +77,47 @@ func TestStubComputeReturnsError(t *testing.T) {
 	ctx := context.Background()
 	c := p.Compute()
 
-	if _, err := c.RunContainer(ctx, cloud.ContainerOpts{}); !errors.Is(err, errComputeNotImplemented) {
-		t.Errorf("RunContainer = %v, want errComputeNotImplemented", err)
+	if _, err := c.RunContainer(ctx, cloud.ContainerOpts{}); !errors.Is(err, errComputeNotConfigured) {
+		t.Errorf("RunContainer = %v, want errComputeNotConfigured", err)
 	}
-	if _, err := c.RunSpotInstances(ctx, cloud.SpotOpts{}); !errors.Is(err, errComputeNotImplemented) {
-		t.Errorf("RunSpotInstances = %v, want errComputeNotImplemented", err)
+	if _, err := c.RunSpotInstances(ctx, cloud.SpotOpts{}); !errors.Is(err, errComputeNotConfigured) {
+		t.Errorf("RunSpotInstances = %v, want errComputeNotConfigured", err)
 	}
-	if _, err := c.GetSpotStatus(ctx, nil); !errors.Is(err, errComputeNotImplemented) {
-		t.Errorf("GetSpotStatus = %v, want errComputeNotImplemented", err)
+	if _, err := c.GetSpotStatus(ctx, nil); !errors.Is(err, errComputeNotConfigured) {
+		t.Errorf("GetSpotStatus = %v, want errComputeNotConfigured", err)
+	}
+}
+
+func TestProviderWithComputeConfig(t *testing.T) {
+	p, err := NewProvider(ProviderConfig{
+		Storage: StorageConfig{
+			Endpoint:  "https://minio.local:9000",
+			AccessKey: "ak",
+			Secret:    "sk",
+		},
+		Compute: &ComputeConfig{
+			WorkerHosts: []string{"10.0.0.1"},
+			SSHUser:     "heph",
+			SSHKeyPath:  "/tmp/key",
+			DockerImage: "worker:latest",
+		},
+	}, logger.NewSimpleLogger())
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	if p.Compute() == nil {
+		t.Fatal("expected non-nil compute")
+	}
+
+	// Real DockerCompute returns errSpotUnsupported, not errComputeNotConfigured.
+	ctx := context.Background()
+	_, err = p.Compute().RunSpotInstances(ctx, cloud.SpotOpts{})
+	if !errors.Is(err, errSpotUnsupported) {
+		t.Errorf("RunSpotInstances = %v, want errSpotUnsupported", err)
+	}
+	if errors.Is(err, errComputeNotConfigured) {
+		t.Error("real compute should not return errComputeNotConfigured")
 	}
 }
 
