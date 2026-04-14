@@ -86,11 +86,21 @@ type DeployConfig struct {
 	OutputDir     string // local export directory
 }
 
+// SelfhostedRuntime carries VPS/selfhosted-family launch data for future
+// Track 1 / Track 2 consumption. Nil in AWS flows.
+type SelfhostedRuntime struct {
+	WorkerHosts []string // SSH-reachable worker addresses
+	SSHUser     string   // SSH login user
+	DockerImage string   // Docker image reference for the worker container
+}
+
 // InfraOutputs holds terraform outputs needed by downstream views.
 type InfraOutputs struct {
 	// Cloud is the provider family these outputs belong to. Empty means
 	// cloud.DefaultKind so existing AWS-only call sites stay valid.
 	Cloud cloud.Kind
+
+	// --- AWS runtime fields (unchanged for backward compat) ---
 
 	SQSQueueURL       string
 	ECRRepoURL        string
@@ -139,6 +149,12 @@ type InfraOutputs struct {
 	// Cleanup outcome — set by status view after auto-destroy attempt.
 	Destroyed  bool   // true if infra was automatically destroyed after export
 	DestroyErr string // non-empty if auto-destroy was attempted but failed
+
+	// --- Selfhosted-family runtime data (populated for manual/VPS providers) ---
+
+	// Selfhosted carries selfhosted-specific launch data. Nil for AWS flows.
+	// Track 1 populates this with worker host and Docker image info.
+	Selfhosted *SelfhostedRuntime
 }
 
 // LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.

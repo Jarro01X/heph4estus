@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/doctor"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
@@ -160,7 +161,7 @@ func NewWithDeps(deps Deps) *Model {
 	cloudInput.Placeholder = "aws"
 	cloudInput.CharLimit = 12
 	if cfg.Cloud != "" {
-		cloudInput.SetValue(cfg.Cloud)
+		cloudInput.SetValue(normalizeCloudValue(cfg.Cloud))
 	}
 
 	h := help.New()
@@ -363,7 +364,7 @@ func (m *Model) buildConfig() *operator.OperatorConfig {
 		ComputeMode:   strings.TrimSpace(m.inputs[fieldComputeMode].Value()),
 		CleanupPolicy: strings.TrimSpace(m.inputs[fieldCleanupPolicy].Value()),
 		OutputDir:     strings.TrimSpace(m.inputs[fieldOutputDir].Value()),
-		Cloud:         strings.TrimSpace(m.inputs[fieldCloud].Value()),
+		Cloud:         normalizeCloudValue(m.inputs[fieldCloud].Value()),
 	}
 }
 
@@ -415,4 +416,12 @@ func diagIcon(s doctor.Status) string {
 	default:
 		return "????"
 	}
+}
+
+func normalizeCloudValue(value string) string {
+	kind, err := cloud.ParseKind(value)
+	if err != nil {
+		return strings.TrimSpace(value)
+	}
+	return string(kind.Canonical())
 }

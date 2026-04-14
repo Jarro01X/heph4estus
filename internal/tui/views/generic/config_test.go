@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/tui/core"
 )
 
@@ -155,7 +156,71 @@ func TestGenericConfigInvalidComputeMode(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected nil command for invalid compute mode")
 	}
-	if !strings.Contains(m.View(), "Compute mode must be") {
+	if !strings.Contains(m.View(), "compute-mode must be") {
 		t.Fatal("expected compute mode error message")
+	}
+}
+
+func TestGenericConfigProviderNavigatesToStatus(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "test-stream")
+	t.Setenv("SELFHOSTED_BUCKET", "test-bucket")
+	t.Setenv("SELFHOSTED_WORKER_HOSTS", "10.0.0.1")
+	t.Setenv("SELFHOSTED_SSH_USER", "heph")
+	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "worker:latest")
+
+	m := NewConfig("httpx")
+	m.inputs[cfgFieldCloud].SetValue("hetzner")
+	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	if cmd == nil {
+		t.Fatal("expected navigation command for VPS provider")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewGenericStatus {
+		t.Fatalf("expected ViewGenericStatus (bypass deploy), got %v", nav.Target)
+	}
+	infra, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+	}
+	if infra.Cloud != cloud.KindHetzner {
+		t.Fatalf("expected cloud hetzner, got %q", infra.Cloud)
+	}
+	if infra.SQSQueueURL != "test-stream" {
+		t.Fatalf("expected queue ID test-stream, got %q", infra.SQSQueueURL)
+	}
+	if infra.S3BucketName != "test-bucket" {
+		t.Fatalf("expected bucket test-bucket, got %q", infra.S3BucketName)
+	}
+}
+
+func TestGenericConfigManualRejectsFargate(t *testing.T) {
+	m := NewConfig("httpx")
+	m.inputs[cfgFieldCloud].SetValue("manual")
+	m.inputs[cfgFieldComputeMode].SetValue("fargate")
+	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	if cmd != nil {
+		t.Fatal("expected nil command for manual + fargate")
+	}
+	if !strings.Contains(m.View(), `provider "manual" only supports`) {
+		t.Fatal("expected provider mode rejection error")
+	}
+}
+
+func TestGenericConfigProviderMissingEnv(t *testing.T) {
+	t.Setenv("SELFHOSTED_QUEUE_ID", "")
+	t.Setenv("SELFHOSTED_BUCKET", "")
+
+	m := NewConfig("httpx")
+	m.inputs[cfgFieldCloud].SetValue("hetzner")
+	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	if cmd != nil {
+		t.Fatal("expected nil command when provider env is missing")
+	}
+	if !strings.Contains(m.View(), "hetzner requires SELFHOSTED_QUEUE_ID") {
+		t.Fatal("expected env var requirement error")
 	}
 }

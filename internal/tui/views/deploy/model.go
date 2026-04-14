@@ -24,8 +24,8 @@ const (
 	stageTerraformApply = "terraform-apply"
 	stageReadOutputs    = "read-outputs"
 	stageDockerBuild    = "docker-build"
-	stageECRAuth        = "ecr-auth"
-	stageDockerTagPush  = "docker-tag-push"
+	stageRegistryAuth   = "registry-auth"
+	stageImagePublish   = "image-publish"
 	stageComplete       = "complete"
 	stageFailed         = "failed"
 	stageRejected       = "rejected"
@@ -111,7 +111,7 @@ func (m *Model) runLifecycleCheck() tea.Cmd {
 		}
 
 		tf := infra.NewTerraformClient(simpleLogger{})
-		probe := infra.Probe(ctx, tf, cfg.TerraformDir, toolName)
+		probe := infra.Probe(ctx, tf, cfg.Cloud, cfg.TerraformDir, toolName)
 		decision := infra.Decide(probe, infra.LifecyclePolicy{})
 
 		switch decision.Decision {
@@ -233,8 +233,8 @@ func (m *Model) View() string {
 		{stageTerraformApply, "Terraform Apply"},
 		{stageReadOutputs, "Read Outputs"},
 		{stageDockerBuild, "Docker Build"},
-		{stageECRAuth, "ECR Auth"},
-		{stageDockerTagPush, "Docker Push"},
+		{stageRegistryAuth, "Registry Auth"},
+		{stageImagePublish, "Image Publish"},
 	}
 
 	currentIdx := -1
@@ -275,7 +275,7 @@ func (m *Model) View() string {
 		b.WriteString("  " + m.planSummary + "\n\n")
 		b.WriteString("  " + core.SelectedStyle.Render("Apply these changes? (y/enter = yes, n/esc = no)") + "\n")
 
-	case stageTerraformApply, stageDockerBuild, stageDockerTagPush:
+	case stageTerraformApply, stageDockerBuild, stageImagePublish:
 		b.WriteString(m.viewport.View())
 		b.WriteString("\n")
 
@@ -359,20 +359,16 @@ func (m *Model) runStage(stage string) tea.Cmd {
 			tickCmd(),
 		)
 
-	case stageECRAuth:
+	case stageRegistryAuth:
 		return func() tea.Msg {
-			err := deployer.ECRAuthenticate(ctx, cfg.AWSRegion)
+			err := deployer.RegistryAuth(ctx, cfg.Cloud, cfg.AWSRegion, m.outputs)
 			return core.StageCompleteMsg{Stage: stage, Error: err}
 		}
 
-	case stageDockerTagPush:
-		ecrURL := m.outputs["ecr_repo_url"]
+	case stageImagePublish:
 		return tea.Batch(
 			func() tea.Msg {
-				if err := deployer.DockerTag(ctx, cfg.DockerTag, ecrURL+":latest"); err != nil {
-					return core.StageCompleteMsg{Stage: stage, Error: err}
-				}
-				err := deployer.DockerPush(ctx, ecrURL+":latest", sw)
+				err := deployer.ImagePublish(ctx, cfg.Cloud, cfg.DockerTag, m.outputs, sw)
 				return core.StageCompleteMsg{Stage: stage, Error: err}
 			},
 			tickCmd(),
@@ -404,14 +400,14 @@ func (m *Model) advanceStage(completed string) tea.Cmd {
 
 	case stageDockerBuild:
 		m.streamLog = ""
-		m.stage = stageECRAuth
-		return m.runStage(stageECRAuth)
+		m.stage = stageRegistryAuth
+		return m.runStage(stageRegistryAuth)
 
-	case stageECRAuth:
-		m.stage = stageDockerTagPush
-		return m.runStage(stageDockerTagPush)
+	case stageRegistryAuth:
+		m.stage = stageImagePublish
+		return m.runStage(stageImagePublish)
 
-	case stageDockerTagPush:
+	case stageImagePublish:
 		m.stage = stageComplete
 		return m.emitNavigateToStatus()
 	}
@@ -487,7 +483,7 @@ func tickCmd() tea.Cmd {
 }
 
 func isStreamingStage(stage string) bool {
-	return stage == stageTerraformApply || stage == stageDockerBuild || stage == stageDockerTagPush
+	return stage == stageTerraformApply || stage == stageDockerBuild || stage == stageImagePublish
 }
 
 func mergeOutputs(existing, new map[string]string) map[string]string {

@@ -282,6 +282,88 @@ func (m *mockCountStorage) Count(ctx context.Context, bucket, prefix string) (in
 	return m.countFunc(ctx, bucket, prefix)
 }
 
+func testSelfhostedInfra() core.InfraOutputs {
+	return core.InfraOutputs{
+		Cloud:          cloud.KindManual,
+		SQSQueueURL:    "test-stream",
+		S3BucketName:   "test-bucket",
+		JobID:          "job-sh",
+		TargetsContent: "1.1.1.1\n2.2.2.2\n",
+		NmapOptions:    "-sS",
+		WorkerCount:    2,
+		ComputeMode:    "auto",
+	}
+}
+
+func TestStatusModel_SelfhostedUsesLaunchWorkers(t *testing.T) {
+	sub := &mockSubmitter{}
+	m := NewStatusWithDeps(testSelfhostedInfra(), sub, &mockTracker{})
+	m.Init()
+
+	// Enqueue succeeds → launch phase.
+	_, cmd := m.Update(enqueueProgressMsg{sent: 2, total: 2})
+	if m.phase != phaseLaunching {
+		t.Fatalf("expected phaseLaunching, got %d", m.phase)
+	}
+	if cmd == nil {
+		t.Fatal("expected launch command")
+	}
+	// Execute the launch command — should call LaunchWorkers, not LaunchSpotWorkers.
+	msg := cmd()
+	_, ok := msg.(launchProgressMsg)
+	if !ok {
+		t.Fatalf("expected launchProgressMsg (not spotLaunchMsg), got %T", msg)
+	}
+}
+
+func TestStatusModel_SelfhostedNeverUsesSpot(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.WorkerCount = 200 // above SpotThreshold
+	infra.ComputeMode = "auto"
+	if useSpot(infra) {
+		t.Fatal("selfhosted should never use spot even with high worker count")
+	}
+}
+
+func TestStatusModel_SelfhostedDestroyAfterSkipped(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = ""
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.totalTargets = 2
+	m.phase = phaseScanning
+
+	m.Update(scanProgressMsg{completed: 2})
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete, got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "selfhosted does not support auto-destroy") {
+		t.Fatalf("expected selfhosted destroy warning, got %q", m.cleanupWarning)
+	}
+}
+
+func TestStatusModel_SelfhostedExportComplete_SkipsDestroy(t *testing.T) {
+	infra := testSelfhostedInfra()
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = &mockDestroyer{} // destroyer exists but should be skipped
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/nmap/job-sh", count: 2})
+	// Selfhosted should skip destroy and go to complete.
+	if m.phase != phaseComplete {
+		t.Fatalf("expected phaseComplete (selfhosted skips destroy), got %d", m.phase)
+	}
+	if !strings.Contains(m.cleanupWarning, "selfhosted does not support auto-destroy") {
+		t.Fatalf("expected selfhosted destroy warning, got %q", m.cleanupWarning)
+	}
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+}
+
 func TestUseSpot_Auto(t *testing.T) {
 	low := core.InfraOutputs{WorkerCount: 10, ComputeMode: "auto"}
 	if useSpot(low) {
@@ -532,10 +614,12 @@ func TestStatusModel_ReusePolicyNoExport(t *testing.T) {
 // mockExportStorage is a minimal cloud.Storage for export gating tests.
 type mockExportStorage struct{}
 
-func (s *mockExportStorage) Upload(context.Context, string, string, []byte) error    { return nil }
-func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
-func (s *mockExportStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
-func (s *mockExportStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+func (s *mockExportStorage) Upload(context.Context, string, string, []byte) error { return nil }
+func (s *mockExportStorage) Download(context.Context, string, string) ([]byte, error) {
+	return nil, nil
+}
+func (s *mockExportStorage) List(context.Context, string, string) ([]string, error) { return nil, nil }
+func (s *mockExportStorage) Count(context.Context, string, string) (int, error)     { return 0, nil }
 
 // --- Track 1 PR 5.12: auto-destroy lifecycle tests ---
 

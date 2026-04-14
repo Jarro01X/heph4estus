@@ -152,8 +152,8 @@ type StatusModel struct {
 	submitter  JobSubmitter
 	tracker    ProgressTracker
 	jobTracker *operator.Tracker
-	storage    cloud.Storage    // for local export on completion
-	destroyer  core.Destroyer   // for auto-destroy after export (nil = no destroy)
+	storage    cloud.Storage  // for local export on completion
+	destroyer  core.Destroyer // for auto-destroy after export (nil = no destroy)
 	infra      core.InfraOutputs
 
 	phase        statusPhase
@@ -253,6 +253,7 @@ func (m *StatusModel) trackCreate() {
 		TotalTasks:  m.totalTargets,
 		WorkerCount: m.infra.WorkerCount,
 		ComputeMode: m.infra.ComputeMode,
+		Cloud:       string(m.infra.Cloud),
 		Bucket:      m.infra.S3BucketName,
 	})
 }
@@ -378,8 +379,12 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 				m.phase = phaseExporting
 				return m, m.exportResults()
 			}
-			if m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir == "" {
-				m.cleanupWarning = "destroy-after skipped: no output directory configured"
+			if m.infra.CleanupPolicy == "destroy-after" {
+				if m.infra.Cloud.IsSelfhostedFamily() {
+					m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
+				} else if m.infra.OutputDir == "" {
+					m.cleanupWarning = "destroy-after skipped: no output directory configured"
+				}
 			}
 			m.phase = phaseComplete
 			return m, m.navigateToResults()
@@ -395,6 +400,11 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		m.infra.Exported = true
 		m.infra.ExportDir = msg.dir
 		// Auto-destroy if destroy-after policy and destroyer is available.
+		if m.infra.Cloud.IsSelfhostedFamily() {
+			m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
+			m.phase = phaseComplete
+			return m, m.navigateToResults()
+		}
 		if m.destroyer != nil {
 			m.phase = phaseDestroying
 			return m, m.runAutoDestroy()
@@ -512,6 +522,10 @@ func (m *StatusModel) View() string {
 
 // useSpot returns true if the compute mode resolves to spot instances.
 func useSpot(infra core.InfraOutputs) bool {
+	// Selfhosted only supports RunContainer (no spot instances).
+	if infra.Cloud.IsSelfhostedFamily() {
+		return false
+	}
 	switch infra.ComputeMode {
 	case "spot":
 		return true

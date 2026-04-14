@@ -8,21 +8,21 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/tui/core"
 )
 
 // mockDeployer records calls and returns configured results.
 type mockDeployer struct {
-	initErr       error
-	planSummary   string
-	planErr       error
-	applyErr      error
-	readOutputs   map[string]string
-	readOutputErr error
-	buildErr      error
-	ecrAuthErr    error
-	tagErr        error
-	pushErr       error
+	initErr         error
+	planSummary     string
+	planErr         error
+	applyErr        error
+	readOutputs     map[string]string
+	readOutputErr   error
+	buildErr        error
+	registryAuthErr error
+	imagePublishErr error
 }
 
 func (d *mockDeployer) TerraformInit(context.Context, string) error {
@@ -49,16 +49,12 @@ func (d *mockDeployer) DockerBuildWithArgs(_ context.Context, _, _, _ string, _ 
 	return d.buildErr
 }
 
-func (d *mockDeployer) ECRAuthenticate(context.Context, string) error {
-	return d.ecrAuthErr
+func (d *mockDeployer) RegistryAuth(_ context.Context, _ cloud.Kind, _ string, _ map[string]string) error {
+	return d.registryAuthErr
 }
 
-func (d *mockDeployer) DockerTag(_ context.Context, _, _ string) error {
-	return d.tagErr
-}
-
-func (d *mockDeployer) DockerPush(_ context.Context, _ string, _ io.Writer) error {
-	return d.pushErr
+func (d *mockDeployer) ImagePublish(_ context.Context, _ cloud.Kind, _ string, _ map[string]string, _ io.Writer) error {
+	return d.imagePublishErr
 }
 
 func (d *mockDeployer) TerraformDestroy(_ context.Context, _ string, _ io.Writer) error {
@@ -235,13 +231,13 @@ func TestDeployModel_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// ECR auth
+	// Registry auth
 	if cmd != nil {
 		msg = cmd()
 		_, cmd = m.Update(msg)
 	}
 
-	// Docker tag+push
+	// Image publish
 	if cmd != nil {
 		msgs = drainBatch(cmd)
 		for _, msg := range msgs {
@@ -303,6 +299,22 @@ func TestDeployModel_ViewContainsTitle(t *testing.T) {
 	}
 }
 
+func TestDeployModel_ViewShowsGenericStageLabels(t *testing.T) {
+	m := NewWithDeployer(core.DeployConfig{}, &mockDeployer{})
+	v := m.View()
+	// Provider-generic stage labels should appear.
+	if !strings.Contains(v, "Registry Auth") {
+		t.Fatal("expected 'Registry Auth' in view, stage names should be provider-generic")
+	}
+	if !strings.Contains(v, "Image Publish") {
+		t.Fatal("expected 'Image Publish' in view, stage names should be provider-generic")
+	}
+	// Old ECR-specific names should NOT appear.
+	if strings.Contains(v, "ECR Auth") {
+		t.Fatal("view should not contain 'ECR Auth' — stage names should be provider-generic")
+	}
+}
+
 func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 	d := &mockDeployer{
 		planSummary: "Plan: 1 to add",
@@ -346,9 +358,9 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
 	// Docker build
 	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
-	// ECR auth
+	// Registry auth
 	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
-	// Docker tag+push
+	// Image publish
 	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
 
 	if m.stage != stageComplete {
@@ -540,8 +552,8 @@ func TestDeployModel_FreshDeployCarriesCleanupFields(t *testing.T) {
 	for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } }
 	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // read outputs
 	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // docker build
-	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // ecr auth
-	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // docker push
+	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // registry auth
+	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // image publish
 
 	if cmd == nil {
 		t.Fatal("expected navigate command")
@@ -560,6 +572,36 @@ func TestDeployModel_FreshDeployCarriesCleanupFields(t *testing.T) {
 	}
 	if infraOut.OutputDir != "/data/out" {
 		t.Errorf("OutputDir = %q, want /data/out", infraOut.OutputDir)
+	}
+}
+
+func TestDeployModel_ReuseCarriesCloudKind(t *testing.T) {
+	outputs := map[string]string{
+		"sqs_queue_url":       "https://sqs.example.com/q",
+		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"s3_bucket_name":      "bucket",
+		"ecs_cluster_name":    "cluster",
+		"task_definition_arn": "arn:aws:ecs:td",
+		"subnet_ids":          "[subnet-a]",
+		"security_group_id":   "sg-123",
+	}
+	cfg := core.DeployConfig{
+		Cloud:          "aws",
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    5,
+	}
+	m := NewWithDeployer(cfg, &mockDeployer{})
+
+	_, cmd := simulateLifecycleReuse(m, outputs)
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	msg := cmd()
+	nav := msg.(core.NavigateWithDataMsg)
+	infraOut := nav.Data.(core.InfraOutputs)
+	// Cloud kind should not be selfhosted when config says AWS.
+	if infraOut.Cloud == "selfhosted" {
+		t.Fatal("AWS deploy should not produce selfhosted InfraOutputs")
 	}
 }
 
