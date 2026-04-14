@@ -1,0 +1,40 @@
+# Selfhosted controller module — generates cloud-init bootstrap and credentials
+# for a controller VM running NATS JetStream, MinIO, and a Docker registry.
+#
+# This module does NOT provision the VM itself. Provider-specific modules
+# (e.g. deployments/hetzner/) compose this module and pass its cloud_init
+# output as the VM's user_data. This keeps the controller logic portable
+# across any VPS provider that supports cloud-init.
+#
+# PR 6.3 will add the first provider-specific composition (Hetzner).
+
+terraform {
+  required_version = ">= 1.3"
+}
+
+# --- Credential generation ---
+
+resource "random_password" "minio_secret_key" {
+  length  = 40
+  special = false
+}
+
+resource "random_id" "minio_access_key" {
+  byte_length = 10
+}
+
+# --- Cloud-init rendering ---
+
+locals {
+  cloud_init = templatefile("${path.module}/templates/cloud-init.yaml", {
+    minio_access_key   = random_id.minio_access_key.hex
+    minio_secret_key   = random_password.minio_secret_key.result
+    minio_bucket       = var.minio_bucket
+    minio_port         = var.minio_port
+    minio_console_port = var.minio_console_port
+    nats_port          = var.nats_port
+    nats_monitor_port  = var.nats_monitor_port
+    nats_stream_name   = var.nats_stream_name
+    registry_port      = var.registry_port
+  })
+}
