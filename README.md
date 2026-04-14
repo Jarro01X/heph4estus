@@ -15,12 +15,18 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 **Built-in modules today:** `nmap`, `nuclei`, `ffuf`, `subfinder`, `httpx`, `masscan`, `gobuster`, `feroxbuster`, `dnsx`, `katana`, `gospider`, `massdns`, `dalfox`, `gowitness`. All modules run on the generic worker backend. See `ARCHITECTURE.md`, `PLAN.md`, and `IMPLEMENTATION.md` for the roadmap.
 
+## Cloud Providers
+
+**AWS** (default, fully integrated): SQS + S3 + ECS Fargate / EC2 Spot Fleet. Infrastructure is provisioned and destroyed automatically via Terraform.
+
+**VPS providers** (`manual`, `hetzner`, `linode`, `scaleway`, `vultr`; provider-aware fleet manager planned): NATS JetStream + S3-compatible storage (MinIO) + Docker-over-SSH compute. Scan execution is supported when the operator provides controller endpoints and worker hosts via environment variables. PR 6.2 opens the manual/operator-managed path; `manual` is the expert/escape-hatch mode, not the flagship operator UX. PR 6.3 is the first polished provider-native VPS path via `hetzner`, and Phase 6 follow-on PRs extend the same fleet-manager model to `linode` and `vultr`. The legacy `selfhosted` selector remains accepted as a compatibility alias for `manual`.
+
 ## Requirements
 
 - **Go 1.26+**: For building the application
 - **Docker**: For building container images (managed by heph4estus)
 - **Terraform 1.0+**: For infrastructure provisioning (managed by heph4estus)
-- **AWS CLI**: Configured with appropriate credentials and permissions
+- **AWS CLI**: Configured with appropriate credentials and permissions (AWS path only)
 
 ## Quick Start
 
@@ -94,7 +100,81 @@ Both `heph scan` and `heph nmap` accept these lifecycle flags:
 ./bin/heph scan --tool httpx --file targets.txt --no-deploy
 ```
 
-### 5. Explicit Infrastructure Management
+### 5. VPS Scan Execution (Manual/Operator-Managed Today)
+
+The current VPS-family path is intentionally split in two:
+
+- `manual` is the expert mode and escape hatch for operator-managed environments
+- provider-native UX starts with `hetzner` in PR 6.3, then expands to `linode` and `vultr` in later Phase 6 PRs
+
+Selfhosted scan execution works when the operator has already provisioned:
+
+- A reachable NATS JetStream endpoint (queue)
+- A reachable MinIO or S3-compatible endpoint (storage)
+- Worker hosts with Docker and SSH access
+- A worker image reachable by those hosts
+
+Set the required environment variables:
+
+```bash
+# Controller endpoints
+export NATS_URL="nats://controller:4222"
+export S3_ENDPOINT="http://controller:9000"
+export S3_REGION="us-east-1"
+export S3_ACCESS_KEY="minioadmin"
+export S3_SECRET_KEY="minioadmin"
+export S3_PATH_STYLE="true"
+
+# Scan runtime contract (env-driven)
+export SELFHOSTED_QUEUE_ID="heph-tasks"
+export SELFHOSTED_BUCKET="heph-results"
+
+# Worker compute config
+export SELFHOSTED_WORKER_HOSTS="w1.example.com,w2.example.com"
+export SELFHOSTED_SSH_USER="heph"
+export SELFHOSTED_SSH_KEY_PATH="$HOME/.ssh/id_ed25519"
+export SELFHOSTED_DOCKER_IMAGE="controller:5000/heph-nmap-worker:latest"
+# Optional: export SELFHOSTED_SSH_PORT="22"
+# Optional: export NATS_STREAM="heph-tasks"
+```
+
+Run scans:
+
+```bash
+# Nmap scan on the manual/operator-managed VPS path
+./bin/heph nmap --file targets.txt --cloud manual
+
+# Generic tool scan on a named VPS provider
+./bin/heph scan --tool httpx --file targets.txt --cloud hetzner
+```
+
+Host and network requirements:
+- Treat each worker VM as one source-IP slot when you care about IP diversity. If you run more workers than unique hosts, some workers will share the same public IP.
+- Each worker host should have a stable public IPv4 address. For IPv6 scanning, each host must also have a routable public IPv6 address.
+- Provider firewalls/security groups must allow outbound IPv6 and outbound access to the controller services (NATS, MinIO, registry).
+- The worker container must have a validated IPv6 egress path from inside Docker. In practice that means host networking or a verified Docker IPv6 configuration on the worker VM before relying on `-6`.
+- Each host must be able to pull the worker image, reach the controller endpoints, and accept non-interactive SSH from the operator.
+
+Scheduler rules:
+- The queue is the task scheduler; the host inventory is the source-IP pool.
+- The current selfhosted path is manual: Heph launches workers across `SELFHOSTED_WORKER_HOSTS`, so maximum source-IP diversity today is bounded by the number of unique hosts you supply.
+- For maximum diversity today, keep `--workers` less than or equal to the number of unique worker hosts.
+- The PR 6.3 target is a provider-aware fleet manager that owns host provisioning, health, public IP metadata, IPv6 capability checks, and diversity-aware placement. Its default rule should be one worker container per healthy host/public IP, with multi-worker-per-host reserved for explicit throughput mode.
+
+What success looks like:
+- Tasks enqueue to the NATS queue identified by `SELFHOSTED_QUEUE_ID`
+- Workers launch over SSH on the configured hosts
+- Workers read from NATS and upload results to `SELFHOSTED_BUCKET`
+- `heph status --job-id <id>` can reattach using recorded job metadata
+
+What is not yet supported:
+- `heph infra deploy --cloud hetzner` polished provider-native UX (deferred to PR 6.3)
+- `heph infra deploy --cloud linode` provider adapter and UX (deferred to PR 6.4)
+- `heph infra deploy --cloud vultr` provider adapter and UX (deferred to PR 6.5)
+- `manual` becoming a zero-config mainstream path; it remains expert mode
+- Automatic controller-output consumption by scan paths (scan execution uses the env-driven contract above)
+
+### 6. Explicit Infrastructure Management
 
 `heph infra` is still available as the power-user and CI path for managing infrastructure directly:
 
@@ -106,7 +186,7 @@ Both `heph scan` and `heph nmap` accept these lifecycle flags:
 ./bin/heph infra destroy --tool nmap
 ```
 
-### 6. Clean Up
+### 7. Clean Up
 
 Infrastructure can be destroyed after a run using `--destroy-after`, or manually:
 
