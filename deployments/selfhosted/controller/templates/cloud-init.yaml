@@ -1,0 +1,116 @@
+#cloud-config
+# Selfhosted controller bootstrap — installs Docker and starts NATS JetStream,
+# MinIO, and a Docker registry as systemd-managed containers.
+#
+# This template is rendered by the controller Terraform module with credentials
+# and port variables injected at plan time.
+
+package_update: true
+
+packages:
+  - docker.io
+  - jq
+
+write_files:
+  # --- NATS JetStream ---
+  - path: /etc/systemd/system/nats.service
+    content: |
+      [Unit]
+      Description=NATS JetStream
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f nats
+      ExecStart=/usr/bin/docker run --name nats \
+        -p ${nats_port}:4222 \
+        -p ${nats_monitor_port}:8222 \
+        -v /data/nats:/data \
+        nats:latest -js -sd /data
+      ExecStop=/usr/bin/docker stop nats
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- MinIO ---
+  - path: /etc/systemd/system/minio.service
+    content: |
+      [Unit]
+      Description=MinIO Object Storage
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f minio
+      ExecStart=/usr/bin/docker run --name minio \
+        -p ${minio_port}:9000 \
+        -p ${minio_console_port}:9001 \
+        -v /data/minio:/data \
+        -e MINIO_ROOT_USER=${minio_access_key} \
+        -e MINIO_ROOT_PASSWORD=${minio_secret_key} \
+        minio/minio server /data --console-address :9001
+      ExecStop=/usr/bin/docker stop minio
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Docker Registry ---
+  - path: /etc/systemd/system/registry.service
+    content: |
+      [Unit]
+      Description=Docker Registry
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f registry
+      ExecStart=/usr/bin/docker run --name registry \
+        -p ${registry_port}:5000 \
+        -v /data/registry:/var/lib/registry \
+        registry:2
+      ExecStop=/usr/bin/docker stop registry
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - mkdir -p /data/nats /data/minio /data/registry
+  - systemctl daemon-reload
+  - systemctl enable --now docker
+  - systemctl enable --now nats
+  - systemctl enable --now minio
+  - systemctl enable --now registry
+
+  # Bootstrap MinIO bucket — retry until MinIO is healthy.
+  - |
+    for i in $(seq 1 30); do
+      docker run --rm --entrypoint sh minio/mc -c "
+        mc alias set local http://localhost:${minio_port} ${minio_access_key} ${minio_secret_key} &&
+        mc mb --ignore-existing local/${minio_bucket}
+      " && break
+      sleep 2
+    done
+
+  # Bootstrap NATS JetStream stream — retry until NATS is healthy.
+  # Retention=WorkQueue ensures each message is delivered to exactly one worker.
+  # max-deliver=3 acts as a dead-letter threshold (matches SQS DLQ semantics).
+  # ack-wait=5m matches SQS visibility timeout for long-running scans.
+  - |
+    for i in $(seq 1 30); do
+      docker run --rm natsio/nats-box nats -s nats://host.docker.internal:${nats_port} \
+        stream add ${nats_stream_name} \
+        --subjects="${nats_stream_name}.*" \
+        --retention=work \
+        --max-deliver=3 \
+        --ack-wait=5m \
+        --discard=old \
+        --storage=file \
+        --defaults && break
+      sleep 2
+    done
