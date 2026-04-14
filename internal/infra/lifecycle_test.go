@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"heph4estus/internal/cloud"
 )
 
 // fullOutputs returns a complete set of terraform outputs for testing.
@@ -40,7 +42,7 @@ func TestProbe_Ready(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %s", result.Status)
 	}
@@ -55,7 +57,7 @@ func TestProbe_Missing(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusMissing {
 		t.Fatalf("expected StatusMissing, got %s", result.Status)
 	}
@@ -79,7 +81,7 @@ func TestProbe_Mismatch(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusMismatch {
 		t.Fatalf("expected StatusMismatch, got %s", result.Status)
 	}
@@ -98,7 +100,7 @@ func TestProbe_Stale(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusStale {
 		t.Fatalf("expected StatusStale, got %s", result.Status)
 	}
@@ -125,7 +127,7 @@ func TestProbe_LegacyNoToolName(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusStale {
 		t.Fatalf("expected StatusStale for legacy state without tool_name, got %s", result.Status)
 	}
@@ -158,7 +160,7 @@ func TestProbe_MissingSpotOutputs(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusStale {
 		t.Fatalf("expected StatusStale for missing spot outputs, got %s", result.Status)
 	}
@@ -170,7 +172,7 @@ func TestProbe_Error(t *testing.T) {
 		logger: nopLogger{},
 	}
 
-	result := Probe(context.Background(), tc, "/work", "nmap")
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
 	if result.Status != StatusError {
 		t.Fatalf("expected StatusError, got %s", result.Status)
 	}
@@ -277,5 +279,80 @@ func TestDecide_ErrorAlwaysBlocks(t *testing.T) {
 	}
 	if result.Reason != ReasonProbeError {
 		t.Fatalf("expected ReasonProbeError, got %s", result.Reason)
+	}
+}
+
+// --- Provider-aware required output tests ---
+
+func TestRequiredOutputKeysForCloud_AWS(t *testing.T) {
+	keys := RequiredOutputKeysForCloud(cloud.KindAWS)
+	if len(keys) != len(AWSRequiredOutputKeys) {
+		t.Fatalf("AWS keys length = %d, want %d", len(keys), len(AWSRequiredOutputKeys))
+	}
+	// Spot check a few AWS-specific keys.
+	want := map[string]bool{
+		"sqs_queue_url":        true,
+		"ecr_repo_url":         true,
+		"ecs_cluster_name":     true,
+		"ami_id":               true,
+		"instance_profile_arn": true,
+	}
+	for _, k := range keys {
+		delete(want, k)
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing expected AWS keys: %v", want)
+	}
+}
+
+func TestRequiredOutputKeysForCloud_Selfhosted(t *testing.T) {
+	keys := RequiredOutputKeysForCloud(cloud.KindSelfhosted)
+	if len(keys) != len(SelfhostedRequiredOutputKeys) {
+		t.Fatalf("selfhosted keys length = %d, want %d", len(keys), len(SelfhostedRequiredOutputKeys))
+	}
+	// Selfhosted should only require tool_name for mismatch detection.
+	if keys[0] != "tool_name" {
+		t.Fatalf("expected tool_name, got %q", keys[0])
+	}
+	// AWS-specific keys must NOT appear in selfhosted set.
+	for _, k := range keys {
+		if k == "sqs_queue_url" || k == "ecr_repo_url" || k == "ecs_cluster_name" {
+			t.Fatalf("selfhosted should not require AWS key %q", k)
+		}
+	}
+}
+
+func TestRequiredOutputKeysForCloud_UnknownFallsToAWS(t *testing.T) {
+	keys := RequiredOutputKeysForCloud("")
+	if len(keys) != len(AWSRequiredOutputKeys) {
+		t.Fatalf("empty kind should fall back to AWS, got %d keys", len(keys))
+	}
+}
+
+func TestProbe_SelfhostedReadyWithToolName(t *testing.T) {
+	// Selfhosted only requires tool_name — outputs with just tool_name should be ready.
+	outputJSON := `{"tool_name":{"value":"nmap"}}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, cloud.KindSelfhosted, "/work", "nmap")
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady for selfhosted with tool_name, got %s (missing: %v)", result.Status, result.MissingKeys)
+	}
+}
+
+func TestProbe_SelfhostedMissingToolName(t *testing.T) {
+	// Selfhosted outputs missing tool_name should be stale.
+	outputJSON := `{"some_key":{"value":"val"}}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, cloud.KindSelfhosted, "/work", "nmap")
+	if result.Status != StatusStale {
+		t.Fatalf("expected StatusStale for selfhosted without tool_name, got %s", result.Status)
 	}
 }

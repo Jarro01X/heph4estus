@@ -5,12 +5,14 @@ import (
 	"os"
 	"strings"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/modules"
 )
 
 // ToolConfig holds all deploy metadata derived from a module definition.
 // This is the single source of truth used by CLI, TUI, and lifecycle logic.
 type ToolConfig struct {
+	Cloud         cloud.Kind // Provider family (empty defaults to AWS)
 	ToolName      string
 	TerraformDir  string
 	Dockerfile    string
@@ -73,19 +75,8 @@ func AWSRegion() string {
 	return "us-east-1"
 }
 
-// RequiredOutputKeys lists the Terraform output keys that must be present for a scan to proceed.
-// This includes spot-mode keys (ami_id, instance_profile_arn) because the generic terraform
-// module always outputs them, and their absence indicates stale or partial infrastructure.
-// tool_name is required to detect mismatches — without it, legacy state cannot be classified.
-var RequiredOutputKeys = []string{
-	"tool_name",
-	"sqs_queue_url",
-	"s3_bucket_name",
-	"ecr_repo_url",
-	"ecs_cluster_name",
-	"task_definition_arn",
-	"subnet_ids",
-	"security_group_id",
-	"ami_id",
-	"instance_profile_arn",
-}
+// RequiredOutputKeys is the legacy AWS-only required-output list. New code
+// should call RequiredOutputKeysForCloud(kind) instead, which returns the
+// correct set for any cloud.Kind. This alias is kept so existing callers
+// outside this package continue to compile without churn.
+var RequiredOutputKeys = AWSRequiredOutputKeys

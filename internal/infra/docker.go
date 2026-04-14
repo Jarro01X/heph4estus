@@ -60,6 +60,17 @@ func (d *DockerClient) Tag(ctx context.Context, source, target string) error {
 	return nil
 }
 
+// Login authenticates Docker to a registry with the given credentials.
+func (d *DockerClient) Login(ctx context.Context, registry, username, password string) error {
+	d.logger.Info("Logging into registry %s", registry)
+	result, err := d.runCmd(ctx, "", nil, "docker", "login", "--username", username, "--password", password, registry)
+	if err != nil {
+		d.logger.Error("docker login failed: %s", string(result.Stderr))
+		return fmt.Errorf("docker login: %w", err)
+	}
+	return nil
+}
+
 // Push pushes a Docker image to a registry.
 func (d *DockerClient) Push(ctx context.Context, tag string, stream io.Writer) error {
 	d.logger.Info("Pushing Docker image %s", tag)
