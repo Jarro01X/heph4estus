@@ -54,6 +54,11 @@ func main() {
 	executor := worker.NewExecutor(log, provider.Storage(), cfg.Bucket)
 
 	ctx := context.Background()
+
+	// Start fleet heartbeat if configured (selfhosted/Hetzner workers).
+	stopHeartbeat := startHeartbeat(ctx, cfg, log)
+	defer stopHeartbeat()
+
 	for {
 		processed, err := processMessage(ctx, log, cfg, mod, provider.Queue(), provider.Storage(), executor)
 		if err != nil {

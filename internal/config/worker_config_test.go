@@ -104,6 +104,33 @@ func TestNewWorkerConfig_SelfhostedScanRuntime(t *testing.T) {
 	}
 }
 
+func TestNewWorkerConfig_FleetMetadata(t *testing.T) {
+	t.Setenv("QUEUE_URL", "heph-tasks")
+	t.Setenv("S3_BUCKET", "heph-results")
+	t.Setenv("TOOL_NAME", "nmap")
+	t.Setenv("CLOUD", "hetzner")
+	t.Setenv("FLEET_HEARTBEAT", "true")
+	t.Setenv("WORKER_ID", "heph-worker-0")
+	t.Setenv("WORKER_HOST", "10.0.1.10")
+	t.Setenv("NATS_URL", "nats://10.0.1.2:4222")
+	t.Setenv("WORKER_VERSION", "heph-nmap-worker:latest")
+	t.Setenv("FLEET_GENERATION_ID", "gen-123")
+
+	cfg, err := NewWorkerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.FleetHeartbeat {
+		t.Fatal("expected FleetHeartbeat=true")
+	}
+	if cfg.WorkerVersion != "heph-nmap-worker:latest" {
+		t.Fatalf("WorkerVersion = %q", cfg.WorkerVersion)
+	}
+	if cfg.GenerationID != "gen-123" {
+		t.Fatalf("GenerationID = %q", cfg.GenerationID)
+	}
+}
+
 func TestNewWorkerConfig_MissingRequired(t *testing.T) {
 	tests := []struct {
 		name    string
