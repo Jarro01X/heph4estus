@@ -176,17 +176,8 @@ func TestNATSFleetManager_Heartbeat(t *testing.T) {
 	}
 	_ = pub.Flush()
 
-	// Give the subscription handler time to fire.
-	time.Sleep(200 * time.Millisecond)
+	state := awaitWorkers(t, mgr, 1)
 
-	state, err := mgr.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	if len(state.Workers) != 1 {
-		t.Fatalf("expected 1 worker, got %d", len(state.Workers))
-	}
 	w, ok := state.Workers["heph-worker-0"]
 	if !ok {
 		t.Fatal("worker heph-worker-0 not found")
@@ -250,15 +241,8 @@ func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
 		}
 	}
 	_ = pub.Flush()
-	time.Sleep(200 * time.Millisecond)
 
-	state, err := mgr.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(state.Workers) != 3 {
-		t.Fatalf("expected 3 workers, got %d", len(state.Workers))
-	}
+	state := awaitWorkers(t, mgr, 3)
 	s := state.Summarize()
 	assertInt(t, "ReadyCount", s.ReadyCount, 3)
 	assertInt(t, "HealthyCount", s.HealthyCount, 3)
@@ -301,9 +285,8 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 	data, _ := json.Marshal(hb1)
 	_ = pub.Publish(HeartbeatSubject, data)
 	_ = pub.Flush()
-	time.Sleep(200 * time.Millisecond)
 
-	state, _ := mgr.Reconcile(context.Background())
+	state := awaitWorkers(t, mgr, 1)
 	w := state.Workers["heph-worker-0"]
 	if w.Ready {
 		t.Fatal("expected worker not ready on first heartbeat")
@@ -325,9 +308,20 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 	data, _ = json.Marshal(hb2)
 	_ = pub.Publish(HeartbeatSubject, data)
 	_ = pub.Flush()
-	time.Sleep(200 * time.Millisecond)
 
-	state, _ = mgr.Reconcile(context.Background())
+	// Poll until the version update lands (worker already exists so
+	// awaitWorkers won't help — poll for the field change instead).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state, _ = mgr.Reconcile(context.Background())
+		if state.Workers["heph-worker-0"] != nil && state.Workers["heph-worker-0"].Version == "v0.6.3" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for heartbeat update")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	w = state.Workers["heph-worker-0"]
 	if !w.Ready {
 		t.Fatal("expected worker ready after second heartbeat")
@@ -381,13 +375,9 @@ func TestWorkerHealthTimeout(t *testing.T) {
 	data, _ := json.Marshal(hb)
 	_ = pub.Publish(HeartbeatSubject, data)
 	_ = pub.Flush()
-	time.Sleep(50 * time.Millisecond)
 
 	// Should be healthy immediately after heartbeat.
-	state, err := mgr.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	state := awaitWorkers(t, mgr, 1)
 	w := state.Workers["heph-worker-0"]
 	if !w.Healthy {
 		t.Fatal("expected healthy right after heartbeat")
@@ -450,7 +440,9 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 		_ = pub.Publish(HeartbeatSubject, data)
 	}
 	_ = pub.Flush()
-	time.Sleep(200 * time.Millisecond)
+
+	// Ensure heartbeats are processed before calling WaitForWorkers.
+	awaitWorkers(t, mgr, 2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -632,6 +624,27 @@ func TestNewNATSFleetManager_Validation(t *testing.T) {
 	_, err = NewNATSFleetManager(NATSFleetManagerConfig{}, logger.NewSimpleLogger())
 	if err == nil {
 		t.Fatal("expected error for empty NATS URL")
+	}
+}
+
+// awaitWorkers polls Reconcile until at least wantCount workers are
+// registered, or fails the test after a timeout.  This replaces fragile
+// time.Sleep calls that race with NATS async message delivery.
+func awaitWorkers(t *testing.T, mgr *NATSFleetManager, wantCount int) *FleetState {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state, err := mgr.Reconcile(context.Background())
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if len(state.Workers) >= wantCount {
+			return state
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d workers, got %d", wantCount, len(state.Workers))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
