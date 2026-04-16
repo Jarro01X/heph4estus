@@ -322,6 +322,44 @@ func TestRequiredOutputKeysForCloud_Selfhosted(t *testing.T) {
 	}
 }
 
+func TestRequiredOutputKeysForCloud_Hetzner(t *testing.T) {
+	keys := RequiredOutputKeysForCloud(cloud.KindHetzner)
+	if len(keys) != len(HetznerRequiredOutputKeys) {
+		t.Fatalf("Hetzner keys length = %d, want %d", len(keys), len(HetznerRequiredOutputKeys))
+	}
+	want := map[string]bool{
+		"nats_url":      true,
+		"controller_ip": true,
+		"generation_id": true,
+		"worker_hosts":  true,
+	}
+	for _, k := range keys {
+		delete(want, k)
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing expected Hetzner keys: %v", want)
+	}
+}
+
+func TestRequiredOutputKeysForCloud_Linode(t *testing.T) {
+	keys := RequiredOutputKeysForCloud(cloud.KindLinode)
+	if len(keys) != len(LinodeRequiredOutputKeys) {
+		t.Fatalf("Linode keys length = %d, want %d", len(keys), len(LinodeRequiredOutputKeys))
+	}
+	want := map[string]bool{
+		"nats_url":      true,
+		"controller_ip": true,
+		"generation_id": true,
+		"worker_hosts":  true,
+	}
+	for _, k := range keys {
+		delete(want, k)
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing expected Linode keys: %v", want)
+	}
+}
+
 func TestRequiredOutputKeysForCloud_UnknownFallsToAWS(t *testing.T) {
 	keys := RequiredOutputKeysForCloud("")
 	if len(keys) != len(AWSRequiredOutputKeys) {

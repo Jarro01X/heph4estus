@@ -77,7 +77,9 @@ func (k Kind) RuntimeFamily() Kind {
 	switch k.Canonical() {
 	case KindHetzner:
 		return KindHetzner
-	case KindManual, KindLinode, KindScaleway, KindVultr:
+	case KindLinode:
+		return KindLinode
+	case KindManual, KindScaleway, KindVultr:
 		return KindManual
 	default:
 		return KindAWS
@@ -88,7 +90,7 @@ func (k Kind) RuntimeFamily() Kind {
 // support (Terraform + fleet manager) as opposed to manual/operator-managed.
 func (k Kind) IsProviderNative() bool {
 	switch k.Canonical() {
-	case KindHetzner:
+	case KindHetzner, KindLinode:
 		return true
 	default:
 		return false

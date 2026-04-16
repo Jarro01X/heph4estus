@@ -74,6 +74,25 @@ func TestSupportedKindsReturnsCanonicalUserFacingKinds(t *testing.T) {
 	}
 }
 
+func TestIsProviderNative(t *testing.T) {
+	tests := []struct {
+		kind Kind
+		want bool
+	}{
+		{KindAWS, false},
+		{KindManual, false},
+		{KindHetzner, true},
+		{KindLinode, true},
+		{KindScaleway, false},
+		{KindVultr, false},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.IsProviderNative(); got != tt.want {
+			t.Errorf("%q IsProviderNative() = %v, want %v", tt.kind, got, tt.want)
+		}
+	}
+}
+
 func TestSelfhostedFamilyHelpers(t *testing.T) {
 	tests := []struct {
 		kind          Kind
@@ -86,7 +105,7 @@ func TestSelfhostedFamilyHelpers(t *testing.T) {
 		{KindSelfhosted, true, KindManual, KindManual},
 		{Kind("selfhosted"), true, KindManual, KindManual},
 		{KindHetzner, true, KindHetzner, KindHetzner},
-		{KindLinode, true, KindManual, KindLinode},
+		{KindLinode, true, KindLinode, KindLinode},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.IsSelfhostedFamily(); got != tt.wantFamily {

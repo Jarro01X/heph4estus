@@ -472,6 +472,16 @@ func TestScanCloudNamedProviderAutoAccepted(t *testing.T) {
 	}
 }
 
+func TestScanCloudLinodeAutoAccepted(t *testing.T) {
+	err := run([]string{"scan", "--tool", "httpx", "--file", "/nonexistent/targets.txt", "--cloud", "linode"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	if strings.Contains(err.Error(), "unsupported cloud") || strings.Contains(err.Error(), `provider "linode" only supports`) {
+		t.Fatalf("linode + auto should pass validation: %v", err)
+	}
+}
+
 func TestNmapCloudProviderRejectsSpot(t *testing.T) {
 	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "vultr", "--compute-mode", "spot"}, testLogger())
 	if err == nil {

@@ -21,10 +21,10 @@ func resolveCLICloud(explicit string, cfg *operator.OperatorConfig) (cloud.Kind,
 // yet support infrastructure deploy/destroy.
 func requireDeploySupport(kind cloud.Kind) error {
 	if kind.IsProviderNative() {
-		return nil // Hetzner has provider-native deploy support
+		return nil
 	}
 	if kind.IsSelfhostedFamily() {
-		return fmt.Errorf("%s infrastructure deploy/destroy is not supported — use 'hetzner' for provider-native VPS deploy, or 'manual' with your own infrastructure", kind.Canonical())
+		return fmt.Errorf("%s infrastructure deploy/destroy is not supported — use 'hetzner' or 'linode' for provider-native VPS deploy, or 'manual' with your own infrastructure", kind.Canonical())
 	}
 	return nil
 }
