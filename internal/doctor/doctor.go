@@ -75,6 +75,9 @@ func RunAll(ctx context.Context, deps Deps) []CheckResult {
 		checkSTSIdentity(ctx, deps),
 		checkConfigDirWritable(deps),
 		checkOutputDir(deps),
+		// Hetzner checks.
+		checkHetznerToken(deps),
+		checkHetznerSSHKey(deps),
 	}
 }
 
@@ -251,6 +254,52 @@ func checkConfigDirWritable(deps Deps) CheckResult {
 		Name:    "config_dir",
 		Status:  StatusPass,
 		Summary: fmt.Sprintf("Config directory %s is writable", dir),
+	}
+}
+
+// checkHetznerToken checks for HCLOUD_TOKEN environment variable.
+func checkHetznerToken(deps Deps) CheckResult {
+	if v := deps.Getenv("HCLOUD_TOKEN"); v != "" {
+		return CheckResult{
+			Name:    "hetzner_token",
+			Status:  StatusPass,
+			Summary: "HCLOUD_TOKEN is set",
+		}
+	}
+	return CheckResult{
+		Name:    "hetzner_token",
+		Status:  StatusWarn,
+		Summary: "HCLOUD_TOKEN is not set (required for --cloud hetzner)",
+		Fix:     "Set HCLOUD_TOKEN with your Hetzner Cloud API token, or skip if not using Hetzner.",
+	}
+}
+
+// checkHetznerSSHKey checks for an SSH key that can be used for Hetzner VMs.
+func checkHetznerSSHKey(deps Deps) CheckResult {
+	// Check common SSH key paths.
+	home := deps.Getenv("HOME")
+	if home == "" {
+		return CheckResult{
+			Name:    "hetzner_ssh_key",
+			Status:  StatusWarn,
+			Summary: "Cannot determine HOME directory for SSH key check",
+		}
+	}
+	for _, name := range []string{"id_ed25519", "id_rsa"} {
+		path := filepath.Join(home, ".ssh", name+".pub")
+		if _, err := os.Stat(path); err == nil {
+			return CheckResult{
+				Name:    "hetzner_ssh_key",
+				Status:  StatusPass,
+				Summary: fmt.Sprintf("SSH public key found at %s", path),
+			}
+		}
+	}
+	return CheckResult{
+		Name:    "hetzner_ssh_key",
+		Status:  StatusWarn,
+		Summary: "No SSH public key found in ~/.ssh/ (needed for Hetzner VM access)",
+		Fix:     "Generate an SSH key with 'ssh-keygen -t ed25519' or skip if not using Hetzner.",
 	}
 }
 
