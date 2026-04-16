@@ -161,7 +161,35 @@ func TestGenericConfigInvalidComputeMode(t *testing.T) {
 	}
 }
 
-func TestGenericConfigProviderNavigatesToStatus(t *testing.T) {
+func TestGenericConfigHetznerNavigatesToDeploy(t *testing.T) {
+	// Hetzner is provider-native: goes through deploy view, not direct to status.
+	m := NewConfig("httpx")
+	m.inputs[cfgFieldCloud].SetValue("hetzner")
+	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	if cmd == nil {
+		t.Fatal("expected navigation command for Hetzner provider")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewDeploy {
+		t.Fatalf("expected ViewDeploy for provider-native Hetzner, got %v", nav.Target)
+	}
+	cfg, ok := nav.Data.(core.DeployConfig)
+	if !ok {
+		t.Fatalf("expected DeployConfig, got %T", nav.Data)
+	}
+	if cfg.Cloud != cloud.KindHetzner {
+		t.Fatalf("expected cloud hetzner, got %q", cfg.Cloud)
+	}
+	if cfg.TerraformDir != "deployments/hetzner" {
+		t.Fatalf("expected hetzner terraform dir, got %q", cfg.TerraformDir)
+	}
+}
+
+func TestGenericConfigManualNavigatesToStatus(t *testing.T) {
 	t.Setenv("SELFHOSTED_QUEUE_ID", "test-stream")
 	t.Setenv("SELFHOSTED_BUCKET", "test-bucket")
 	t.Setenv("SELFHOSTED_WORKER_HOSTS", "10.0.0.1")
@@ -169,10 +197,10 @@ func TestGenericConfigProviderNavigatesToStatus(t *testing.T) {
 	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "worker:latest")
 
 	m := NewConfig("httpx")
-	m.inputs[cfgFieldCloud].SetValue("hetzner")
+	m.inputs[cfgFieldCloud].SetValue("manual")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd == nil {
-		t.Fatal("expected navigation command for VPS provider")
+		t.Fatal("expected navigation command for manual provider")
 	}
 	msg := cmd()
 	nav, ok := msg.(core.NavigateWithDataMsg)
@@ -180,20 +208,14 @@ func TestGenericConfigProviderNavigatesToStatus(t *testing.T) {
 		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
 	}
 	if nav.Target != core.ViewGenericStatus {
-		t.Fatalf("expected ViewGenericStatus (bypass deploy), got %v", nav.Target)
+		t.Fatalf("expected ViewGenericStatus (bypass deploy for manual), got %v", nav.Target)
 	}
 	infra, ok := nav.Data.(core.InfraOutputs)
 	if !ok {
 		t.Fatalf("expected InfraOutputs, got %T", nav.Data)
 	}
-	if infra.Cloud != cloud.KindHetzner {
-		t.Fatalf("expected cloud hetzner, got %q", infra.Cloud)
-	}
-	if infra.SQSQueueURL != "test-stream" {
-		t.Fatalf("expected queue ID test-stream, got %q", infra.SQSQueueURL)
-	}
-	if infra.S3BucketName != "test-bucket" {
-		t.Fatalf("expected bucket test-bucket, got %q", infra.S3BucketName)
+	if infra.Cloud != cloud.KindManual {
+		t.Fatalf("expected cloud manual, got %q", infra.Cloud)
 	}
 }
 
@@ -210,17 +232,17 @@ func TestGenericConfigManualRejectsFargate(t *testing.T) {
 	}
 }
 
-func TestGenericConfigProviderMissingEnv(t *testing.T) {
+func TestGenericConfigManualMissingEnv(t *testing.T) {
 	t.Setenv("SELFHOSTED_QUEUE_ID", "")
 	t.Setenv("SELFHOSTED_BUCKET", "")
 
 	m := NewConfig("httpx")
-	m.inputs[cfgFieldCloud].SetValue("hetzner")
+	m.inputs[cfgFieldCloud].SetValue("manual")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd != nil {
-		t.Fatal("expected nil command when provider env is missing")
+		t.Fatal("expected nil command when manual env is missing")
 	}
-	if !strings.Contains(m.View(), "hetzner requires SELFHOSTED_QUEUE_ID") {
+	if !strings.Contains(m.View(), "manual requires SELFHOSTED_QUEUE_ID") {
 		t.Fatal("expected env var requirement error")
 	}
 }

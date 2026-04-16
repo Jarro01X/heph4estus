@@ -300,8 +300,8 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 	outputDir := operator.ResolveOutputDir("", opCfg)
 	toolOptions := strings.TrimSpace(m.inputs[cfgFieldOptions].Value())
 
-	if cloudKind.IsSelfhostedFamily() {
-		// Selfhosted: bypass deploy view, go directly to status.
+	if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
+		// Manual selfhosted: bypass deploy view, go directly to status.
 		shCfg := factory.SelfhostedConfigFromEnv()
 		if shCfg.QueueID == "" || shCfg.Bucket == "" {
 			m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
@@ -331,7 +331,7 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 		}
 	}
 
-	tc, err := infra.ResolveToolConfig(m.toolName)
+	tc, err := infra.ResolveToolConfig(m.toolName, cloudKind)
 	if err != nil {
 		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
 		return nil
@@ -403,8 +403,8 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 	wlOutDir := operator.ResolveOutputDir("", wlCfg)
 	toolOptions := strings.TrimSpace(m.wlInputs[wlFieldOptions].Value())
 
-	if cloudKind.IsSelfhostedFamily() {
-		// Selfhosted: bypass deploy view, go directly to status.
+	if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
+		// Manual selfhosted: bypass deploy view, go directly to status.
 		shCfg := factory.SelfhostedConfigFromEnv()
 		if shCfg.QueueID == "" || shCfg.Bucket == "" {
 			m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
@@ -436,7 +436,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		}
 	}
 
-	tc, err := infra.ResolveToolConfig(m.toolName)
+	tc, err := infra.ResolveToolConfig(m.toolName, cloudKind)
 	if err != nil {
 		m.errMsg = fmt.Sprintf("Error resolving tool config: %v", err)
 		return nil

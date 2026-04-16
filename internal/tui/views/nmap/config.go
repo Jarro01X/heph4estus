@@ -223,8 +223,8 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
 		outputDir := operator.ResolveOutputDir("", opCfg)
 
-		if cloudKind.IsSelfhostedFamily() {
-			// Selfhosted: bypass deploy view, go directly to status.
+		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
+			// Manual selfhosted: bypass deploy view, go directly to status.
 			shCfg := factory.SelfhostedConfigFromEnv()
 			if shCfg.QueueID == "" || shCfg.Bucket == "" {
 				m.errMsg = fmt.Sprintf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
@@ -257,7 +257,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			}
 		}
 
-		tc, err := infra.ResolveToolConfig("nmap")
+		tc, err := infra.ResolveToolConfig("nmap", cloudKind)
 		if err != nil {
 			m.errMsg = fmt.Sprintf("Error resolving nmap config: %v", err)
 			return m, nil

@@ -343,9 +343,9 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 
 	// Run the full pipeline.
 	msg := cmd()
-	_, cmd = m.Update(msg)   // init complete -> plan
+	_, cmd = m.Update(msg) // init complete -> plan
 	msg = cmd()
-	_, _ = m.Update(msg)     // plan complete -> approval
+	_, _ = m.Update(msg)                          // plan complete -> approval
 	_, cmd = m.Update(tea.KeyPressMsg{Code: 'y'}) // approve
 	msgs := drainBatch(cmd)
 	for _, msg := range msgs {
@@ -355,13 +355,35 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 		}
 	}
 	// Read outputs
-	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
+	if cmd != nil {
+		msg = cmd()
+		_, cmd = m.Update(msg)
+	}
 	// Docker build
-	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
+	if cmd != nil {
+		msgs = drainBatch(cmd)
+		for _, msg := range msgs {
+			if sc, ok := msg.(core.StageCompleteMsg); ok {
+				_, cmd = m.Update(sc)
+				break
+			}
+		}
+	}
 	// Registry auth
-	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) }
+	if cmd != nil {
+		msg = cmd()
+		_, cmd = m.Update(msg)
+	}
 	// Image publish
-	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } }
+	if cmd != nil {
+		msgs = drainBatch(cmd)
+		for _, msg := range msgs {
+			if sc, ok := msg.(core.StageCompleteMsg); ok {
+				_, cmd = m.Update(sc)
+				break
+			}
+		}
+	}
 
 	if m.stage != stageComplete {
 		t.Fatalf("expected stageComplete, got %s", m.stage)
@@ -383,6 +405,40 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 		if infraOut.ToolName != "httpx" {
 			t.Fatalf("expected tool httpx, got %q", infraOut.ToolName)
 		}
+	}
+}
+
+func TestDeployModel_PropagatesProviderNativeCloudAndFleetSize(t *testing.T) {
+	outputs := map[string]string{
+		"sqs_queue_url":  "heph-tasks",
+		"s3_bucket_name": "heph-results",
+		"worker_count":   "3",
+	}
+	cfg := core.DeployConfig{
+		Cloud:          cloud.KindHetzner,
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    10,
+	}
+	m := NewWithDeployer(cfg, &mockDeployer{})
+
+	_, cmd := simulateLifecycleReuse(m, outputs)
+	if cmd == nil {
+		t.Fatal("expected navigate command")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	infraOut, ok := nav.Data.(core.InfraOutputs)
+	if !ok {
+		t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+	}
+	if infraOut.Cloud != cloud.KindHetzner {
+		t.Fatalf("Cloud = %q, want hetzner", infraOut.Cloud)
+	}
+	if infraOut.FleetWorkerCount != 3 {
+		t.Fatalf("FleetWorkerCount = %d, want 3", infraOut.FleetWorkerCount)
 	}
 }
 
@@ -546,14 +602,41 @@ func TestDeployModel_FreshDeployCarriesCleanupFields(t *testing.T) {
 	msg := cmd()
 	_, cmd = m.Update(msg) // init
 	msg = cmd()
-	_, _ = m.Update(msg) // plan
+	_, _ = m.Update(msg)                          // plan
 	_, cmd = m.Update(tea.KeyPressMsg{Code: 'y'}) // approve
 	msgs := drainBatch(cmd)
-	for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } }
-	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // read outputs
-	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // docker build
-	if cmd != nil { msg = cmd(); _, cmd = m.Update(msg) } // registry auth
-	if cmd != nil { msgs = drainBatch(cmd); for _, msg := range msgs { if sc, ok := msg.(core.StageCompleteMsg); ok { _, cmd = m.Update(sc); break } } } // image publish
+	for _, msg := range msgs {
+		if sc, ok := msg.(core.StageCompleteMsg); ok {
+			_, cmd = m.Update(sc)
+			break
+		}
+	}
+	if cmd != nil {
+		msg = cmd()
+		_, cmd = m.Update(msg)
+	} // read outputs
+	if cmd != nil {
+		msgs = drainBatch(cmd)
+		for _, msg := range msgs {
+			if sc, ok := msg.(core.StageCompleteMsg); ok {
+				_, cmd = m.Update(sc)
+				break
+			}
+		}
+	} // docker build
+	if cmd != nil {
+		msg = cmd()
+		_, cmd = m.Update(msg)
+	} // registry auth
+	if cmd != nil {
+		msgs = drainBatch(cmd)
+		for _, msg := range msgs {
+			if sc, ok := msg.(core.StageCompleteMsg); ok {
+				_, cmd = m.Update(sc)
+				break
+			}
+		}
+	} // image publish
 
 	if cmd == nil {
 		t.Fatal("expected navigate command")

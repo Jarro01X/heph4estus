@@ -100,6 +100,10 @@ type InfraOutputs struct {
 	// cloud.DefaultKind so existing AWS-only call sites stay valid.
 	Cloud cloud.Kind
 
+	// FleetWorkerCount is the provisioned provider-native fleet size when the
+	// cloud manages standing workers (e.g. Hetzner). Zero means unknown.
+	FleetWorkerCount int
+
 	// --- AWS runtime fields (unchanged for backward compat) ---
 
 	SQSQueueURL       string

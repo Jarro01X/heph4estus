@@ -380,7 +380,7 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 				return m, m.exportResults()
 			}
 			if m.infra.CleanupPolicy == "destroy-after" {
-				if m.infra.Cloud.IsSelfhostedFamily() {
+				if m.infra.Cloud.IsSelfhostedFamily() && !m.infra.Cloud.IsProviderNative() {
 					m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
 				} else if m.infra.OutputDir == "" {
 					m.cleanupWarning = "destroy-after skipped: no output directory configured"
@@ -400,7 +400,7 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		m.infra.Exported = true
 		m.infra.ExportDir = msg.dir
 		// Auto-destroy if destroy-after policy and destroyer is available.
-		if m.infra.Cloud.IsSelfhostedFamily() {
+		if m.infra.Cloud.IsSelfhostedFamily() && !m.infra.Cloud.IsProviderNative() {
 			m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
 			m.phase = phaseComplete
 			return m, m.navigateToResults()
@@ -542,6 +542,18 @@ func (m *StatusModel) launchWorkers() tea.Cmd {
 
 	if useSpot(infra) {
 		return m.launchSpotWorkers()
+	}
+	if infra.Cloud.IsProviderNative() {
+		return func() tea.Msg {
+			launched := infra.FleetWorkerCount
+			if launched <= 0 {
+				launched = infra.WorkerCount
+			}
+			if launched <= 0 {
+				launched = 1
+			}
+			return launchProgressMsg{launched: launched, total: launched}
+		}
 	}
 
 	return func() tea.Msg {
