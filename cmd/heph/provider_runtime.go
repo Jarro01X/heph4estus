@@ -45,7 +45,7 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 	if err != nil {
 		return 0, fmt.Errorf("starting provider-native fleet manager: %w", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	state, err := mgr.WaitForWorkers(ctx, desired)
 	if err != nil {
