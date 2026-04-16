@@ -13,6 +13,14 @@ type WorkerConfig struct {
 	Bucket           string // S3_BUCKET — storage bucket name
 	ToolName         string
 	JitterMaxSeconds int // JITTER_MAX_SECONDS; 0 = disabled
+
+	// Fleet heartbeat settings (selfhosted/Hetzner workers).
+	FleetHeartbeat bool   // FLEET_HEARTBEAT; enables heartbeat publishing
+	WorkerID       string // WORKER_ID; unique worker identifier
+	WorkerHost     string // WORKER_HOST; private IP or hostname
+	NATSURL        string // NATS_URL; NATS server for heartbeats
+	WorkerVersion  string // WORKER_VERSION; image tag/version for fleet reporting
+	GenerationID   string // FLEET_GENERATION_ID; provider-native fleet generation marker
 }
 
 // NewWorkerConfig creates a new generic worker configuration from environment variables.
@@ -44,11 +52,24 @@ func NewWorkerConfig() (*WorkerConfig, error) {
 		}
 	}
 
+	fleetHeartbeat := os.Getenv("FLEET_HEARTBEAT") == "true"
+	workerID := os.Getenv("WORKER_ID")
+	if workerID == "" {
+		hostname, _ := os.Hostname()
+		workerID = hostname
+	}
+
 	return &WorkerConfig{
 		Cloud:            cloudVal,
 		QueueID:          queueID,
 		Bucket:           bucket,
 		ToolName:         toolName,
 		JitterMaxSeconds: jitterMax,
+		FleetHeartbeat:   fleetHeartbeat,
+		WorkerID:         workerID,
+		WorkerHost:       os.Getenv("WORKER_HOST"),
+		NATSURL:          os.Getenv("NATS_URL"),
+		WorkerVersion:    os.Getenv("WORKER_VERSION"),
+		GenerationID:     os.Getenv("FLEET_GENERATION_ID"),
 	}, nil
 }
