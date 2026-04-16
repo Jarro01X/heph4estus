@@ -1,0 +1,71 @@
+#cloud-config
+# Worker VM bootstrap — installs Docker, configures the controller's insecure
+# registry, pulls the worker image, and starts the worker as a systemd service.
+
+package_update: true
+
+packages:
+  - docker.io
+  - jq
+
+write_files:
+  # Configure Docker to trust the controller's insecure registry
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "insecure-registries": ["${controller_private_ip}:${registry_port}"]
+      }
+
+  # Worker systemd service
+  - path: /etc/systemd/system/heph-worker.service
+    content: |
+      [Unit]
+      Description=Heph4estus Worker
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=10
+      ExecStartPre=-/usr/bin/docker rm -f heph-worker
+      ExecStartPre=/usr/bin/docker pull ${controller_private_ip}:${registry_port}/${docker_image}
+      ExecStart=/usr/bin/docker run --name heph-worker \
+        -e CLOUD=vultr \
+        -e QUEUE_URL=${nats_subject} \
+        -e S3_BUCKET=${minio_bucket} \
+        -e TOOL_NAME=${tool_name} \
+        -e NATS_URL=nats://${controller_private_ip}:${nats_port} \
+        -e S3_ENDPOINT=http://${controller_private_ip}:${minio_port} \
+        -e S3_REGION=us-east-1 \
+        -e S3_ACCESS_KEY=${minio_access_key} \
+        -e S3_SECRET_KEY=${minio_secret_key} \
+        -e S3_PATH_STYLE=true \
+        -e FLEET_HEARTBEAT=true \
+        -e FLEET_GENERATION_ID=${generation_id} \
+        -e WORKER_ID=heph-worker-${worker_index} \
+        -e WORKER_HOST=${worker_private_ip} \
+        -e WORKER_VERSION=${docker_image} \
+        ${controller_private_ip}:${registry_port}/${docker_image}
+      ExecStop=/usr/bin/docker stop heph-worker
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - mkdir -p /data
+  - systemctl daemon-reload
+  - systemctl enable --now docker
+
+  # Restart Docker to pick up insecure registry config
+  - systemctl restart docker
+
+  # Wait for controller registry to be reachable
+  - |
+    for i in $(seq 1 60); do
+      curl -sf http://${controller_private_ip}:${registry_port}/v2/ && break
+      echo "Waiting for controller registry (attempt $i)..."
+      sleep 5
+    done
+
+  # Start the worker service
+  - systemctl enable --now heph-worker
