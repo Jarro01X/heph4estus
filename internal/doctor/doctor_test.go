@@ -265,8 +265,8 @@ func TestRunAll_ReturnsAllChecks(t *testing.T) {
 	d := baseDeps()
 	d.Getenv = envWith(map[string]string{"AWS_REGION": "us-east-1"})
 	results := RunAll(context.Background(), d)
-	if len(results) != 9 {
-		t.Fatalf("expected 9 checks, got %d", len(results))
+	if len(results) != 11 {
+		t.Fatalf("expected 11 checks, got %d", len(results))
 	}
 }
 
@@ -305,10 +305,72 @@ func TestRunAll_OrderIsStable(t *testing.T) {
 		"sts_identity",
 		"config_dir",
 		"output_dir",
+		"hetzner_token",
+		"hetzner_ssh_key",
 	}
 	for i, name := range expected {
 		if results[i].Name != name {
 			t.Errorf("check %d: expected %s, got %s", i, name, results[i].Name)
 		}
+	}
+}
+
+// --- Hetzner token ---
+
+func TestCheckHetznerToken_Set(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"HCLOUD_TOKEN": "test-token-abc123"})
+	r := checkHetznerToken(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Name != "hetzner_token" {
+		t.Fatalf("unexpected name: %s", r.Name)
+	}
+}
+
+func TestCheckHetznerToken_Unset(t *testing.T) {
+	d := baseDeps()
+	r := checkHetznerToken(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Fix == "" {
+		t.Fatal("expected a fix suggestion")
+	}
+}
+
+// --- Hetzner SSH key ---
+
+func TestCheckHetznerSSHKey_Found(t *testing.T) {
+	tmp := t.TempDir()
+	sshDir := filepath.Join(tmp, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519.pub"), []byte("ssh-ed25519 AAAA..."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"HOME": tmp})
+	r := checkHetznerSSHKey(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Name != "hetzner_ssh_key" {
+		t.Fatalf("unexpected name: %s", r.Name)
+	}
+}
+
+func TestCheckHetznerSSHKey_Missing(t *testing.T) {
+	tmp := t.TempDir()
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"HOME": tmp})
+	r := checkHetznerSSHKey(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Fix == "" {
+		t.Fatal("expected a fix suggestion")
 	}
 }

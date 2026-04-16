@@ -14,7 +14,12 @@ import (
 func startEmbeddedNATS(t *testing.T) *natsserver.Server {
 	t.Helper()
 	opts := &natsserver.Options{
+		Host:      "127.0.0.1",
 		Port:      -1,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  -1,
+		NoSigs:    true,
+		NoLog:     true,
 		JetStream: true,
 		StoreDir:  t.TempDir(),
 	}
