@@ -78,6 +78,8 @@ func RunAll(ctx context.Context, deps Deps) []CheckResult {
 		// Hetzner checks.
 		checkHetznerToken(deps),
 		checkHetznerSSHKey(deps),
+		// Linode checks.
+		checkLinodeToken(deps),
 	}
 }
 
@@ -300,6 +302,23 @@ func checkHetznerSSHKey(deps Deps) CheckResult {
 		Status:  StatusWarn,
 		Summary: "No SSH public key found in ~/.ssh/ (needed for Hetzner VM access)",
 		Fix:     "Generate an SSH key with 'ssh-keygen -t ed25519' or skip if not using Hetzner.",
+	}
+}
+
+// checkLinodeToken checks for LINODE_TOKEN environment variable.
+func checkLinodeToken(deps Deps) CheckResult {
+	if v := deps.Getenv("LINODE_TOKEN"); v != "" {
+		return CheckResult{
+			Name:    "linode_token",
+			Status:  StatusPass,
+			Summary: "LINODE_TOKEN is set",
+		}
+	}
+	return CheckResult{
+		Name:    "linode_token",
+		Status:  StatusWarn,
+		Summary: "LINODE_TOKEN is not set (required for --cloud linode)",
+		Fix:     "Set LINODE_TOKEN with your Linode API token, or skip if not using Linode.",
 	}
 }
 

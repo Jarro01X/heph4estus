@@ -265,8 +265,8 @@ func TestRunAll_ReturnsAllChecks(t *testing.T) {
 	d := baseDeps()
 	d.Getenv = envWith(map[string]string{"AWS_REGION": "us-east-1"})
 	results := RunAll(context.Background(), d)
-	if len(results) != 11 {
-		t.Fatalf("expected 11 checks, got %d", len(results))
+	if len(results) != 12 {
+		t.Fatalf("expected 12 checks, got %d", len(results))
 	}
 }
 
@@ -367,6 +367,31 @@ func TestCheckHetznerSSHKey_Missing(t *testing.T) {
 	d := baseDeps()
 	d.Getenv = envWith(map[string]string{"HOME": tmp})
 	r := checkHetznerSSHKey(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Fix == "" {
+		t.Fatal("expected a fix suggestion")
+	}
+}
+
+// --- Linode token ---
+
+func TestCheckLinodeToken_Set(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"LINODE_TOKEN": "test-token-abc123"})
+	r := checkLinodeToken(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Name != "linode_token" {
+		t.Fatalf("unexpected name: %s", r.Name)
+	}
+}
+
+func TestCheckLinodeToken_Unset(t *testing.T) {
+	d := baseDeps()
+	r := checkLinodeToken(d)
 	if r.Status != StatusWarn {
 		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
 	}
