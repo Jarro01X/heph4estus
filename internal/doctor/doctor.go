@@ -80,6 +80,8 @@ func RunAll(ctx context.Context, deps Deps) []CheckResult {
 		checkHetznerSSHKey(deps),
 		// Linode checks.
 		checkLinodeToken(deps),
+		// Vultr checks.
+		checkVultrAPIKey(deps),
 	}
 }
 
@@ -319,6 +321,23 @@ func checkLinodeToken(deps Deps) CheckResult {
 		Status:  StatusWarn,
 		Summary: "LINODE_TOKEN is not set (required for --cloud linode)",
 		Fix:     "Set LINODE_TOKEN with your Linode API token, or skip if not using Linode.",
+	}
+}
+
+// checkVultrAPIKey checks for VULTR_API_KEY environment variable.
+func checkVultrAPIKey(deps Deps) CheckResult {
+	if v := deps.Getenv("VULTR_API_KEY"); v != "" {
+		return CheckResult{
+			Name:    "vultr_api_key",
+			Status:  StatusPass,
+			Summary: "VULTR_API_KEY is set",
+		}
+	}
+	return CheckResult{
+		Name:    "vultr_api_key",
+		Status:  StatusWarn,
+		Summary: "VULTR_API_KEY is not set (required for --cloud vultr)",
+		Fix:     "Set VULTR_API_KEY with your Vultr API key, or skip if not using Vultr.",
 	}
 }
 
