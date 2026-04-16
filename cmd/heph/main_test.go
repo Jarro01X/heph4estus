@@ -358,7 +358,7 @@ func TestScanCloudInvalidValue(t *testing.T) {
 	}
 }
 
-func TestScanCloudProviderRequiresEnv(t *testing.T) {
+func TestScanCloudManualRequiresEnv(t *testing.T) {
 	t.Setenv("SELFHOSTED_QUEUE_ID", "")
 	t.Setenv("SELFHOSTED_BUCKET", "")
 
@@ -366,11 +366,11 @@ func TestScanCloudProviderRequiresEnv(t *testing.T) {
 	f := dir + "/targets.txt"
 	_ = os.WriteFile(f, []byte("example.com\n"), 0o644)
 
-	err := run([]string{"scan", "--tool", "httpx", "--file", f, "--cloud", "hetzner"}, testLogger())
+	err := run([]string{"scan", "--tool", "httpx", "--file", f, "--cloud", "manual"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for provider without env config")
+		t.Fatal("expected error for manual provider without env config")
 	}
-	if !strings.Contains(err.Error(), "hetzner requires SELFHOSTED_QUEUE_ID") {
+	if !strings.Contains(err.Error(), "manual requires SELFHOSTED_QUEUE_ID") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -395,22 +395,22 @@ func TestScanCloudProviderRejectsSpot(t *testing.T) {
 	}
 }
 
-func TestInfraDeployCloudProviderRejected(t *testing.T) {
-	err := run([]string{"infra", "deploy", "--tool", "nmap", "--cloud", "hetzner"}, testLogger())
+func TestInfraDeployManualCloudRejected(t *testing.T) {
+	err := run([]string{"infra", "deploy", "--tool", "nmap", "--cloud", "manual"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for VPS provider")
+		t.Fatal("expected error for manual cloud deploy")
 	}
-	if !strings.Contains(err.Error(), "hetzner infrastructure deploy/destroy lands in PR 6.3") {
+	if !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestInfraDestroyCloudProviderRejected(t *testing.T) {
+func TestInfraDestroyManualCloudRejected(t *testing.T) {
 	err := run([]string{"infra", "destroy", "--tool", "nmap", "--auto-approve", "--cloud", "manual"}, testLogger())
 	if err == nil {
-		t.Fatal("expected error for manual cloud")
+		t.Fatal("expected error for manual cloud destroy")
 	}
-	if !strings.Contains(err.Error(), "manual infrastructure deploy/destroy lands in PR 6.3") {
+	if !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

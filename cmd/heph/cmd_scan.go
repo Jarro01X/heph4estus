@@ -134,8 +134,29 @@ func runScan(args []string, log logger.Logger) error {
 		toolCfg  *infra.ToolConfig
 	)
 
-	if cloudKind.IsSelfhostedFamily() {
-		// Selfhosted: no Terraform/deploy — read queue ID and bucket from config.
+	if cloudKind.IsProviderNative() {
+		// Provider-native (Hetzner): Terraform deploy + selfhosted runtime.
+		toolCfg, err = infra.ResolveToolConfig(*tool, cloudKind)
+		if err != nil {
+			return err
+		}
+		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
+			NoDeploy:     *noDeploy,
+			AutoApprove:  *autoApprove,
+			DestroyAfter: *destroyAfter,
+		}, "", os.Stderr, deployPrompt, log)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		outputs = ensureResult.Outputs
+		reused = ensureResult.Reused
+		queueURL = outputs["sqs_queue_url"]
+		bucket = outputs["s3_bucket_name"]
+		if queueURL == "" || bucket == "" {
+			return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
+		}
+	} else if cloudKind.IsSelfhostedFamily() {
+		// Manual selfhosted: no Terraform/deploy — read queue ID and bucket from env.
 		shCfg := factory.SelfhostedConfigFromEnv()
 		queueURL = shCfg.QueueID
 		bucket = shCfg.Bucket
@@ -166,8 +187,10 @@ func runScan(args []string, log logger.Logger) error {
 		}
 	}
 
-	// Build the cloud provider.
-	provider, err := factory.BuildForKind(ctx, cloudKind, log)
+	// Build the cloud provider. For provider-native paths, use Terraform
+	// outputs as the config source rather than environment variables.
+	var provider cloud.Provider
+	provider, err = buildRuntimeProvider(ctx, cloudKind, outputs, log)
 	if err != nil {
 		return fmt.Errorf("building cloud provider: %w", err)
 	}
@@ -232,9 +255,9 @@ func runScan(args []string, log logger.Logger) error {
 
 	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
-		if cloudKind.IsSelfhostedFamily() {
+		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
 			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
-		} else {
+		} else if toolCfg != nil {
 			logStatus("Destroying infrastructure (--destroy-after)...")
 			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
 				if scanErr != nil {
@@ -405,6 +428,15 @@ func launchGenericWorkers(ctx context.Context, tool string, workers int, compute
 	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
+
+	if cloudKind.IsProviderNative() {
+		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind, outputs)
+		if err != nil {
+			return err
+		}
+		logStatus("Using provider-native %s fleet (%d ready workers)", cloudKind.Canonical(), ready)
+		return nil
+	}
 
 	containerName := fmt.Sprintf("%s-worker", tool)
 	workerEnv := map[string]string{

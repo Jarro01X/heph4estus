@@ -14,11 +14,11 @@ import (
 )
 
 // resolveToolConfig validates the backend flag and delegates to infra.ResolveToolConfig.
-func resolveToolConfig(tool, backend string) (*infra.ToolConfig, error) {
+func resolveToolConfig(tool, backend string, kind ...cloud.Kind) (*infra.ToolConfig, error) {
 	if backend == "dedicated" {
 		return nil, fmt.Errorf("--backend dedicated is no longer supported; use --backend generic for %q", tool)
 	}
-	return infra.ResolveToolConfig(tool)
+	return infra.ResolveToolConfig(tool, kind...)
 }
 
 func runInfra(args []string, log logger.Logger) error {
@@ -55,11 +55,6 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
-	cfg, err := resolveToolConfig(*tool, *backend)
-	if err != nil {
-		return err
-	}
-
 	// Resolve region from operator config when not explicitly set.
 	opCfg, _ := operator.LoadConfig()
 	*region = operator.ResolveRegion(*region, opCfg)
@@ -72,8 +67,14 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 		return err
 	}
 
+	cfg, err := resolveToolConfig(*tool, *backend, cloudKind)
+	if err != nil {
+		return err
+	}
+
 	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
 		ToolConfig:  cfg,
+		Cloud:       cloudKind,
 		Region:      *region,
 		AutoApprove: *autoApprove,
 		Stream:      os.Stderr,
@@ -99,17 +100,17 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
-	cfg, err := resolveToolConfig(*tool, *backend)
-	if err != nil {
-		return err
-	}
-
 	opCfg, _ := operator.LoadConfig()
 	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
 	if err != nil {
 		return err
 	}
 	if err := requireDeploySupport(cloudKind); err != nil {
+		return err
+	}
+
+	cfg, err := resolveToolConfig(*tool, *backend, cloudKind)
+	if err != nil {
 		return err
 	}
 

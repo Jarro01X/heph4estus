@@ -142,8 +142,25 @@ func runNmap(args []string, log logger.Logger) error {
 		toolCfg *infra.ToolConfig
 	)
 
-	if cloudKind.IsSelfhostedFamily() {
-		// Selfhosted: no Terraform/deploy — read queue ID and bucket from config.
+	if cloudKind.IsProviderNative() {
+		// Provider-native (Hetzner): Terraform deploy + selfhosted runtime.
+		toolCfg, err = infra.ResolveToolConfig("nmap", cloudKind)
+		if err != nil {
+			return err
+		}
+		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
+			NoDeploy:     *noDeploy,
+			AutoApprove:  *autoApprove,
+			DestroyAfter: *destroyAfter,
+		}, "", os.Stderr, deployPrompt, log)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		outputs = ensureResult.Outputs
+		reused = ensureResult.Reused
+		bucket = outputs["s3_bucket_name"]
+	} else if cloudKind.IsSelfhostedFamily() {
+		// Manual selfhosted: no Terraform/deploy — read queue ID and bucket from env.
 		shCfg := factory.SelfhostedConfigFromEnv()
 		if shCfg.QueueID == "" || shCfg.Bucket == "" {
 			return fmt.Errorf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
@@ -199,7 +216,7 @@ func runNmap(args []string, log logger.Logger) error {
 	if *outDir != "" && scanErr == nil && started {
 		logStatus("Exporting results to %s...", *outDir)
 
-		exportProvider, provErr := factory.BuildForKind(ctx, cloudKind, log)
+		exportProvider, provErr := buildRuntimeProvider(ctx, cloudKind, outputs, log)
 		if provErr != nil {
 			return fmt.Errorf("building cloud provider for export: %w", provErr)
 		}
@@ -223,9 +240,9 @@ func runNmap(args []string, log logger.Logger) error {
 
 	// Destroy only after execution has actually started and export is done.
 	if *destroyAfter && started {
-		if cloudKind.IsSelfhostedFamily() {
+		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
 			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
-		} else {
+		} else if toolCfg != nil {
 			logStatus("Destroying infrastructure (--destroy-after)...")
 			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
 				if scanErr != nil {
@@ -251,9 +268,15 @@ func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, comput
 		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
 	}
 
-	provider, err := factory.BuildForKind(ctx, cloudKind, log)
-	if err != nil {
-		return false, fmt.Errorf("building cloud provider: %w", err)
+	// Build the cloud provider. For provider-native paths, use Terraform
+	// outputs as the config source rather than environment variables.
+	var (
+		provider cloud.Provider
+		provErr  error
+	)
+	provider, provErr = buildRuntimeProvider(ctx, cloudKind, outputs, log)
+	if provErr != nil {
+		return false, fmt.Errorf("building cloud provider: %w", provErr)
 	}
 	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, cloudKind)
 }
@@ -303,55 +326,63 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
 
-	containerName := "nmap-worker"
-	workerEnv := map[string]string{
-		"QUEUE_URL":          queueURL,
-		"S3_BUCKET":          bucket,
-		"JITTER_MAX_SECONDS": strconv.Itoa(jitterMax),
-		"TOOL_NAME":          "nmap",
-	}
-
-	// Selfhosted only supports RunContainer (no spot instances).
-	isSelfhosted := len(cloudKind) > 0 && cloudKind[0].IsSelfhostedFamily()
-	useSpot := !isSelfhosted && resolveComputeMode(computeMode, workers)
-	if useSpot {
-		ecrURL := outputs["ecr_repo_url"]
-		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
-			ECRRepoURL: ecrURL,
-			ImageTag:   "latest",
-			Region:     regionFromECR(ecrURL),
-			EnvVars:    workerEnv,
-		})
-		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
-			AMI:             outputs["ami_id"],
-			Count:           workers,
-			SecurityGroups:  []string{outputs["security_group_id"]},
-			SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
-			InstanceProfile: outputs["instance_profile_arn"],
-			UserData:        userData,
-			Tags: map[string]string{
-				"Project": "heph4estus",
-				"Tool":    "nmap",
-			},
-		})
+	if len(cloudKind) > 0 && cloudKind[0].IsProviderNative() {
+		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind[0], outputs)
 		if err != nil {
-			return false, fmt.Errorf("launching spot instances: %w", err)
+			return false, err
 		}
-		logStatus("Launched %d spot instances", len(ids))
+		logStatus("Using provider-native %s fleet (%d ready workers)", cloudKind[0].Canonical(), ready)
 	} else {
-		_, err := compute.RunContainer(launchCtx, cloud.ContainerOpts{
-			Cluster:        outputs["ecs_cluster_name"],
-			TaskDefinition: outputs["task_definition_arn"],
-			ContainerName:  containerName,
-			Subnets:        splitOutputList(outputs["subnet_ids"]),
-			SecurityGroups: []string{outputs["security_group_id"]},
-			Env:            workerEnv,
-			Count:          workers,
-		})
-		if err != nil {
-			return false, fmt.Errorf("launching workers: %w", err)
+		containerName := "nmap-worker"
+		workerEnv := map[string]string{
+			"QUEUE_URL":          queueURL,
+			"S3_BUCKET":          bucket,
+			"JITTER_MAX_SECONDS": strconv.Itoa(jitterMax),
+			"TOOL_NAME":          "nmap",
 		}
-		logStatus("Launched %d workers", workers)
+
+		// Selfhosted only supports RunContainer (no spot instances).
+		isSelfhosted := len(cloudKind) > 0 && cloudKind[0].IsSelfhostedFamily()
+		useSpot := !isSelfhosted && resolveComputeMode(computeMode, workers)
+		if useSpot {
+			ecrURL := outputs["ecr_repo_url"]
+			userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
+				ECRRepoURL: ecrURL,
+				ImageTag:   "latest",
+				Region:     regionFromECR(ecrURL),
+				EnvVars:    workerEnv,
+			})
+			ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
+				AMI:             outputs["ami_id"],
+				Count:           workers,
+				SecurityGroups:  []string{outputs["security_group_id"]},
+				SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
+				InstanceProfile: outputs["instance_profile_arn"],
+				UserData:        userData,
+				Tags: map[string]string{
+					"Project": "heph4estus",
+					"Tool":    "nmap",
+				},
+			})
+			if err != nil {
+				return false, fmt.Errorf("launching spot instances: %w", err)
+			}
+			logStatus("Launched %d spot instances", len(ids))
+		} else {
+			_, err := compute.RunContainer(launchCtx, cloud.ContainerOpts{
+				Cluster:        outputs["ecs_cluster_name"],
+				TaskDefinition: outputs["task_definition_arn"],
+				ContainerName:  containerName,
+				Subnets:        splitOutputList(outputs["subnet_ids"]),
+				SecurityGroups: []string{outputs["security_group_id"]},
+				Env:            workerEnv,
+				Count:          workers,
+			})
+			if err != nil {
+				return false, fmt.Errorf("launching workers: %w", err)
+			}
+			logStatus("Launched %d workers", workers)
+		}
 	}
 
 	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
