@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -429,6 +430,8 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 		return core.NavigateWithDataMsg{
 			Target: target,
 			Data: core.InfraOutputs{
+				Cloud:              cfg.Cloud,
+				FleetWorkerCount:   parseInt(outputs["worker_count"]),
 				SQSQueueURL:        outputs["sqs_queue_url"],
 				ECRRepoURL:         outputs["ecr_repo_url"],
 				S3BucketName:       outputs["s3_bucket_name"],
@@ -511,6 +514,14 @@ func splitCSV(s string) []string {
 		}
 	}
 	return result
+}
+
+func parseInt(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // simpleLogger satisfies logger.Logger for the default deployer.

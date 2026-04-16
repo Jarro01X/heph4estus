@@ -31,6 +31,8 @@ type mockSubmitter struct {
 	enqueueErr    error
 	launchErr     error
 	spotErr       error
+	launchCalls   int
+	spotCalls     int
 }
 
 func (s *mockSubmitter) EnqueueTasks(_ context.Context, _ string, tasks []worker.Task) error {
@@ -39,10 +41,12 @@ func (s *mockSubmitter) EnqueueTasks(_ context.Context, _ string, tasks []worker
 }
 
 func (s *mockSubmitter) LaunchWorkers(_ context.Context, _ cloud.ContainerOpts) (string, error) {
+	s.launchCalls++
 	return "task-123", s.launchErr
 }
 
 func (s *mockSubmitter) LaunchSpotWorkers(_ context.Context, _ cloud.SpotOpts) ([]string, error) {
+	s.spotCalls++
 	return []string{"i-123"}, s.spotErr
 }
 
@@ -638,9 +642,30 @@ func TestGenericStatusAutoDestroyEndToEnd(t *testing.T) {
 	}
 }
 
+func TestGenericStatusProviderNativeDestroyAfterUsesDestroyer(t *testing.T) {
+	infra := testInfra()
+	infra.Cloud = cloud.KindHetzner
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+
+	destroyer := &mockDestroyer{}
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{})
+	m.storage = &mockExportStorage{}
+	m.destroyer = destroyer
+	m.phase = phaseExporting
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/httpx/job-1", count: 2})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+	if cmd == nil {
+		t.Fatal("expected destroy command")
+	}
+}
+
 func testSelfhostedInfra() core.InfraOutputs {
 	return core.InfraOutputs{
-		Cloud:          cloud.KindHetzner,
+		Cloud:          cloud.KindManual,
 		SQSQueueURL:    "test-stream",
 		S3BucketName:   "test-bucket",
 		ToolName:       "httpx",
@@ -670,6 +695,9 @@ func TestGenericStatusSelfhostedUsesLaunchWorkers(t *testing.T) {
 	_, ok := msg.(launchProgressMsg)
 	if !ok {
 		t.Fatalf("expected launchProgressMsg (not spotLaunchMsg), got %T", msg)
+	}
+	if sub.launchCalls != 1 {
+		t.Fatalf("expected LaunchWorkers to be called once, got %d", sub.launchCalls)
 	}
 }
 
@@ -718,6 +746,31 @@ func TestGenericStatusSelfhostedExportComplete_SkipsDestroy(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected navigate command")
+	}
+}
+
+func TestGenericStatusProviderNativeSkipsLaunchWorkers(t *testing.T) {
+	infra := testInfra()
+	infra.Cloud = cloud.KindHetzner
+	infra.FleetWorkerCount = 3
+
+	sub := &mockSubmitter{}
+	m := NewStatusWithDeps(infra, sub, &mockTracker{}, &mockUploader{})
+	m.Init()
+
+	_, cmd := m.Update(enqueueProgressMsg{sent: 2, total: 2})
+	if cmd == nil {
+		t.Fatal("expected launch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(launchProgressMsg); !ok {
+		t.Fatalf("expected launchProgressMsg, got %T", msg)
+	}
+	if sub.launchCalls != 0 {
+		t.Fatalf("expected provider-native path to skip LaunchWorkers, got %d calls", sub.launchCalls)
+	}
+	if sub.spotCalls != 0 {
+		t.Fatalf("expected provider-native path to skip LaunchSpotWorkers, got %d calls", sub.spotCalls)
 	}
 }
 

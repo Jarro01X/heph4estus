@@ -15,6 +15,8 @@ type mockSubmitter struct {
 	launchErr     error
 	spotLaunchErr error
 	spotIDs       []string
+	launchCalls   int
+	spotCalls     int
 }
 
 func (s *mockSubmitter) EnqueueTargets(_ context.Context, _ string, _ []worker.Task) error {
@@ -22,10 +24,12 @@ func (s *mockSubmitter) EnqueueTargets(_ context.Context, _ string, _ []worker.T
 }
 
 func (s *mockSubmitter) LaunchWorkers(_ context.Context, _ cloud.ContainerOpts) (string, error) {
+	s.launchCalls++
 	return "arn:task:1", s.launchErr
 }
 
 func (s *mockSubmitter) LaunchSpotWorkers(_ context.Context, _ cloud.SpotOpts) ([]string, error) {
+	s.spotCalls++
 	if s.spotIDs == nil {
 		s.spotIDs = []string{"i-spot1", "i-spot2"}
 	}
@@ -314,6 +318,9 @@ func TestStatusModel_SelfhostedUsesLaunchWorkers(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected launchProgressMsg (not spotLaunchMsg), got %T", msg)
 	}
+	if sub.launchCalls != 1 {
+		t.Fatalf("expected LaunchWorkers to be called once, got %d", sub.launchCalls)
+	}
 }
 
 func TestStatusModel_SelfhostedNeverUsesSpot(t *testing.T) {
@@ -339,6 +346,31 @@ func TestStatusModel_SelfhostedDestroyAfterSkipped(t *testing.T) {
 	}
 	if !strings.Contains(m.cleanupWarning, "selfhosted does not support auto-destroy") {
 		t.Fatalf("expected selfhosted destroy warning, got %q", m.cleanupWarning)
+	}
+}
+
+func TestStatusModel_ProviderNativeSkipsLaunchWorkers(t *testing.T) {
+	infra := testInfra()
+	infra.Cloud = cloud.KindHetzner
+	infra.FleetWorkerCount = 3
+
+	sub := &mockSubmitter{}
+	m := NewStatusWithDeps(infra, sub, &mockTracker{})
+	m.Init()
+
+	_, cmd := m.Update(enqueueProgressMsg{sent: 2, total: 2})
+	if cmd == nil {
+		t.Fatal("expected launch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(launchProgressMsg); !ok {
+		t.Fatalf("expected launchProgressMsg, got %T", msg)
+	}
+	if sub.launchCalls != 0 {
+		t.Fatalf("expected provider-native path to skip LaunchWorkers, got %d calls", sub.launchCalls)
+	}
+	if sub.spotCalls != 0 {
+		t.Fatalf("expected provider-native path to skip LaunchSpotWorkers, got %d calls", sub.spotCalls)
 	}
 }
 
@@ -537,6 +569,25 @@ func TestStatusModel_ExportComplete_SetsExported(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected navigate command")
+	}
+}
+
+func TestStatusModel_ProviderNativeExportComplete_TriggersDestroy(t *testing.T) {
+	infra := testInfra()
+	infra.Cloud = cloud.KindHetzner
+	infra.CleanupPolicy = "destroy-after"
+	infra.OutputDir = "/tmp/export"
+
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{})
+	m.phase = phaseExporting
+	m.destroyer = &mockDestroyer{}
+
+	_, cmd := m.Update(exportCompleteMsg{dir: "/tmp/export/nmap/job-123", count: 5})
+	if m.phase != phaseDestroying {
+		t.Fatalf("expected phaseDestroying, got %d", m.phase)
+	}
+	if cmd == nil {
+		t.Fatal("expected destroy command")
 	}
 }
 
