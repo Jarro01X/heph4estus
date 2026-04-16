@@ -1,6 +1,8 @@
 package factory
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"heph4estus/internal/cloud"
@@ -326,5 +328,58 @@ func TestBuildSelfhostedWithComputeConfig(t *testing.T) {
 	// Compute is backed by real DockerCompute when config is present.
 	if p.Compute() == nil {
 		t.Fatal("expected compute surface")
+	}
+}
+
+func TestSelfhostedConfigFromOutputs(t *testing.T) {
+	cfg := SelfhostedConfigFromOutputs(map[string]string{
+		"nats_url":       "nats://ctrl:4222",
+		"nats_stream":    "heph-tasks",
+		"s3_endpoint":    "http://ctrl:9000",
+		"s3_region":      "us-east-1",
+		"s3_access_key":  "ak",
+		"s3_secret_key":  "sk",
+		"s3_path_style":  "true",
+		"sqs_queue_url":  "heph-tasks",
+		"s3_bucket_name": "heph-results",
+		"registry_url":   "10.0.1.2:5000",
+		"docker_image":   "heph-nmap-worker:latest",
+		"worker_hosts":   "203.0.113.10,203.0.113.11",
+	})
+
+	if cfg.QueueID != "heph-tasks" {
+		t.Fatalf("QueueID = %q, want heph-tasks", cfg.QueueID)
+	}
+	if cfg.DockerImage != "10.0.1.2:5000/heph-nmap-worker:latest" {
+		t.Fatalf("DockerImage = %q", cfg.DockerImage)
+	}
+	if len(cfg.WorkerHosts) != 2 {
+		t.Fatalf("WorkerHosts = %v, want 2 entries", cfg.WorkerHosts)
+	}
+}
+
+func TestBuildHetznerDisablesSSHCompute(t *testing.T) {
+	p, err := Build(Config{
+		Kind: cloud.KindHetzner,
+		Selfhosted: &SelfhostedConfig{
+			S3Endpoint:  "http://ctrl:9000",
+			S3Region:    "us-east-1",
+			S3AccessKey: "ak",
+			S3Secret:    "sk",
+			S3PathStyle: true,
+			WorkerHosts: []string{"203.0.113.10"},
+			SSHUser:     "root",
+			SSHKeyPath:  "/tmp/key",
+			DockerImage: "10.0.1.2:5000/heph-nmap-worker:latest",
+		},
+		Logger: logger.NewSimpleLogger(),
+	})
+	if err != nil {
+		t.Fatalf("Build hetzner: %v", err)
+	}
+	if _, err := p.Compute().RunContainer(context.Background(), cloud.ContainerOpts{}); err == nil {
+		t.Fatal("expected provider-native Hetzner compute to reject RunContainer")
+	} else if !strings.Contains(err.Error(), "compute is not configured") {
+		t.Fatalf("unexpected RunContainer error: %v", err)
 	}
 }

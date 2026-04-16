@@ -85,7 +85,7 @@ func TestSelfhostedFamilyHelpers(t *testing.T) {
 		{KindManual, true, KindManual, KindManual},
 		{KindSelfhosted, true, KindManual, KindManual},
 		{Kind("selfhosted"), true, KindManual, KindManual},
-		{KindHetzner, true, KindManual, KindHetzner},
+		{KindHetzner, true, KindHetzner, KindHetzner},
 		{KindLinode, true, KindManual, KindLinode},
 	}
 	for _, tt := range tests {

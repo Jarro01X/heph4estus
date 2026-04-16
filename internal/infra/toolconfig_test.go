@@ -2,6 +2,8 @@ package infra
 
 import (
 	"testing"
+
+	"heph4estus/internal/cloud"
 )
 
 func TestResolveToolConfig_Nmap(t *testing.T) {
@@ -67,5 +69,18 @@ func TestAWSRegion_Default(t *testing.T) {
 	region := AWSRegion()
 	if region == "" {
 		t.Error("expected non-empty region")
+	}
+}
+
+func TestResolveToolConfig_HetznerSetsDockerImageVar(t *testing.T) {
+	cfg, err := ResolveToolConfig("nmap", cloud.KindHetzner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TerraformDir != "deployments/hetzner" {
+		t.Fatalf("TerraformDir = %q, want deployments/hetzner", cfg.TerraformDir)
+	}
+	if got := cfg.TerraformVars["docker_image"]; got != "heph-nmap-worker:latest" {
+		t.Fatalf("TerraformVars[docker_image] = %q, want heph-nmap-worker:latest", got)
 	}
 }

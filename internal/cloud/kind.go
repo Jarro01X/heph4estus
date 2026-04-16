@@ -69,11 +69,30 @@ func (k Kind) IsSelfhostedFamily() bool {
 
 // RuntimeFamily collapses provider-specific selectors onto the shared
 // execution family used by the implementation.
+//
+// Hetzner keeps its own kind so the factory can route it to the fleet-manager
+// path instead of the manual SSH path.  All selfhosted-family providers share
+// the same queue/storage runtime but Hetzner has provider-native deploy.
 func (k Kind) RuntimeFamily() Kind {
-	if k.IsSelfhostedFamily() {
+	switch k.Canonical() {
+	case KindHetzner:
+		return KindHetzner
+	case KindManual, KindLinode, KindScaleway, KindVultr:
 		return KindManual
+	default:
+		return KindAWS
 	}
-	return KindAWS
+}
+
+// IsProviderNative reports whether the kind has provider-native deploy
+// support (Terraform + fleet manager) as opposed to manual/operator-managed.
+func (k Kind) IsProviderNative() bool {
+	switch k.Canonical() {
+	case KindHetzner:
+		return true
+	default:
+		return false
+	}
 }
 
 // SupportedKindsText returns the canonical user-facing list for help text.

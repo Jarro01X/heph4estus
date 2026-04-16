@@ -79,6 +79,8 @@ func Build(cfg Config) (cloud.Provider, error) {
 		}
 		return awscloud.NewProvider(cfg.AWS.SDKConfig, cfg.Logger), nil
 	case cloud.KindManual:
+		// Manual mode uses the selfhosted runtime end-to-end, including
+		// Docker-over-SSH compute.
 		if cfg.Selfhosted == nil {
 			return nil, fmt.Errorf("factory: selfhosted config is required for cloud %q", cfg.Kind.Canonical())
 		}
@@ -107,6 +109,31 @@ func Build(cfg Config) (cloud.Provider, error) {
 				SSHKeyPath:  cfg.Selfhosted.SSHKeyPath,
 				SSHPort:     cfg.Selfhosted.SSHPort,
 				DockerImage: cfg.Selfhosted.DockerImage,
+			}
+		}
+		return selfhosted.NewProvider(pcfg, cfg.Logger)
+	case cloud.KindHetzner:
+		// Provider-native Hetzner reuses the selfhosted queue/storage runtime,
+		// but normal operator flows must not fall back to ad hoc SSH launches.
+		if cfg.Selfhosted == nil {
+			return nil, fmt.Errorf("factory: selfhosted config is required for cloud %q", cfg.Kind.Canonical())
+		}
+		pcfg := selfhosted.ProviderConfig{
+			Storage: selfhosted.StorageConfig{
+				Endpoint:  cfg.Selfhosted.S3Endpoint,
+				Region:    cfg.Selfhosted.S3Region,
+				AccessKey: cfg.Selfhosted.S3AccessKey,
+				Secret:    cfg.Selfhosted.S3Secret,
+				PathStyle: cfg.Selfhosted.S3PathStyle,
+			},
+		}
+		if cfg.Selfhosted.NATSURL != "" {
+			pcfg.Queue = &selfhosted.QueueConfig{
+				URL:            cfg.Selfhosted.NATSURL,
+				StreamName:     cfg.Selfhosted.StreamName,
+				DurablePrefix:  cfg.Selfhosted.DurablePrefix,
+				AckWaitSeconds: cfg.Selfhosted.AckWaitSeconds,
+				MaxDeliver:     cfg.Selfhosted.MaxDeliver,
 			}
 		}
 		return selfhosted.NewProvider(pcfg, cfg.Logger)
@@ -164,7 +191,7 @@ func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (clou
 			AWS:    &AWSConfig{SDKConfig: sdkCfg},
 			Logger: log,
 		})
-	case cloud.KindManual:
+	case cloud.KindManual, cloud.KindHetzner:
 		return Build(Config{
 			Kind:       kind.Canonical(),
 			Selfhosted: SelfhostedConfigFromEnv(),
@@ -173,6 +200,29 @@ func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (clou
 	default:
 		return nil, fmt.Errorf("factory: unsupported cloud %q", kind)
 	}
+}
+
+// SelfhostedConfigFromOutputs constructs a SelfhostedConfig from Terraform
+// outputs. This is used by provider-native paths (Hetzner) where the
+// controller endpoints and credentials come from deploy outputs rather than
+// operator environment variables.
+func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
+	cfg := &SelfhostedConfig{
+		NATSURL:     outputs["nats_url"],
+		StreamName:  outputs["nats_stream"],
+		S3Endpoint:  outputs["s3_endpoint"],
+		S3Region:    outputs["s3_region"],
+		S3AccessKey: outputs["s3_access_key"],
+		S3Secret:    outputs["s3_secret_key"],
+		S3PathStyle: outputs["s3_path_style"] == "true",
+		QueueID:     outputs["sqs_queue_url"],
+		Bucket:      outputs["s3_bucket_name"],
+		DockerImage: outputs["registry_url"] + "/" + outputs["docker_image"],
+	}
+	if hosts := outputs["worker_hosts"]; hosts != "" {
+		cfg.WorkerHosts = splitCommaList(hosts)
+	}
+	return cfg
 }
 
 func envOr(key, fallback string) string {
