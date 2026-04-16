@@ -265,8 +265,8 @@ func TestRunAll_ReturnsAllChecks(t *testing.T) {
 	d := baseDeps()
 	d.Getenv = envWith(map[string]string{"AWS_REGION": "us-east-1"})
 	results := RunAll(context.Background(), d)
-	if len(results) != 12 {
-		t.Fatalf("expected 12 checks, got %d", len(results))
+	if len(results) != 13 {
+		t.Fatalf("expected 13 checks, got %d", len(results))
 	}
 }
 
@@ -307,6 +307,8 @@ func TestRunAll_OrderIsStable(t *testing.T) {
 		"output_dir",
 		"hetzner_token",
 		"hetzner_ssh_key",
+		"linode_token",
+		"vultr_api_key",
 	}
 	for i, name := range expected {
 		if results[i].Name != name {
@@ -392,6 +394,31 @@ func TestCheckLinodeToken_Set(t *testing.T) {
 func TestCheckLinodeToken_Unset(t *testing.T) {
 	d := baseDeps()
 	r := checkLinodeToken(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Fix == "" {
+		t.Fatal("expected a fix suggestion")
+	}
+}
+
+// --- Vultr API key ---
+
+func TestCheckVultrAPIKey_Set(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"VULTR_API_KEY": "test-key-abc123"})
+	r := checkVultrAPIKey(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+	if r.Name != "vultr_api_key" {
+		t.Fatalf("unexpected name: %s", r.Name)
+	}
+}
+
+func TestCheckVultrAPIKey_Unset(t *testing.T) {
+	d := baseDeps()
+	r := checkVultrAPIKey(d)
 	if r.Status != StatusWarn {
 		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
 	}
