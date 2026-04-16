@@ -84,7 +84,7 @@ func TestIsProviderNative(t *testing.T) {
 		{KindHetzner, true},
 		{KindLinode, true},
 		{KindScaleway, false},
-		{KindVultr, false},
+		{KindVultr, true},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.IsProviderNative(); got != tt.want {
@@ -106,6 +106,7 @@ func TestSelfhostedFamilyHelpers(t *testing.T) {
 		{Kind("selfhosted"), true, KindManual, KindManual},
 		{KindHetzner, true, KindHetzner, KindHetzner},
 		{KindLinode, true, KindLinode, KindLinode},
+		{KindVultr, true, KindVultr, KindVultr},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.IsSelfhostedFamily(); got != tt.wantFamily {

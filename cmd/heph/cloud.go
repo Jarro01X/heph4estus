@@ -24,7 +24,7 @@ func requireDeploySupport(kind cloud.Kind) error {
 		return nil
 	}
 	if kind.IsSelfhostedFamily() {
-		return fmt.Errorf("%s infrastructure deploy/destroy is not supported — use 'hetzner' or 'linode' for provider-native VPS deploy, or 'manual' with your own infrastructure", kind.Canonical())
+		return fmt.Errorf("%s infrastructure deploy/destroy is not supported — use 'hetzner', 'linode', or 'vultr' for provider-native VPS deploy, or 'manual' with your own infrastructure", kind.Canonical())
 	}
 	return nil
 }
