@@ -65,6 +65,12 @@ func ResolveToolConfig(tool string, kind ...cloud.Kind) (*ToolConfig, error) {
 			"tool_name":    tool,
 			"docker_image": cfg.DockerTag,
 		}
+	case cloud.KindVultr:
+		cfg.TerraformDir = "deployments/vultr"
+		cfg.TerraformVars = map[string]string{
+			"tool_name":    tool,
+			"docker_image": cfg.DockerTag,
+		}
 	default:
 		cfg.TerraformDir = "deployments/aws/generic/environments/dev"
 		cfg.TerraformVars = map[string]string{

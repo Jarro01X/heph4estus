@@ -112,7 +112,7 @@ func Build(cfg Config) (cloud.Provider, error) {
 			}
 		}
 		return selfhosted.NewProvider(pcfg, cfg.Logger)
-	case cloud.KindHetzner, cloud.KindLinode:
+	case cloud.KindHetzner, cloud.KindLinode, cloud.KindVultr:
 		// Provider-native VPS paths reuse the selfhosted queue/storage runtime,
 		// but normal operator flows must not fall back to ad hoc SSH launches.
 		if cfg.Selfhosted == nil {
@@ -191,7 +191,7 @@ func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (clou
 			AWS:    &AWSConfig{SDKConfig: sdkCfg},
 			Logger: log,
 		})
-	case cloud.KindManual, cloud.KindHetzner, cloud.KindLinode:
+	case cloud.KindManual, cloud.KindHetzner, cloud.KindLinode, cloud.KindVultr:
 		return Build(Config{
 			Kind:       kind.Canonical(),
 			Selfhosted: SelfhostedConfigFromEnv(),

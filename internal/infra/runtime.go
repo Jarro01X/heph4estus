@@ -73,6 +73,28 @@ var LinodeRequiredOutputKeys = []string{
 	"worker_hosts",
 }
 
+// VultrRequiredOutputKeys lists the Terraform output keys that must be
+// present for a Vultr deploy to be considered ready. The output contract
+// mirrors Hetzner and Linode — all provider-native VPS paths produce the
+// same key set so the lifecycle/factory code works uniformly.
+var VultrRequiredOutputKeys = []string{
+	"tool_name",
+	"cloud",
+	"nats_url",
+	"nats_stream",
+	"s3_endpoint",
+	"s3_access_key",
+	"s3_secret_key",
+	"s3_bucket_name",
+	"registry_url",
+	"docker_image",
+	"sqs_queue_url",
+	"controller_ip",
+	"generation_id",
+	"worker_count",
+	"worker_hosts",
+}
+
 // RequiredOutputKeysForCloud returns the required output keys for the given
 // cloud provider family. Unknown kinds fall back to the AWS set.
 func RequiredOutputKeysForCloud(kind cloud.Kind) []string {
@@ -81,6 +103,8 @@ func RequiredOutputKeysForCloud(kind cloud.Kind) []string {
 		return HetznerRequiredOutputKeys
 	case cloud.KindLinode:
 		return LinodeRequiredOutputKeys
+	case cloud.KindVultr:
+		return VultrRequiredOutputKeys
 	default:
 		if kind.IsSelfhostedFamily() {
 			return SelfhostedRequiredOutputKeys
