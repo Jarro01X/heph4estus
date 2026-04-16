@@ -149,15 +149,18 @@ type EnsureResult struct {
 }
 
 // EnsureInfra runs the lifecycle check and, if needed, deploys infrastructure.
-// Returns the terraform outputs and whether infra was reused.
+// Returns the terraform outputs and whether infra was reused. The cloud kind
+// is read from cfg.Cloud so the correct required-output set is used for
+// lifecycle probing.
 func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, region string, stream io.Writer, promptFunc func(string) bool, log logger.Logger) (*EnsureResult, error) {
 	tf := NewTerraformClient(log)
 
-	// Probe current state.
-	// EnsureInfra is currently only called from AWS paths (selfhosted
-	// compute is blocked). Default to AWS required outputs. Track 2 will
-	// thread cloud.Kind through ToolConfig when selfhosted scan paths open.
-	probe := Probe(ctx, tf, cloud.DefaultKind, cfg.TerraformDir, cfg.ToolName)
+	kind := cfg.Cloud
+	if kind == "" {
+		kind = cloud.DefaultKind
+	}
+
+	probe := Probe(ctx, tf, kind, cfg.TerraformDir, cfg.ToolName)
 	decision := Decide(probe, policy)
 
 	if err := writef(stream, "==> Lifecycle: %s\n", decision.Message); err != nil {
@@ -174,6 +177,7 @@ func EnsureInfra(ctx context.Context, cfg *ToolConfig, policy LifecyclePolicy, r
 	case DecisionDeploy:
 		result, err := RunDeploy(ctx, DeployOpts{
 			ToolConfig:  cfg,
+			Cloud:       kind,
 			Region:      region,
 			AutoApprove: policy.AutoApprove,
 			Stream:      stream,

@@ -24,7 +24,9 @@ type ToolConfig struct {
 }
 
 // ResolveToolConfig derives Docker/Terraform configuration from a module definition.
-func ResolveToolConfig(tool string) (*ToolConfig, error) {
+// When kind is empty or AWS, it returns the AWS Terraform path. For Hetzner,
+// it returns the Hetzner Terraform path.
+func ResolveToolConfig(tool string, kind ...cloud.Kind) (*ToolConfig, error) {
 	reg, err := modules.NewDefaultRegistry()
 	if err != nil {
 		return nil, fmt.Errorf("loading module registry: %w", err)
@@ -35,20 +37,38 @@ func ResolveToolConfig(tool string) (*ToolConfig, error) {
 		return nil, fmt.Errorf("unknown tool: %q (available: %s)", tool, strings.Join(names, ", "))
 	}
 
-	return &ToolConfig{
-		ToolName:     tool,
-		TerraformDir: "deployments/aws/generic/environments/dev",
-		Dockerfile:   "containers/generic/Dockerfile",
-		DockerCtx:    ".",
-		DockerTag:    fmt.Sprintf("heph-%s-worker:latest", tool),
-		ECRRepoName:  fmt.Sprintf("heph-dev-%s", tool),
-		BuildArgs:    InstallCmdToBuildArgs(mod.InstallCmd),
-		TerraformVars: map[string]string{
+	var cloudKind cloud.Kind
+	if len(kind) > 0 {
+		cloudKind = kind[0]
+	}
+
+	cfg := &ToolConfig{
+		Cloud:       cloudKind,
+		ToolName:    tool,
+		Dockerfile:  "containers/generic/Dockerfile",
+		DockerCtx:   ".",
+		DockerTag:   fmt.Sprintf("heph-%s-worker:latest", tool),
+		ECRRepoName: fmt.Sprintf("heph-dev-%s", tool),
+		BuildArgs:   InstallCmdToBuildArgs(mod.InstallCmd),
+	}
+
+	switch cloudKind.Canonical() {
+	case cloud.KindHetzner:
+		cfg.TerraformDir = "deployments/hetzner"
+		cfg.TerraformVars = map[string]string{
+			"tool_name":    tool,
+			"docker_image": cfg.DockerTag,
+		}
+	default:
+		cfg.TerraformDir = "deployments/aws/generic/environments/dev"
+		cfg.TerraformVars = map[string]string{
 			"tool_name":   tool,
 			"task_cpu":    fmt.Sprintf("%d", mod.DefaultCPU),
 			"task_memory": fmt.Sprintf("%d", mod.DefaultMemory),
-		},
-	}, nil
+		}
+	}
+
+	return cfg, nil
 }
 
 // InstallCmdToBuildArgs maps a module's install_cmd to the correct Docker build arg.
