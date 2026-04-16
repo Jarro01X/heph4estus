@@ -54,13 +54,17 @@ func (s *mockStorage) Count(context.Context, string, string) (int, error) {
 type mockCompute struct {
 	runContainerErr error
 	runSpotErr      error
+	runContainerN   int
+	runSpotN        int
 }
 
 func (c *mockCompute) RunContainer(context.Context, cloud.ContainerOpts) (string, error) {
+	c.runContainerN++
 	return "task-1", c.runContainerErr
 }
 
 func (c *mockCompute) RunSpotInstances(context.Context, cloud.SpotOpts) ([]string, error) {
+	c.runSpotN++
 	if c.runSpotErr != nil {
 		return nil, c.runSpotErr
 	}
@@ -229,12 +233,18 @@ func TestRunNmapScanWithDepsStartedTrueOnOutputFailure(t *testing.T) {
 	}
 }
 
-func TestRunNmapScanWithDeps_SelfhostedUsesRunContainer(t *testing.T) {
+func TestRunNmapScanWithDeps_ProviderNativeSkipsRunContainer(t *testing.T) {
 	tasks := []nmaptool.ScanTask{{
 		JobID:   "job-sh",
 		Target:  "10.0.0.1",
 		Options: "-sS",
 	}}
+
+	oldWait := waitForProviderNativeFleetFunc
+	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string) (int, error) {
+		return 1, nil
+	}
+	t.Cleanup(func() { waitForProviderNativeFleetFunc = oldWait })
 
 	comp := &mockCompute{}
 	started, err := runNmapScanWithDeps(
@@ -260,6 +270,12 @@ func TestRunNmapScanWithDeps_SelfhostedUsesRunContainer(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("expected started=true")
+	}
+	if comp.runContainerN != 0 {
+		t.Fatalf("expected provider-native Hetzner path to skip RunContainer, got %d calls", comp.runContainerN)
+	}
+	if comp.runSpotN != 0 {
+		t.Fatalf("expected provider-native Hetzner path to skip RunSpotInstances, got %d calls", comp.runSpotN)
 	}
 }
 
@@ -295,6 +311,52 @@ func TestRunNmapScanWithDeps_SelfhostedNeverCallsSpot(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("expected started=true")
+	}
+	if comp.runSpotN != 0 {
+		t.Fatalf("expected manual selfhosted path to avoid spot, got %d calls", comp.runSpotN)
+	}
+}
+
+func TestRunTargetListScan_ProviderNativeSkipsRunContainer(t *testing.T) {
+	oldWait := waitForProviderNativeFleetFunc
+	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string) (int, error) {
+		return 3, nil
+	}
+	t.Cleanup(func() { waitForProviderNativeFleetFunc = oldWait })
+
+	comp := &mockCompute{}
+	started, err := runTargetListScan(
+		context.Background(),
+		"httpx",
+		"job-hetzner",
+		"targets.txt",
+		"example.com\n",
+		"",
+		10,
+		"auto",
+		"text",
+		&mockQueue{},
+		&mockStorage{count: 1},
+		comp,
+		map[string]string{
+			"sqs_queue_url":  "heph-tasks",
+			"s3_bucket_name": "heph-results",
+			"nats_url":       "nats://10.0.1.2:4222",
+			"worker_count":   "3",
+		},
+		"heph-results",
+		"heph-tasks",
+		operator.NoopTracker(),
+		cloud.KindHetzner,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Fatal("expected started=true")
+	}
+	if comp.runContainerN != 0 {
+		t.Fatalf("expected provider-native target-list path to skip RunContainer, got %d calls", comp.runContainerN)
 	}
 }
 

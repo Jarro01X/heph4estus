@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"heph4estus/internal/cloud"
@@ -43,13 +42,16 @@ func TestValidateComputeMode_ProviderSpotRejected(t *testing.T) {
 	}
 }
 
-func TestRequireDeploySupport_ProviderFamilyBlocked(t *testing.T) {
-	err := requireDeploySupport(cloud.KindHetzner)
-	if err == nil {
-		t.Fatal("expected error: VPS deploy should be blocked")
+func TestRequireDeploySupport_HetznerAllowed(t *testing.T) {
+	if err := requireDeploySupport(cloud.KindHetzner); err != nil {
+		t.Fatalf("Hetzner deploy should be allowed (provider-native): %v", err)
 	}
-	if !strings.Contains(err.Error(), "PR 6.3") {
-		t.Fatalf("error should mention PR 6.3 deferral, got: %v", err)
+}
+
+func TestRequireDeploySupport_ManualBlocked(t *testing.T) {
+	err := requireDeploySupport(cloud.KindManual)
+	if err == nil {
+		t.Fatal("expected error: manual deploy should be blocked")
 	}
 }
 
