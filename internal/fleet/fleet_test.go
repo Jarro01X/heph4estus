@@ -149,7 +149,7 @@ func TestNATSFleetManager_Heartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	// Publish a heartbeat from a separate connection to simulate a worker.
 	pub, err := nats.Connect(srv.ClientURL())
@@ -174,7 +174,7 @@ func TestNATSFleetManager_Heartbeat(t *testing.T) {
 	if err := pub.Publish(HeartbeatSubject, data); err != nil {
 		t.Fatalf("publish heartbeat: %v", err)
 	}
-	pub.Flush()
+	_ = pub.Flush()
 
 	// Give the subscription handler time to fire.
 	time.Sleep(200 * time.Millisecond)
@@ -228,7 +228,7 @@ func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -249,7 +249,7 @@ func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
 			t.Fatalf("publish worker %d: %v", i, err)
 		}
 	}
-	pub.Flush()
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	state, err := mgr.Reconcile(context.Background())
@@ -281,7 +281,7 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -299,8 +299,8 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 		Timestamp:  time.Now().Unix(),
 	}
 	data, _ := json.Marshal(hb1)
-	pub.Publish(HeartbeatSubject, data)
-	pub.Flush()
+	_ = pub.Publish(HeartbeatSubject, data)
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	state, _ := mgr.Reconcile(context.Background())
@@ -323,8 +323,8 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 		Timestamp:  time.Now().Unix(),
 	}
 	data, _ = json.Marshal(hb2)
-	pub.Publish(HeartbeatSubject, data)
-	pub.Flush()
+	_ = pub.Publish(HeartbeatSubject, data)
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	state, _ = mgr.Reconcile(context.Background())
@@ -363,7 +363,7 @@ func TestWorkerHealthTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -379,8 +379,8 @@ func TestWorkerHealthTimeout(t *testing.T) {
 		Timestamp:  time.Now().Unix(),
 	}
 	data, _ := json.Marshal(hb)
-	pub.Publish(HeartbeatSubject, data)
-	pub.Flush()
+	_ = pub.Publish(HeartbeatSubject, data)
+	_ = pub.Flush()
 	time.Sleep(50 * time.Millisecond)
 
 	// Should be healthy immediately after heartbeat.
@@ -429,7 +429,7 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -447,9 +447,9 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 			Timestamp:  time.Now().Unix(),
 		}
 		data, _ := json.Marshal(hb)
-		pub.Publish(HeartbeatSubject, data)
+		_ = pub.Publish(HeartbeatSubject, data)
 	}
-	pub.Flush()
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -482,7 +482,7 @@ func TestNATSFleetManager_WaitForWorkers_ContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	// No workers published, so WaitForWorkers should block until context cancels.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -514,7 +514,7 @@ func TestNATSFleetManager_InvalidHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -523,10 +523,10 @@ func TestNATSFleetManager_InvalidHeartbeat(t *testing.T) {
 	defer pub.Close()
 
 	// Publish garbage data.
-	pub.Publish(HeartbeatSubject, []byte("not json"))
+	_ = pub.Publish(HeartbeatSubject, []byte("not json"))
 	// Publish valid JSON but missing worker_id.
-	pub.Publish(HeartbeatSubject, []byte(`{"ready":true}`))
-	pub.Flush()
+	_ = pub.Publish(HeartbeatSubject, []byte(`{"ready":true}`))
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	state, err := mgr.Reconcile(context.Background())
@@ -557,7 +557,7 @@ func TestNATSFleetManager_IgnoresMismatchedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	pub, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -577,7 +577,7 @@ func TestNATSFleetManager_IgnoresMismatchedGeneration(t *testing.T) {
 	if err := pub.Publish(HeartbeatSubject, data); err != nil {
 		t.Fatalf("publish heartbeat: %v", err)
 	}
-	pub.Flush()
+	_ = pub.Flush()
 	time.Sleep(200 * time.Millisecond)
 
 	state, err := mgr.Reconcile(context.Background())
