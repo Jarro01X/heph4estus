@@ -1,0 +1,255 @@
+# Hetzner Cloud fleet module — provisions a controller VM (NATS + MinIO +
+# registry via the selfhosted controller module) and N worker VMs that
+# auto-join the fleet on boot via cloud-init.
+#
+# The controller module generates credentials and cloud-init; this module
+# adds all Hetzner-specific resources (servers, networking, firewall).
+
+terraform {
+  required_version = ">= 1.3"
+
+  required_providers {
+    hcloud = {
+      source  = "hetznercloud/hcloud"
+      version = ">= 1.45"
+    }
+  }
+}
+
+provider "hcloud" {
+  token = var.hcloud_token
+}
+
+# --- Generation ID ---
+
+resource "random_id" "generation" {
+  byte_length = 8
+}
+
+locals {
+  generation_id         = var.generation_id != "" ? var.generation_id : random_id.generation.hex
+  controller_private_ip = "10.0.1.2"
+
+  # Map Hetzner locations to their primary datacenter names.
+  location_to_dc = {
+    fsn1 = "fsn1-dc14"
+    nbg1 = "nbg1-dc3"
+    hel1 = "hel1-dc2"
+    ash  = "ash-dc1"
+    hil  = "hil-dc1"
+  }
+  datacenter = lookup(local.location_to_dc, var.location, "${var.location}-dc1")
+}
+
+# --- SSH Key ---
+
+resource "hcloud_ssh_key" "deploy" {
+  name       = var.ssh_key_name
+  public_key = var.ssh_public_key
+}
+
+# --- Primary IP (allocated before server so IP is known at plan time) ---
+
+resource "hcloud_primary_ip" "controller" {
+  name          = "heph-controller-ip"
+  type          = "ipv4"
+  datacenter    = local.datacenter
+  assignee_type = "server"
+  auto_delete   = true
+  labels = {
+    Project = "heph4estus"
+    Role    = "controller"
+    Tool    = var.tool_name
+  }
+}
+
+# --- Controller module (credentials + cloud-init) ---
+
+module "controller" {
+  source = "../selfhosted/controller"
+
+  controller_ip = hcloud_primary_ip.controller.ip_address
+  tool_name     = var.tool_name
+  minio_bucket  = var.minio_bucket
+}
+
+# --- Networking ---
+
+resource "hcloud_network" "fleet" {
+  name     = "heph-fleet"
+  ip_range = "10.0.0.0/16"
+  labels = {
+    Project = "heph4estus"
+  }
+}
+
+resource "hcloud_network_subnet" "nodes" {
+  network_id   = hcloud_network.fleet.id
+  type         = "cloud"
+  network_zone = "eu-central"
+  ip_range     = "10.0.1.0/24"
+}
+
+# --- Firewall ---
+
+resource "hcloud_firewall" "fleet" {
+  name = "heph-fleet-fw"
+
+  labels = {
+    Project = "heph4estus"
+  }
+
+  # Inbound: SSH from anywhere
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Inbound: operator-facing controller services.
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "4222"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "5000"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "9000"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Inbound: all traffic from private network
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "any"
+    source_ips = ["10.0.0.0/16"]
+  }
+
+  rule {
+    direction  = "in"
+    protocol   = "udp"
+    port       = "any"
+    source_ips = ["10.0.0.0/16"]
+  }
+
+  # Outbound: all IPv4 and IPv6
+  rule {
+    direction       = "out"
+    protocol        = "tcp"
+    port            = "any"
+    destination_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  rule {
+    direction       = "out"
+    protocol        = "udp"
+    port            = "any"
+    destination_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  rule {
+    direction       = "out"
+    protocol        = "icmp"
+    destination_ips = ["0.0.0.0/0", "::/0"]
+  }
+}
+
+# --- Controller Server ---
+
+resource "hcloud_server" "controller" {
+  name        = "heph-controller"
+  server_type = var.controller_type
+  image       = "ubuntu-24.04"
+  location    = var.location
+  user_data   = module.controller.cloud_init
+
+  public_net {
+    ipv4_enabled = true
+    ipv4         = hcloud_primary_ip.controller.id
+    ipv6_enabled = true
+  }
+
+  network {
+    network_id = hcloud_network.fleet.id
+    ip         = local.controller_private_ip
+  }
+
+  firewall_ids = [hcloud_firewall.fleet.id]
+  ssh_keys     = [hcloud_ssh_key.deploy.id]
+
+  labels = {
+    Project = "heph4estus"
+    Role    = "controller"
+    Tool    = var.tool_name
+  }
+
+  depends_on = [hcloud_network_subnet.nodes]
+}
+
+# --- Worker cloud-init ---
+
+locals {
+  worker_cloud_init = [
+    for i in range(var.worker_count) : templatefile("${path.module}/templates/worker-cloud-init.yaml", {
+      controller_private_ip = local.controller_private_ip
+      nats_port             = 4222
+      nats_subject          = module.controller.nats_stream
+      minio_port            = 9000
+      minio_access_key      = module.controller.s3_access_key
+      minio_secret_key      = module.controller.s3_secret_key
+      minio_bucket          = var.minio_bucket
+      registry_port         = 5000
+      tool_name             = var.tool_name
+      docker_image          = var.docker_image
+      generation_id         = local.generation_id
+      worker_index          = i
+      worker_private_ip     = "10.0.1.${i + 10}"
+    })
+  ]
+}
+
+# --- Worker Servers ---
+
+resource "hcloud_server" "worker" {
+  count = var.worker_count
+
+  name        = "heph-worker-${count.index}"
+  server_type = var.worker_type
+  image       = "ubuntu-24.04"
+  location    = var.location
+  user_data   = local.worker_cloud_init[count.index]
+
+  public_net {
+    ipv4_enabled = true
+    ipv6_enabled = true
+  }
+
+  network {
+    network_id = hcloud_network.fleet.id
+    ip         = "10.0.1.${count.index + 10}"
+  }
+
+  firewall_ids = [hcloud_firewall.fleet.id]
+  ssh_keys     = [hcloud_ssh_key.deploy.id]
+
+  labels = {
+    Project = "heph4estus"
+    Role    = "worker"
+    Tool    = var.tool_name
+    Index   = tostring(count.index)
+  }
+
+  depends_on = [hcloud_network_subnet.nodes, hcloud_server.controller]
+}
