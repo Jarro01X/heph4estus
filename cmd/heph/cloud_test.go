@@ -60,3 +60,24 @@ func TestRequireDeploySupport_AWSAllowed(t *testing.T) {
 		t.Fatalf("AWS deploy should be allowed: %v", err)
 	}
 }
+
+func TestRequireDeploySupport_LinodeAllowed(t *testing.T) {
+	if err := requireDeploySupport(cloud.KindLinode); err != nil {
+		t.Fatalf("Linode deploy should be allowed (provider-native): %v", err)
+	}
+}
+
+func TestValidateComputeMode_LinodeSpotRejected(t *testing.T) {
+	err := ValidateComputeMode(cloud.KindLinode, "spot")
+	if err == nil {
+		t.Fatal("expected error for linode + spot")
+	}
+}
+
+func TestValidateComputeMode_LinodeAutoAllowed(t *testing.T) {
+	for _, mode := range []string{"", "auto"} {
+		if err := ValidateComputeMode(cloud.KindLinode, mode); err != nil {
+			t.Errorf("linode mode %q should be valid: %v", mode, err)
+		}
+	}
+}

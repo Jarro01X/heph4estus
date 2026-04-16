@@ -383,3 +383,32 @@ func TestBuildHetznerDisablesSSHCompute(t *testing.T) {
 		t.Fatalf("unexpected RunContainer error: %v", err)
 	}
 }
+
+func TestBuildLinodeDisablesSSHCompute(t *testing.T) {
+	p, err := Build(Config{
+		Kind: cloud.KindLinode,
+		Selfhosted: &SelfhostedConfig{
+			S3Endpoint:  "http://ctrl:9000",
+			S3Region:    "us-east-1",
+			S3AccessKey: "ak",
+			S3Secret:    "sk",
+			S3PathStyle: true,
+		},
+		Logger: logger.NewSimpleLogger(),
+	})
+	if err != nil {
+		t.Fatalf("Build linode: %v", err)
+	}
+	if _, err := p.Compute().RunContainer(context.Background(), cloud.ContainerOpts{}); err == nil {
+		t.Fatal("expected provider-native Linode compute to reject RunContainer")
+	} else if !strings.Contains(err.Error(), "compute is not configured") {
+		t.Fatalf("unexpected RunContainer error: %v", err)
+	}
+}
+
+func TestBuildLinodeMissingConfig(t *testing.T) {
+	_, err := Build(Config{Kind: cloud.KindLinode, Logger: logger.NewSimpleLogger()})
+	if err == nil {
+		t.Fatal("expected config-required error for linode")
+	}
+}

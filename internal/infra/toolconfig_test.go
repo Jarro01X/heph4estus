@@ -84,3 +84,19 @@ func TestResolveToolConfig_HetznerSetsDockerImageVar(t *testing.T) {
 		t.Fatalf("TerraformVars[docker_image] = %q, want heph-nmap-worker:latest", got)
 	}
 }
+
+func TestResolveToolConfig_LinodeSetsDockerImageVar(t *testing.T) {
+	cfg, err := ResolveToolConfig("nmap", cloud.KindLinode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TerraformDir != "deployments/linode" {
+		t.Fatalf("TerraformDir = %q, want deployments/linode", cfg.TerraformDir)
+	}
+	if got := cfg.TerraformVars["docker_image"]; got != "heph-nmap-worker:latest" {
+		t.Fatalf("TerraformVars[docker_image] = %q, want heph-nmap-worker:latest", got)
+	}
+	if cfg.Cloud != cloud.KindLinode {
+		t.Fatalf("Cloud = %q, want linode", cfg.Cloud)
+	}
+}
