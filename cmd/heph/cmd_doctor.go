@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/doctor"
 	"heph4estus/internal/logger"
 )
@@ -13,6 +14,7 @@ import (
 func runDoctor(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	format := fs.String("format", "text", "Output format: text or json")
+	cloudFlag := fs.String("cloud", "", "Run checks for a specific cloud provider (aws, hetzner, linode, vultr, manual)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -23,7 +25,18 @@ func runDoctor(args []string, log logger.Logger) error {
 	}
 
 	ctx := mainContext()
-	results := doctor.RunAll(ctx, doctor.DefaultDeps())
+	deps := doctor.DefaultDeps()
+
+	var results []doctor.CheckResult
+	if *cloudFlag != "" {
+		kind, err := cloud.ParseKind(*cloudFlag)
+		if err != nil {
+			return err
+		}
+		results = doctor.RunForCloud(ctx, deps, kind)
+	} else {
+		results = doctor.RunAll(ctx, deps)
+	}
 
 	if *format == "json" {
 		return outputDoctorJSON(results)

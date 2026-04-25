@@ -247,14 +247,17 @@ func (m *StatusModel) trackCreate() {
 		return
 	}
 	_ = m.jobTracker.Create(&operator.JobRecord{
-		JobID:       m.infra.JobID,
-		ToolName:    "nmap",
-		Phase:       operator.PhaseEnqueuing,
-		TotalTasks:  m.totalTargets,
-		WorkerCount: m.infra.WorkerCount,
-		ComputeMode: m.infra.ComputeMode,
-		Cloud:       string(m.infra.Cloud),
-		Bucket:      m.infra.S3BucketName,
+		JobID:        m.infra.JobID,
+		ToolName:     "nmap",
+		Phase:        operator.PhaseEnqueuing,
+		TotalTasks:   m.totalTargets,
+		WorkerCount:  m.infra.WorkerCount,
+		ComputeMode:  m.infra.ComputeMode,
+		Cloud:        string(m.infra.Cloud),
+		Bucket:       m.infra.S3BucketName,
+		NATSUrl:      m.infra.NATSUrl,
+		ControllerIP: m.infra.ControllerIP,
+		GenerationID: m.infra.GenerationID,
 	})
 }
 
@@ -467,6 +470,10 @@ func (m *StatusModel) View() string {
 
 		b.WriteString(core.SelectedStyle.Render("  Scanning") + "\n\n")
 		fmt.Fprintf(&b, "  %s%d active\n", labelStyle.Render("Workers:"), m.workersUp)
+		if m.infra.Cloud.IsProviderNative() && m.infra.ControllerIP != "" {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Controller:"), m.infra.ControllerIP)
+			fmt.Fprintf(&b, "  %s%d unique IPs\n", labelStyle.Render("Fleet:"), m.workersUp)
+		}
 		fmt.Fprintf(&b, "  %s%s %d / %d targets  (%.1f%%)\n", labelStyle.Render("Progress:"), bar, m.completed, m.totalTargets, pct)
 		if rate > 0 {
 			fmt.Fprintf(&b, "  %s~%.0f targets/min\n", labelStyle.Render("Rate:"), rate)

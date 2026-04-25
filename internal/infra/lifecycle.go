@@ -80,6 +80,19 @@ func Probe(ctx context.Context, tf *TerraformClient, kind cloud.Kind, terraformD
 		}
 	}
 
+	// For provider-native clouds, verify the deployed cloud matches. This
+	// prevents silently reusing Hetzner infra when Vultr was requested.
+	if kind.IsProviderNative() {
+		deployedCloud := outputs["cloud"]
+		if deployedCloud != "" && cloud.Kind(deployedCloud).Canonical() != kind.Canonical() {
+			return ProbeResult{
+				Status:       StatusMismatch,
+				Outputs:      outputs,
+				DeployedTool: deployedTool,
+			}
+		}
+	}
+
 	// Check for missing required keys.
 	var missing []string
 	for _, key := range RequiredOutputKeysForCloud(kind) {

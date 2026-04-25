@@ -81,60 +81,34 @@ resource "vultr_firewall_rule" "ssh_v6" {
   port              = "22"
 }
 
-# Inbound: NATS client port (IPv4 + IPv6)
+# Inbound: NATS (4222) — restricted to VPC subnet.
+# Workers access NATS via VPC. Operator access requires NATS auth credentials.
 resource "vultr_firewall_rule" "nats_v4" {
   firewall_group_id = vultr_firewall_group.fleet.id
   protocol          = "tcp"
   ip_type           = "v4"
-  subnet            = "0.0.0.0"
-  subnet_size       = 0
+  subnet            = "10.0.1.0"
+  subnet_size       = 24
   port              = "4222"
 }
 
-resource "vultr_firewall_rule" "nats_v6" {
-  firewall_group_id = vultr_firewall_group.fleet.id
-  protocol          = "tcp"
-  ip_type           = "v6"
-  subnet            = "::"
-  subnet_size       = 0
-  port              = "4222"
-}
-
-# Inbound: Docker registry (IPv4 + IPv6)
+# Inbound: Docker registry (5000) — VPC only.
 resource "vultr_firewall_rule" "registry_v4" {
   firewall_group_id = vultr_firewall_group.fleet.id
   protocol          = "tcp"
   ip_type           = "v4"
-  subnet            = "0.0.0.0"
-  subnet_size       = 0
+  subnet            = "10.0.1.0"
+  subnet_size       = 24
   port              = "5000"
 }
 
-resource "vultr_firewall_rule" "registry_v6" {
-  firewall_group_id = vultr_firewall_group.fleet.id
-  protocol          = "tcp"
-  ip_type           = "v6"
-  subnet            = "::"
-  subnet_size       = 0
-  port              = "5000"
-}
-
-# Inbound: MinIO S3 API (IPv4 + IPv6)
+# Inbound: MinIO S3 API (9000) — VPC only.
 resource "vultr_firewall_rule" "minio_v4" {
   firewall_group_id = vultr_firewall_group.fleet.id
   protocol          = "tcp"
   ip_type           = "v4"
-  subnet            = "0.0.0.0"
-  subnet_size       = 0
-  port              = "9000"
-}
-
-resource "vultr_firewall_rule" "minio_v6" {
-  firewall_group_id = vultr_firewall_group.fleet.id
-  protocol          = "tcp"
-  ip_type           = "v6"
-  subnet            = "::"
-  subnet_size       = 0
+  subnet            = "10.0.1.0"
+  subnet_size       = 24
   port              = "9000"
 }
 
@@ -177,6 +151,8 @@ locals {
       controller_private_ip = vultr_instance.controller.internal_ip
       nats_port             = 4222
       nats_subject          = module.controller.nats_stream
+      nats_user             = module.controller.nats_user
+      nats_password         = module.controller.nats_password
       minio_port            = 9000
       minio_access_key      = module.controller.s3_access_key
       minio_secret_key      = module.controller.s3_secret_key

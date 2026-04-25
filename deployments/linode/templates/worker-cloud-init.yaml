@@ -34,7 +34,7 @@ write_files:
         -e QUEUE_URL=${nats_subject} \
         -e S3_BUCKET=${minio_bucket} \
         -e TOOL_NAME=${tool_name} \
-        -e NATS_URL=nats://${controller_private_ip}:${nats_port} \
+        -e NATS_URL=nats://${nats_user}:${nats_password}@${controller_private_ip}:${nats_port} \
         -e S3_ENDPOINT=http://${controller_private_ip}:${minio_port} \
         -e S3_REGION=us-east-1 \
         -e S3_ACCESS_KEY=${minio_access_key} \

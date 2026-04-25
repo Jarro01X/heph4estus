@@ -3,10 +3,13 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/operator"
 )
 
@@ -82,6 +85,64 @@ func RunAll(ctx context.Context, deps Deps) []CheckResult {
 		checkLinodeToken(deps),
 		// Vultr checks.
 		checkVultrAPIKey(deps),
+	}
+}
+
+// RunForCloud executes only the checks relevant to the given cloud provider.
+// When kind is empty or aws, the full set is returned (minus VPS-specific
+// checks that aren't relevant). When kind is a VPS provider, AWS-specific
+// checks are excluded and provider-specific checks are included.
+func RunForCloud(ctx context.Context, deps Deps, kind cloud.Kind) []CheckResult {
+	k := kind.Canonical()
+
+	// Common checks for all providers.
+	common := []CheckResult{
+		checkBinary(deps, "terraform"),
+		checkBinary(deps, "docker"),
+		checkDockerDaemon(ctx, deps),
+		checkConfigDirWritable(deps),
+		checkOutputDir(deps),
+	}
+
+	switch k {
+	case cloud.KindAWS, "":
+		return append(common,
+			checkBinary(deps, "aws"),
+			checkAWSRegion(deps),
+			checkAWSProfile(deps),
+			checkSTSIdentity(ctx, deps),
+		)
+	case cloud.KindHetzner:
+		return append(common,
+			checkHetznerToken(deps),
+			checkHetznerSSHKey(deps),
+			checkControllerReachable(deps),
+			checkNATSAuth(deps),
+			checkRegistryExposure(deps),
+		)
+	case cloud.KindLinode:
+		return append(common,
+			checkLinodeToken(deps),
+			checkControllerReachable(deps),
+			checkNATSAuth(deps),
+			checkRegistryExposure(deps),
+		)
+	case cloud.KindVultr:
+		return append(common,
+			checkVultrAPIKey(deps),
+			checkControllerReachable(deps),
+			checkNATSAuth(deps),
+			checkRegistryExposure(deps),
+		)
+	case cloud.KindManual:
+		return append(common,
+			checkControllerReachable(deps),
+			checkNATSAuth(deps),
+			checkRegistryExposure(deps),
+		)
+	default:
+		// Unknown provider — return the full set.
+		return RunAll(ctx, deps)
 	}
 }
 
@@ -338,6 +399,94 @@ func checkVultrAPIKey(deps Deps) CheckResult {
 		Status:  StatusWarn,
 		Summary: "VULTR_API_KEY is not set (required for --cloud vultr)",
 		Fix:     "Set VULTR_API_KEY with your Vultr API key, or skip if not using Vultr.",
+	}
+}
+
+// checkControllerReachable verifies the operator can reach the controller VM.
+func checkControllerReachable(deps Deps) CheckResult {
+	natsURL := deps.Getenv("NATS_URL")
+	if natsURL == "" {
+		return CheckResult{
+			Name:    "controller_reachable",
+			Status:  StatusWarn,
+			Summary: "NATS_URL not set; cannot check controller reachability",
+			Fix:     "Set NATS_URL to your controller's NATS endpoint, or deploy infrastructure first.",
+		}
+	}
+
+	// Extract host:port from nats:// URL.
+	host := natsURL
+	for _, prefix := range []string{"nats://", "tls://"} {
+		if len(host) > len(prefix) && host[:len(prefix)] == prefix {
+			host = host[len(prefix):]
+		}
+	}
+
+	conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+	if err != nil {
+		return CheckResult{
+			Name:    "controller_reachable",
+			Status:  StatusFail,
+			Summary: fmt.Sprintf("Controller NATS endpoint unreachable: %s", host),
+			Fix:     "Verify the controller VM is running and NATS port is open in the firewall.",
+		}
+	}
+	_ = conn.Close()
+
+	return CheckResult{
+		Name:    "controller_reachable",
+		Status:  StatusPass,
+		Summary: fmt.Sprintf("Controller NATS endpoint reachable at %s", host),
+	}
+}
+
+// checkNATSAuth warns when NATS credentials are not configured.
+func checkNATSAuth(deps Deps) CheckResult {
+	user := deps.Getenv("NATS_USER")
+	pass := deps.Getenv("NATS_PASSWORD")
+
+	if user != "" && pass != "" {
+		return CheckResult{
+			Name:    "nats_auth",
+			Status:  StatusPass,
+			Summary: "NATS authentication credentials are configured",
+		}
+	}
+
+	return CheckResult{
+		Name:    "nats_auth",
+		Status:  StatusWarn,
+		Summary: "NATS authentication not configured; controller queue may be publicly accessible",
+		Fix:     "Deploy with authenticated NATS (PR 6.6+) or set NATS_USER and NATS_PASSWORD.",
+	}
+}
+
+// checkRegistryExposure warns when the container registry lacks authentication.
+func checkRegistryExposure(deps Deps) CheckResult {
+	registryURL := deps.Getenv("REGISTRY_URL")
+	if registryURL == "" {
+		return CheckResult{
+			Name:    "registry_exposure",
+			Status:  StatusWarn,
+			Summary: "REGISTRY_URL not set; cannot check registry exposure",
+			Fix:     "Set REGISTRY_URL to your controller's registry endpoint, or deploy infrastructure first.",
+		}
+	}
+
+	// Check if the registry is using TLS.
+	if len(registryURL) > 8 && registryURL[:8] == "https://" {
+		return CheckResult{
+			Name:    "registry_exposure",
+			Status:  StatusPass,
+			Summary: "Container registry is using TLS",
+		}
+	}
+
+	return CheckResult{
+		Name:    "registry_exposure",
+		Status:  StatusWarn,
+		Summary: "Container registry is using HTTP (insecure); images are pulled without TLS",
+		Fix:     "Configure TLS for the registry or restrict access to the private network.",
 	}
 }
 

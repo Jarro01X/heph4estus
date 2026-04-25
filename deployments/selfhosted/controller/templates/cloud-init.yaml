@@ -12,6 +12,16 @@ packages:
   - jq
 
 write_files:
+  # --- NATS auth configuration ---
+  - path: /data/nats/auth.conf
+    permissions: '0600'
+    content: |
+      authorization {
+        users = [
+          { user: "${nats_user}", password: "${nats_password}" }
+        ]
+      }
+
   # --- NATS JetStream ---
   - path: /etc/systemd/system/nats.service
     content: |
@@ -28,7 +38,7 @@ write_files:
         -p ${nats_port}:4222 \
         -p ${nats_monitor_port}:8222 \
         -v /data/nats:/data \
-        nats:latest -js -sd /data
+        nats:latest -js -sd /data -c /data/auth.conf
       ExecStop=/usr/bin/docker stop nats
 
       [Install]
@@ -103,7 +113,7 @@ runcmd:
   # ack-wait=5m matches SQS visibility timeout for long-running scans.
   - |
     for i in $(seq 1 30); do
-      docker run --rm natsio/nats-box nats -s nats://host.docker.internal:${nats_port} \
+      docker run --rm natsio/nats-box nats -s nats://${nats_user}:${nats_password}@host.docker.internal:${nats_port} \
         stream add ${nats_stream_name} \
         --subjects="${nats_stream_name}.*" \
         --retention=work \

@@ -41,6 +41,11 @@ type JobRecord struct {
 	RuntimeTarget  string    `json:"runtime_target,omitempty"`
 	LastError      string    `json:"last_error,omitempty"`
 	LocalOutputDir string    `json:"local_output_dir,omitempty"`
+
+	// Fleet metadata for provider-native status reattachment.
+	NATSUrl      string `json:"nats_url,omitempty"`
+	ControllerIP string `json:"controller_ip,omitempty"`
+	GenerationID string `json:"generation_id,omitempty"`
 }
 
 // JobStore provides CRUD operations for job records backed by the filesystem.
