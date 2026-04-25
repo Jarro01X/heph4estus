@@ -11,6 +11,7 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
 )
@@ -20,6 +21,7 @@ type statusSnapshot struct {
 	JobID          string         `json:"job_id"`
 	Tool           string         `json:"tool"`
 	Phase          operator.Phase `json:"phase"`
+	Cloud          string         `json:"cloud,omitempty"`
 	Bucket         string         `json:"bucket,omitempty"`
 	Progress       statusProgress `json:"progress"`
 	Elapsed        string         `json:"elapsed"`
@@ -28,12 +30,25 @@ type statusSnapshot struct {
 	ArtifactPrefix string         `json:"artifact_prefix,omitempty"`
 	LocalOutputDir string         `json:"local_output_dir,omitempty"`
 	LastError      string         `json:"last_error,omitempty"`
+	Fleet          *statusFleet   `json:"fleet,omitempty"`
 }
 
 type statusProgress struct {
 	Completed int     `json:"completed"`
 	Total     int     `json:"total"`
 	Percent   float64 `json:"percent"`
+}
+
+// statusFleet holds fleet-level observability data for provider-native runs.
+type statusFleet struct {
+	ControllerIP    string `json:"controller_ip,omitempty"`
+	GenerationID    string `json:"generation_id,omitempty"`
+	DesiredWorkers  int    `json:"desired_workers"`
+	RegisteredCount int    `json:"registered"`
+	HealthyCount    int    `json:"healthy"`
+	ReadyCount      int    `json:"ready"`
+	UniqueIPv4Count int    `json:"unique_ipv4"`
+	IPv6ReadyCount  int    `json:"ipv6_ready"`
 }
 
 func runStatus(args []string, log logger.Logger) error {
@@ -76,10 +91,11 @@ func runStatus(args []string, log logger.Logger) error {
 		return err
 	}
 
+	ctx := context.Background()
+
 	// Query live cloud progress if the job has a bucket and result prefix.
 	completed := 0
 	if rec.Bucket != "" && rec.ResultPrefix != "" && !isTerminalPhase(rec.Phase) {
-		ctx := context.Background()
 		count, cloudErr := countResults(ctx, rec.Bucket, rec.ResultPrefix, cloudKind, log)
 		if cloudErr != nil {
 			log.Error("Warning: could not query live progress: %v", cloudErr)
@@ -89,6 +105,35 @@ func runStatus(args []string, log logger.Logger) error {
 	}
 
 	snap := buildSnapshot(rec, completed)
+
+	// Query fleet state for provider-native runs.
+	if cloudKind.IsProviderNative() && !isTerminalPhase(rec.Phase) {
+		natsURL := rec.NATSUrl
+		if natsURL != "" {
+			fleetSnap, err := fleet.QueryFleetSnapshot(ctx, fleet.NATSFleetManagerConfig{
+				NATSURL:        natsURL,
+				DesiredWorkers: rec.WorkerCount,
+				ControllerIP:   rec.ControllerIP,
+				GenerationID:   rec.GenerationID,
+				Cloud:          rec.Cloud,
+			}, log)
+			if err != nil {
+				log.Error("Warning: could not query fleet state: %v", err)
+			} else {
+				summary := fleetSnap.Summarize()
+				snap.Fleet = &statusFleet{
+					ControllerIP:    fleetSnap.ControllerIP,
+					GenerationID:    fleetSnap.GenerationID,
+					DesiredWorkers:  summary.DesiredWorkers,
+					RegisteredCount: summary.RegisteredCount,
+					HealthyCount:    summary.HealthyCount,
+					ReadyCount:      summary.ReadyCount,
+					UniqueIPv4Count: summary.UniqueIPv4Count,
+					IPv6ReadyCount:  summary.IPv6ReadyCount,
+				}
+			}
+		}
+	}
 
 	if *format == "json" {
 		return outputStatusJSON(snap)
@@ -134,6 +179,7 @@ func buildSnapshot(rec *operator.JobRecord, liveCompleted int) statusSnapshot {
 		JobID:          rec.JobID,
 		Tool:           rec.ToolName,
 		Phase:          phase,
+		Cloud:          rec.Cloud,
 		Bucket:         rec.Bucket,
 		Progress:       statusProgress{Completed: completed, Total: total, Percent: pct},
 		Elapsed:        elapsed.String(),
@@ -155,8 +201,27 @@ func outputStatusText(snap statusSnapshot) error {
 	_, _ = fmt.Fprintf(os.Stdout, "Job:       %s\n", snap.JobID)
 	_, _ = fmt.Fprintf(os.Stdout, "Tool:      %s\n", snap.Tool)
 	_, _ = fmt.Fprintf(os.Stdout, "Phase:     %s\n", snap.Phase)
+	if snap.Cloud != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "Cloud:     %s\n", snap.Cloud)
+	}
 	_, _ = fmt.Fprintf(os.Stdout, "Progress:  %d / %d  (%.1f%%)\n", snap.Progress.Completed, snap.Progress.Total, snap.Progress.Percent)
 	_, _ = fmt.Fprintf(os.Stdout, "Elapsed:   %s\n", snap.Elapsed)
+
+	if snap.Fleet != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "\nFleet:\n")
+		if snap.Fleet.ControllerIP != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Controller:  %s\n", snap.Fleet.ControllerIP)
+		}
+		if snap.Fleet.GenerationID != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Generation:  %s\n", snap.Fleet.GenerationID)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Workers:     %d/%d desired, %d healthy, %d ready\n",
+			snap.Fleet.RegisteredCount, snap.Fleet.DesiredWorkers,
+			snap.Fleet.HealthyCount, snap.Fleet.ReadyCount)
+		_, _ = fmt.Fprintf(os.Stdout, "  IPv4:        %d unique\n", snap.Fleet.UniqueIPv4Count)
+		_, _ = fmt.Fprintf(os.Stdout, "  IPv6:        %d ready\n", snap.Fleet.IPv6ReadyCount)
+		_, _ = fmt.Fprintln(os.Stdout)
+	}
 
 	if snap.CleanupPolicy != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "Cleanup:   %s\n", snap.CleanupPolicy)

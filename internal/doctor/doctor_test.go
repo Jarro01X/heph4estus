@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/operator"
 )
 
@@ -424,5 +425,158 @@ func TestCheckVultrAPIKey_Unset(t *testing.T) {
 	}
 	if r.Fix == "" {
 		t.Fatal("expected a fix suggestion")
+	}
+}
+
+// --- RunForCloud filtering ---
+
+func TestRunForCloud_AWS(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"AWS_REGION": "us-east-1"})
+	results := RunForCloud(context.Background(), d, cloud.KindAWS)
+
+	// AWS should include aws_binary, aws_region, aws_profile, sts_identity
+	// but NOT hetzner_token, linode_token, vultr_api_key
+	names := checkNames(results)
+	assertContains(t, names, "aws_binary")
+	assertContains(t, names, "aws_region")
+	assertNotContains(t, names, "hetzner_token")
+	assertNotContains(t, names, "linode_token")
+	assertNotContains(t, names, "vultr_api_key")
+}
+
+func TestRunForCloud_Hetzner(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"HCLOUD_TOKEN": "tok", "HOME": t.TempDir()})
+	results := RunForCloud(context.Background(), d, cloud.KindHetzner)
+
+	names := checkNames(results)
+	assertContains(t, names, "hetzner_token")
+	assertContains(t, names, "hetzner_ssh_key")
+	assertContains(t, names, "controller_reachable")
+	assertContains(t, names, "nats_auth")
+	assertContains(t, names, "registry_exposure")
+	// AWS-specific checks should not be present.
+	assertNotContains(t, names, "aws_binary")
+	assertNotContains(t, names, "aws_region")
+	assertNotContains(t, names, "linode_token")
+	assertNotContains(t, names, "vultr_api_key")
+}
+
+func TestRunForCloud_Linode(t *testing.T) {
+	d := baseDeps()
+	results := RunForCloud(context.Background(), d, cloud.KindLinode)
+
+	names := checkNames(results)
+	assertContains(t, names, "linode_token")
+	assertContains(t, names, "controller_reachable")
+	assertNotContains(t, names, "aws_binary")
+	assertNotContains(t, names, "hetzner_token")
+	assertNotContains(t, names, "vultr_api_key")
+}
+
+func TestRunForCloud_Vultr(t *testing.T) {
+	d := baseDeps()
+	results := RunForCloud(context.Background(), d, cloud.KindVultr)
+
+	names := checkNames(results)
+	assertContains(t, names, "vultr_api_key")
+	assertContains(t, names, "controller_reachable")
+	assertNotContains(t, names, "aws_binary")
+	assertNotContains(t, names, "hetzner_token")
+	assertNotContains(t, names, "linode_token")
+}
+
+func TestRunForCloud_Manual(t *testing.T) {
+	d := baseDeps()
+	results := RunForCloud(context.Background(), d, cloud.KindManual)
+
+	names := checkNames(results)
+	assertContains(t, names, "controller_reachable")
+	assertContains(t, names, "nats_auth")
+	assertNotContains(t, names, "aws_binary")
+	assertNotContains(t, names, "hetzner_token")
+}
+
+// --- Security checks ---
+
+func TestCheckNATSAuth_Configured(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"NATS_USER": "heph", "NATS_PASSWORD": "secret"})
+	r := checkNATSAuth(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckNATSAuth_Missing(t *testing.T) {
+	d := baseDeps()
+	r := checkNATSAuth(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckRegistryExposure_HTTPS(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"REGISTRY_URL": "https://registry.example.com:5000"})
+	r := checkRegistryExposure(d)
+	if r.Status != StatusPass {
+		t.Fatalf("expected pass, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckRegistryExposure_HTTP(t *testing.T) {
+	d := baseDeps()
+	d.Getenv = envWith(map[string]string{"REGISTRY_URL": "http://1.2.3.4:5000"})
+	r := checkRegistryExposure(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckRegistryExposure_Unset(t *testing.T) {
+	d := baseDeps()
+	r := checkRegistryExposure(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckControllerReachable_Unset(t *testing.T) {
+	d := baseDeps()
+	r := checkControllerReachable(d)
+	if r.Status != StatusWarn {
+		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+// --- test helpers ---
+
+func checkNames(results []CheckResult) []string {
+	names := make([]string, len(results))
+	for i, r := range results {
+		names[i] = r.Name
+	}
+	return names
+}
+
+func assertContains(t *testing.T, names []string, want string) {
+	t.Helper()
+	for _, n := range names {
+		if n == want {
+			return
+		}
+	}
+	t.Errorf("expected %q in check names %v", want, names)
+}
+
+func assertNotContains(t *testing.T, names []string, want string) {
+	t.Helper()
+	for _, n := range names {
+		if n == want {
+			t.Errorf("did not expect %q in check names", want)
+			return
+		}
 	}
 }

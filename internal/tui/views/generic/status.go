@@ -265,6 +265,9 @@ func (m *StatusModel) trackCreate() {
 		Cloud:         string(m.infra.Cloud),
 		Bucket:        m.infra.S3BucketName,
 		RuntimeTarget: m.infra.RuntimeTarget,
+		NATSUrl:       m.infra.NATSUrl,
+		ControllerIP:  m.infra.ControllerIP,
+		GenerationID:  m.infra.GenerationID,
 	}
 	if m.isWordlist {
 		rec.Phase = operator.PhaseUploading
@@ -542,6 +545,10 @@ func (m *StatusModel) View() string {
 			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
 		}
 		fmt.Fprintf(&b, "  %s%d active\n", labelStyle.Render("Workers:"), m.workersUp)
+		if m.infra.Cloud.IsProviderNative() && m.infra.ControllerIP != "" {
+			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Controller:"), m.infra.ControllerIP)
+			fmt.Fprintf(&b, "  %s%d unique IPs\n", labelStyle.Render("Fleet:"), m.workersUp)
+		}
 		fmt.Fprintf(&b, "  %s%s %d / %d %s  (%.1f%%)\n", labelStyle.Render("Progress:"), bar, m.completed, m.totalTargets, unitLabel, pct)
 		if rate > 0 {
 			fmt.Fprintf(&b, "  %s~%.0f %s/min\n", labelStyle.Render("Rate:"), rate, unitLabel)

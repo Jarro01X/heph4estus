@@ -23,9 +23,16 @@ resource "random_id" "minio_access_key" {
   byte_length = 10
 }
 
+resource "random_password" "nats_password" {
+  length  = 32
+  special = false
+}
+
 # --- Cloud-init rendering ---
 
 locals {
+  nats_user = "heph"
+
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml", {
     minio_access_key   = random_id.minio_access_key.hex
     minio_secret_key   = random_password.minio_secret_key.result
@@ -36,5 +43,7 @@ locals {
     nats_monitor_port  = var.nats_monitor_port
     nats_stream_name   = var.nats_stream_name
     registry_port      = var.registry_port
+    nats_user          = local.nats_user
+    nats_password      = random_password.nats_password.result
   })
 }

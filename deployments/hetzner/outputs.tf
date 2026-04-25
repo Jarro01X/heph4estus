@@ -17,8 +17,20 @@ output "cloud" {
 }
 
 output "nats_url" {
-  description = "NATS client URL for workers and the operator CLI."
-  value       = "nats://${hcloud_server.controller.ipv4_address}:4222"
+  description = "NATS client URL for workers and the operator CLI (includes auth credentials)."
+  value       = "nats://${module.controller.nats_user}:${module.controller.nats_password}@${hcloud_server.controller.ipv4_address}:4222"
+  sensitive   = true
+}
+
+output "nats_user" {
+  description = "NATS authentication username."
+  value       = module.controller.nats_user
+}
+
+output "nats_password" {
+  description = "NATS authentication password."
+  value       = module.controller.nats_password
+  sensitive   = true
 }
 
 output "nats_stream" {

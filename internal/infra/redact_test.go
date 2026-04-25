@@ -18,7 +18,7 @@ func TestIsSensitiveOutput(t *testing.T) {
 
 		// Should NOT be sensitive.
 		{"tool_name", false},
-		{"nats_url", false},
+		{"nats_url", true}, // contains embedded auth credentials
 		{"s3_endpoint", false},
 		{"s3_region", false},
 		{"s3_path_style", false},
@@ -63,7 +63,6 @@ func TestRedactOutputValue_SelfhostedOutputs(t *testing.T) {
 
 	// Non-sensitive selfhosted outputs should pass through.
 	safeKeys := map[string]string{
-		"nats_url":         "nats://10.0.1.5:4222",
 		"s3_endpoint":      "http://10.0.1.5:9000",
 		"registry_url":     "10.0.1.5:5000",
 		"s3_region":        "us-east-1",

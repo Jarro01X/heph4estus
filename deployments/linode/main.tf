@@ -66,34 +66,32 @@ resource "linode_firewall" "fleet" {
     ipv6     = ["::/0"]
   }
 
-  # Inbound: NATS client port (operator + workers via public IP)
+  # Inbound: NATS (4222) — restricted to private network.
+  # Workers access via VPC. Operator access requires NATS auth credentials.
   inbound {
     label    = "nats"
     action   = "ACCEPT"
     protocol = "TCP"
     ports    = "4222"
-    ipv4     = ["0.0.0.0/0"]
-    ipv6     = ["::/0"]
+    ipv4     = ["10.0.1.0/24"]
   }
 
-  # Inbound: Docker registry
+  # Inbound: Docker registry (5000) — private network only.
   inbound {
     label    = "registry"
     action   = "ACCEPT"
     protocol = "TCP"
     ports    = "5000"
-    ipv4     = ["0.0.0.0/0"]
-    ipv6     = ["::/0"]
+    ipv4     = ["10.0.1.0/24"]
   }
 
-  # Inbound: MinIO S3 API
+  # Inbound: MinIO S3 API (9000) — private network only.
   inbound {
     label    = "minio"
     action   = "ACCEPT"
     protocol = "TCP"
     ports    = "9000"
-    ipv4     = ["0.0.0.0/0"]
-    ipv6     = ["::/0"]
+    ipv4     = ["10.0.1.0/24"]
   }
 
   # Default policies
@@ -157,6 +155,8 @@ locals {
       controller_private_ip = local.controller_private_ip
       nats_port             = 4222
       nats_subject          = module.controller.nats_stream
+      nats_user             = module.controller.nats_user
+      nats_password         = module.controller.nats_password
       minio_port            = 9000
       minio_access_key      = module.controller.s3_access_key
       minio_secret_key      = module.controller.s3_secret_key

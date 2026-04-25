@@ -2,7 +2,13 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
+
+	"heph4estus/internal/logger"
+
+	"github.com/nats-io/nats.go"
 )
 
 // HeartbeatSubject is the NATS subject workers publish heartbeats on.
@@ -102,4 +108,90 @@ type Manager interface {
 
 	// Close stops the manager and releases resources.
 	Close() error
+}
+
+// snapshotCollectDuration is how long QueryFleetSnapshot listens for heartbeats
+// before returning the collected state.
+const snapshotCollectDuration = 3 * time.Second
+
+// QueryFleetSnapshot connects to NATS, collects worker heartbeats for a short
+// window, and returns a point-in-time FleetState. Unlike the long-running
+// NATSFleetManager, this is designed for one-shot status queries where the
+// caller does not need a persistent subscription.
+func QueryFleetSnapshot(ctx context.Context, cfg NATSFleetManagerConfig, log logger.Logger) (*FleetState, error) {
+	if cfg.NATSURL == "" {
+		return nil, fmt.Errorf("fleet: NATS URL is required for snapshot query")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("fleet: logger is required")
+	}
+
+	nc, err := nats.Connect(cfg.NATSURL, nats.Timeout(5*time.Second))
+	if err != nil {
+		return nil, fmt.Errorf("fleet: snapshot connect: %w", err)
+	}
+	defer nc.Close()
+
+	ht := cfg.HealthTimeout
+	if ht == 0 {
+		ht = DefaultHealthTimeout
+	}
+
+	workers := make(map[string]*WorkerInfo)
+	sub, err := nc.Subscribe(HeartbeatSubject, func(msg *nats.Msg) {
+		var hb HeartbeatMessage
+		if err := json.Unmarshal(msg.Data, &hb); err != nil || hb.WorkerID == "" {
+			return
+		}
+		if cfg.Cloud != "" && hb.Cloud != cfg.Cloud {
+			return
+		}
+		if cfg.GenerationID != "" && hb.GenerationID != cfg.GenerationID {
+			return
+		}
+		now := time.Now()
+		w, exists := workers[hb.WorkerID]
+		if !exists {
+			w = &WorkerInfo{
+				ID:           hb.WorkerID,
+				RegisteredAt: now,
+			}
+			workers[hb.WorkerID] = w
+		}
+		w.Host = hb.Host
+		w.PublicIPv4 = hb.PublicIPv4
+		w.PublicIPv6 = hb.PublicIPv6
+		w.IPv6Ready = hb.IPv6Ready
+		w.Version = hb.Version
+		w.Ready = hb.Ready
+		w.LastHeartbeat = now
+		w.Healthy = true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fleet: snapshot subscribe: %w", err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(snapshotCollectDuration):
+	}
+
+	// Mark stale workers as unhealthy.
+	now := time.Now()
+	for _, w := range workers {
+		if now.Sub(w.LastHeartbeat) > ht {
+			w.Healthy = false
+			w.Ready = false
+		}
+	}
+
+	return &FleetState{
+		DesiredWorkers: cfg.DesiredWorkers,
+		Workers:        workers,
+		ControllerIP:   cfg.ControllerIP,
+		GenerationID:   cfg.GenerationID,
+		Cloud:          cfg.Cloud,
+	}, nil
 }

@@ -215,6 +215,9 @@ func runScan(args []string, log logger.Logger) error {
 		Cloud:         string(cloudKind),
 		CleanupPolicy: cleanupPolicy,
 		Bucket:        bucket,
+		NATSUrl:       outputs["nats_url"],
+		ControllerIP:  outputs["controller_ip"],
+		GenerationID:  outputs["generation_id"],
 	})
 
 	var (

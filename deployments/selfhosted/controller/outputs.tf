@@ -57,6 +57,17 @@ output "registry_url" {
   value       = "${var.controller_ip}:${var.registry_port}"
 }
 
+output "nats_user" {
+  description = "NATS authentication username."
+  value       = local.nats_user
+}
+
+output "nats_password" {
+  description = "NATS authentication password."
+  value       = random_password.nats_password.result
+  sensitive   = true
+}
+
 output "cloud_init" {
   description = "Rendered cloud-init content for the controller VM. Pass this as user_data to the provider-specific VM resource."
   value       = local.cloud_init

@@ -458,6 +458,9 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				Reused:             reused,
 				OutputDir:          cfg.OutputDir,
 				TerraformDir:       cfg.TerraformDir,
+				ControllerIP:       outputs["controller_ip"],
+				GenerationID:       outputs["generation_id"],
+				NATSUrl:            outputs["nats_url"],
 			},
 		}
 	}

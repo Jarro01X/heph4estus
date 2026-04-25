@@ -296,3 +296,122 @@ func TestBuildSnapshotZeroTasks(t *testing.T) {
 		t.Errorf("Percent = %.1f, want 0.0 for zero-task job", snap.Progress.Percent)
 	}
 }
+
+func TestBuildSnapshotIncludesCloud(t *testing.T) {
+	rec := &operator.JobRecord{
+		JobID:      "hetzner-job",
+		ToolName:   "nmap",
+		Phase:      operator.PhaseScanning,
+		CreatedAt:  time.Now().UTC().Add(-2 * time.Minute),
+		TotalTasks: 50,
+		Cloud:      "hetzner",
+	}
+
+	snap := buildSnapshot(rec, 10)
+
+	if snap.Cloud != "hetzner" {
+		t.Errorf("Cloud = %q, want hetzner", snap.Cloud)
+	}
+}
+
+func TestOutputStatusTextWithFleet(t *testing.T) {
+	snap := statusSnapshot{
+		JobID:    "fleet-job",
+		Tool:     "nmap",
+		Phase:    operator.PhaseScanning,
+		Cloud:    "hetzner",
+		Progress: statusProgress{Completed: 10, Total: 50, Percent: 20.0},
+		Elapsed:  "1m0s",
+		Fleet: &statusFleet{
+			ControllerIP:    "1.2.3.4",
+			GenerationID:    "gen-abc",
+			DesiredWorkers:  5,
+			RegisteredCount: 5,
+			HealthyCount:    4,
+			ReadyCount:      4,
+			UniqueIPv4Count: 5,
+			IPv6ReadyCount:  3,
+		},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := outputStatusText(snap)
+	_ = w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("outputStatusText error: %v", err)
+	}
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	checks := []string{
+		"Cloud:     hetzner",
+		"Fleet:",
+		"Controller:  1.2.3.4",
+		"Generation:  gen-abc",
+		"Workers:     5/5 desired, 4 healthy, 4 ready",
+		"IPv4:        5 unique",
+		"IPv6:        3 ready",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("text output missing %q\ngot:\n%s", check, output)
+		}
+	}
+}
+
+func TestOutputStatusJSONWithFleet(t *testing.T) {
+	snap := statusSnapshot{
+		JobID:    "fleet-job",
+		Tool:     "nmap",
+		Phase:    operator.PhaseScanning,
+		Cloud:    "hetzner",
+		Progress: statusProgress{Completed: 10, Total: 50, Percent: 20.0},
+		Elapsed:  "1m0s",
+		Fleet: &statusFleet{
+			ControllerIP:    "1.2.3.4",
+			DesiredWorkers:  3,
+			RegisteredCount: 3,
+			HealthyCount:    3,
+			ReadyCount:      3,
+			UniqueIPv4Count: 3,
+			IPv6ReadyCount:  2,
+		},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := outputStatusJSON(snap)
+	_ = w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("outputStatusJSON error: %v", err)
+	}
+
+	var got statusSnapshot
+	if err := json.NewDecoder(r).Decode(&got); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+
+	if got.Fleet == nil {
+		t.Fatal("expected fleet field in JSON output")
+	}
+	if got.Fleet.ControllerIP != "1.2.3.4" {
+		t.Errorf("Fleet.ControllerIP = %q, want 1.2.3.4", got.Fleet.ControllerIP)
+	}
+	if got.Fleet.DesiredWorkers != 3 {
+		t.Errorf("Fleet.DesiredWorkers = %d, want 3", got.Fleet.DesiredWorkers)
+	}
+	if got.Fleet.UniqueIPv4Count != 3 {
+		t.Errorf("Fleet.UniqueIPv4Count = %d, want 3", got.Fleet.UniqueIPv4Count)
+	}
+}

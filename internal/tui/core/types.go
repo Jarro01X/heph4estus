@@ -159,6 +159,12 @@ type InfraOutputs struct {
 	// Selfhosted carries selfhosted-specific launch data. Nil for AWS flows.
 	// Track 1 populates this with worker host and Docker image info.
 	Selfhosted *SelfhostedRuntime
+
+	// --- Fleet metadata (populated for provider-native VPS paths) ---
+
+	ControllerIP string // Controller VM public IP
+	GenerationID string // Fleet generation marker
+	NATSUrl      string // NATS URL for fleet manager
 }
 
 // LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.

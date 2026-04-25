@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"heph4estus/internal/cloud"
@@ -392,5 +393,82 @@ func TestProbe_SelfhostedMissingToolName(t *testing.T) {
 	result := Probe(context.Background(), tc, cloud.KindSelfhosted, "/work", "nmap")
 	if result.Status != StatusStale {
 		t.Fatalf("expected StatusStale for selfhosted without tool_name, got %s", result.Status)
+	}
+}
+
+// --- Cloud mismatch tests ---
+
+func hetznerOutputs(tool string) string {
+	return fmt.Sprintf(`{
+		"tool_name":{"value":"%s"},
+		"cloud":{"value":"hetzner"},
+		"nats_url":{"value":"nats://heph:secret@10.0.1.2:4222"},
+		"nats_stream":{"value":"heph"},
+		"nats_user":{"value":"heph"},
+		"nats_password":{"value":"secret"},
+		"s3_endpoint":{"value":"http://10.0.1.2:9000"},
+		"s3_access_key":{"value":"admin"},
+		"s3_secret_key":{"value":"secret"},
+		"s3_bucket_name":{"value":"heph-results"},
+		"registry_url":{"value":"10.0.1.2:5000"},
+		"docker_image":{"value":"scanner-nmap:latest"},
+		"sqs_queue_url":{"value":"nmap"},
+		"controller_ip":{"value":"1.2.3.4"},
+		"generation_id":{"value":"gen-abc"},
+		"worker_count":{"value":"3"},
+		"worker_hosts":{"value":"10.0.1.10,10.0.1.11,10.0.1.12"}
+	}`, tool)
+}
+
+func TestProbe_CloudMismatch_HetznerToVultr(t *testing.T) {
+	// Hetzner outputs should be detected as mismatch when Vultr is requested.
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(hetznerOutputs("nmap"), "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, cloud.KindVultr, "/work", "nmap")
+	if result.Status != StatusMismatch {
+		t.Fatalf("expected StatusMismatch for cloud mismatch (hetzner deployed, vultr requested), got %s", result.Status)
+	}
+}
+
+func TestProbe_CloudMatch_HetznerToHetzner(t *testing.T) {
+	// Hetzner outputs should be ready when Hetzner is requested.
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(hetznerOutputs("nmap"), "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, cloud.KindHetzner, "/work", "nmap")
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady for matching cloud, got %s (missing: %v)", result.Status, result.MissingKeys)
+	}
+}
+
+func TestProbe_CloudMismatch_IgnoredForAWS(t *testing.T) {
+	// AWS probe should not check cloud output — it's only relevant for provider-native.
+	outputJSON := `{
+		"tool_name":{"value":"nmap"},
+		"cloud":{"value":"hetzner"},
+		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
+		"s3_bucket_name":{"value":"bucket"},
+		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"ecs_cluster_name":{"value":"cluster"},
+		"task_definition_arn":{"value":"arn:aws:ecs:td"},
+		"subnet_ids":{"value":"[subnet-a]"},
+		"security_group_id":{"value":"sg-123"},
+		"ami_id":{"value":"ami-123"},
+		"instance_profile_arn":{"value":"arn:aws:iam::role"}
+	}`
+	tc := &TerraformClient{
+		runCmd: newMockExecutor(outputJSON, "", 0, nil),
+		logger: nopLogger{},
+	}
+
+	result := Probe(context.Background(), tc, cloud.KindAWS, "/work", "nmap")
+	// AWS should not cloud-check — only required keys and tool_name matter.
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady for AWS (cloud mismatch should be ignored), got %s", result.Status)
 	}
 }

@@ -10,6 +10,7 @@ var sensitivePatterns = []string{
 	"token",
 	"credential",
 	"access_key",
+	"nats_url", // contains embedded auth credentials
 }
 
 const redactedPlaceholder = "***"
