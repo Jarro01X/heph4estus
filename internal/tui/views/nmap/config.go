@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
@@ -222,6 +223,11 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		opCfg, _ := operator.LoadConfig()
 		cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
 		outputDir := operator.ResolveOutputDir("", opCfg)
+		placement, placementErr := operator.ResolvePlacementPolicy(fleet.PlacementPolicy{}, opCfg, workerCount)
+		if placementErr != nil {
+			m.errMsg = placementErr.Error()
+			return m, nil
+		}
 
 		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
 			// Manual selfhosted: bypass deploy view, go directly to status.
@@ -241,6 +247,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 						NmapOptions:        m.inputs[fieldNmapOptions].Value(),
 						WorkerCount:        workerCount,
 						ComputeMode:        computeMode,
+						Placement:          placement,
 						JitterMaxSeconds:   jitterMax,
 						NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
 						DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),
@@ -279,6 +286,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 					NmapOptions:        m.inputs[fieldNmapOptions].Value(),
 					WorkerCount:        workerCount,
 					ComputeMode:        computeMode,
+					Placement:          placement,
 					JitterMaxSeconds:   jitterMax,
 					NmapTimingTemplate: strings.TrimSpace(m.inputs[fieldTimingTemplate].Value()),
 					DNSServers:         strings.TrimSpace(m.inputs[fieldDNSServers].Value()),

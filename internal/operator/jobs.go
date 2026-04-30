@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"heph4estus/internal/fleet"
 )
 
 // Phase represents the current lifecycle phase of a job.
@@ -23,24 +25,26 @@ const (
 // JobRecord persists the metadata needed to reattach to or query a job
 // from a later shell session.
 type JobRecord struct {
-	JobID          string `json:"job_id"`
-	ToolName       string `json:"tool_name"`
-	Phase          Phase  `json:"phase"`
-	CreatedAt      time.Time `json:"created_at"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	TotalTasks     int       `json:"total_tasks"`
-	TotalWords     int       `json:"total_words,omitempty"`
-	WorkerCount    int       `json:"worker_count,omitempty"`
-	ComputeMode    string    `json:"compute_mode,omitempty"`
-	Cloud          string    `json:"cloud,omitempty"`
-	CleanupPolicy  string    `json:"cleanup_policy,omitempty"`
-	Bucket         string    `json:"bucket,omitempty"`
-	ResultPrefix   string    `json:"result_prefix,omitempty"`
-	ArtifactPrefix string    `json:"artifact_prefix,omitempty"`
-	RuntimeTarget  string    `json:"runtime_target,omitempty"`
-	LastError      string    `json:"last_error,omitempty"`
-	LocalOutputDir string    `json:"local_output_dir,omitempty"`
+	JobID                 string                `json:"job_id"`
+	ToolName              string                `json:"tool_name"`
+	Phase                 Phase                 `json:"phase"`
+	CreatedAt             time.Time             `json:"created_at"`
+	StartedAt             time.Time             `json:"started_at,omitempty"`
+	UpdatedAt             time.Time             `json:"updated_at"`
+	TotalTasks            int                   `json:"total_tasks"`
+	TotalWords            int                   `json:"total_words,omitempty"`
+	WorkerCount           int                   `json:"worker_count,omitempty"`
+	ComputeMode           string                `json:"compute_mode,omitempty"`
+	Cloud                 string                `json:"cloud,omitempty"`
+	CleanupPolicy         string                `json:"cleanup_policy,omitempty"`
+	Bucket                string                `json:"bucket,omitempty"`
+	ResultPrefix          string                `json:"result_prefix,omitempty"`
+	ArtifactPrefix        string                `json:"artifact_prefix,omitempty"`
+	RuntimeTarget         string                `json:"runtime_target,omitempty"`
+	LastError             string                `json:"last_error,omitempty"`
+	LocalOutputDir        string                `json:"local_output_dir,omitempty"`
+	Placement             fleet.PlacementPolicy `json:"placement,omitempty"`
+	ExpectedWorkerVersion string                `json:"expected_worker_version,omitempty"`
 
 	// Fleet metadata for provider-native status reattachment.
 	NATSUrl      string `json:"nats_url,omitempty"`

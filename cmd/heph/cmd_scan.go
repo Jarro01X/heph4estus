@@ -12,6 +12,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/cloud/factory"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
@@ -30,6 +31,11 @@ func runScan(args []string, log logger.Logger) error {
 	options := fs.String("options", "", "Extra tool-specific options")
 	workers := fs.Int("workers", 0, "Number of worker tasks to launch (default: from config or 10)")
 	computeMode := fs.String("compute-mode", "", "Compute mode: auto, fargate, or spot (default: from config or auto)")
+	placementMode := fs.String("placement", "", "Fleet placement policy: diversity or throughput (default: from config or diversity)")
+	maxWorkersPerHost := fs.Int("max-workers-per-host", 0, "Maximum admitted workers per host/public IP (default: from config or policy)")
+	minUniqueIPs := fs.Int("min-unique-ips", 0, "Minimum unique public IPv4 addresses required before scan start")
+	ipv6Required := fs.Bool("ipv6-required", false, "Require IPv6-validated workers before scan start")
+	dualStackRequired := fs.Bool("dual-stack-required", false, "Require workers with both public IPv4 and IPv6-ready public IPv6")
 	format := fs.String("format", "text", "Output format: text or json")
 	outDir := fs.String("out", "", "Download results/artifacts to this directory after completion")
 
@@ -49,6 +55,16 @@ func runScan(args []string, log logger.Logger) error {
 	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
 	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
 		*outDir = opCfg.OutputDir
+	}
+	placementPolicy, err := operator.ResolvePlacementPolicy(fleet.PlacementPolicy{
+		Mode:              fleet.PlacementMode(*placementMode),
+		MaxWorkersPerHost: *maxWorkersPerHost,
+		MinUniqueIPs:      *minUniqueIPs,
+		IPv6Required:      *ipv6Required,
+		DualStackRequired: *dualStackRequired,
+	}, opCfg, *workers)
+	if err != nil {
+		return err
 	}
 
 	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
@@ -207,17 +223,19 @@ func runScan(args []string, log logger.Logger) error {
 		cleanupPolicy = "destroy-after"
 	}
 	_ = tracker.Create(&operator.JobRecord{
-		JobID:         jobID,
-		ToolName:      *tool,
-		Phase:         operator.PhaseEnqueuing,
-		WorkerCount:   *workers,
-		ComputeMode:   *computeMode,
-		Cloud:         string(cloudKind),
-		CleanupPolicy: cleanupPolicy,
-		Bucket:        bucket,
-		NATSUrl:       outputs["nats_url"],
-		ControllerIP:  outputs["controller_ip"],
-		GenerationID:  outputs["generation_id"],
+		JobID:                 jobID,
+		ToolName:              *tool,
+		Phase:                 operator.PhaseEnqueuing,
+		WorkerCount:           *workers,
+		ComputeMode:           *computeMode,
+		Cloud:                 string(cloudKind),
+		CleanupPolicy:         cleanupPolicy,
+		Bucket:                bucket,
+		Placement:             placementPolicy,
+		ExpectedWorkerVersion: outputs["docker_image"],
+		NATSUrl:               outputs["nats_url"],
+		ControllerIP:          outputs["controller_ip"],
+		GenerationID:          outputs["generation_id"],
 	})
 
 	var (
@@ -225,9 +243,9 @@ func runScan(args []string, log logger.Logger) error {
 		started bool
 	)
 	if mod.InputType == modules.InputTypeWordlist {
-		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	} else {
-		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind)
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	}
 
 	if scanErr != nil {
@@ -279,7 +297,7 @@ func runScan(args []string, log logger.Logger) error {
 	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind) (bool, error) {
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
 	targets := parseTargetLines(content)
 	if len(targets) == 0 {
 		return false, fmt.Errorf("no targets found in %s", inputFile)
@@ -326,7 +344,7 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind); err != nil {
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind, placementPolicy); err != nil {
 		return false, err
 	}
 
@@ -336,7 +354,7 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
 }
 
-func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind) (bool, error) {
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
 	if chunks <= 0 {
 		chunks = workers
 	}
@@ -392,7 +410,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
 	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind); err != nil {
+	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind, placementPolicy); err != nil {
 		return false, err
 	}
 
@@ -427,17 +445,17 @@ func preflightWordlistFile(tool, path, runtimeTarget, options string, chunks, wo
 	return string(content), nil
 }
 
-func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string, cloudKind cloud.Kind) error {
+func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) error {
 	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
 	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
 	defer launchCancel()
 
 	if cloudKind.IsProviderNative() {
-		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind, outputs)
+		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind, outputs, placementPolicy)
 		if err != nil {
 			return err
 		}
-		logStatus("Using provider-native %s fleet (%d ready workers)", cloudKind.Canonical(), ready)
+		logStatus("Using provider-native %s fleet (%d eligible workers, policy: %s)", cloudKind.Canonical(), ready, placementPolicy.Summary())
 		return nil
 	}
 

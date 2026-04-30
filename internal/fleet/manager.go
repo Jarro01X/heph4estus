@@ -17,25 +17,32 @@ const waitPollInterval = 5 * time.Second
 
 // NATSFleetManagerConfig configures a NATSFleetManager.
 type NATSFleetManagerConfig struct {
-	NATSURL        string
-	DesiredWorkers int
-	ControllerIP   string
-	GenerationID   string
-	Cloud          string
-	HealthTimeout  time.Duration // 0 means DefaultHealthTimeout
+	NATSURL         string
+	DesiredWorkers  int
+	ControllerIP    string
+	GenerationID    string
+	Cloud           string
+	HealthTimeout   time.Duration // 0 means DefaultHealthTimeout
+	Placement       PlacementPolicy
+	ExpectedVersion string
+	CooldownWindow  time.Duration // 0 means default
 }
 
 // NATSFleetManager implements Manager by subscribing to NATS heartbeats.
 type NATSFleetManager struct {
-	natsURL        string
-	desiredWorkers int
-	controllerIP   string
-	generationID   string
-	cloud          string
-	healthTimeout  time.Duration
+	natsURL         string
+	desiredWorkers  int
+	controllerIP    string
+	generationID    string
+	cloud           string
+	healthTimeout   time.Duration
+	placement       PlacementPolicy
+	expectedVersion string
+	cooldownWindow  time.Duration
 
-	mu      sync.RWMutex
-	workers map[string]*WorkerInfo
+	mu        sync.RWMutex
+	workers   map[string]*WorkerInfo
+	cooldowns map[string]time.Time
 
 	conn   *nats.Conn
 	sub    *nats.Subscription
@@ -46,6 +53,8 @@ type NATSFleetManager struct {
 // Compile-time interface check.
 var _ Manager = (*NATSFleetManager)(nil)
 
+const defaultCooldownWindow = 10 * time.Minute
+
 // NewNATSFleetManager connects to NATS and subscribes to worker heartbeats.
 func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFleetManager, error) {
 	if log == nil {
@@ -54,10 +63,17 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 	if cfg.NATSURL == "" {
 		return nil, fmt.Errorf("fleet: NATS URL is required")
 	}
+	if err := cfg.Placement.Normalize(cfg.DesiredWorkers).Validate(); err != nil {
+		return nil, fmt.Errorf("fleet: invalid placement policy: %w", err)
+	}
 
 	ht := cfg.HealthTimeout
 	if ht == 0 {
 		ht = DefaultHealthTimeout
+	}
+	cooldown := cfg.CooldownWindow
+	if cooldown == 0 {
+		cooldown = defaultCooldownWindow
 	}
 
 	nc, err := nats.Connect(cfg.NATSURL)
@@ -66,16 +82,20 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 	}
 
 	m := &NATSFleetManager{
-		natsURL:        cfg.NATSURL,
-		desiredWorkers: cfg.DesiredWorkers,
-		controllerIP:   cfg.ControllerIP,
-		generationID:   cfg.GenerationID,
-		cloud:          cfg.Cloud,
-		healthTimeout:  ht,
-		workers:        make(map[string]*WorkerInfo),
-		conn:           nc,
-		log:            log,
-		closed:         make(chan struct{}),
+		natsURL:         cfg.NATSURL,
+		desiredWorkers:  cfg.DesiredWorkers,
+		controllerIP:    cfg.ControllerIP,
+		generationID:    cfg.GenerationID,
+		cloud:           cfg.Cloud,
+		healthTimeout:   ht,
+		placement:       cfg.Placement.Normalize(cfg.DesiredWorkers),
+		expectedVersion: cfg.ExpectedVersion,
+		cooldownWindow:  cooldown,
+		workers:         make(map[string]*WorkerInfo),
+		cooldowns:       make(map[string]time.Time),
+		conn:            nc,
+		log:             log,
+		closed:          make(chan struct{}),
 	}
 
 	sub, err := nc.Subscribe(HeartbeatSubject, m.handleHeartbeat)
@@ -95,23 +115,34 @@ func NewNATSFleetManagerFromConn(nc *nats.Conn, cfg NATSFleetManagerConfig, log 
 	if log == nil {
 		return nil, fmt.Errorf("fleet: logger is required")
 	}
+	if err := cfg.Placement.Normalize(cfg.DesiredWorkers).Validate(); err != nil {
+		return nil, fmt.Errorf("fleet: invalid placement policy: %w", err)
+	}
 
 	ht := cfg.HealthTimeout
 	if ht == 0 {
 		ht = DefaultHealthTimeout
 	}
+	cooldown := cfg.CooldownWindow
+	if cooldown == 0 {
+		cooldown = defaultCooldownWindow
+	}
 
 	m := &NATSFleetManager{
-		natsURL:        cfg.NATSURL,
-		desiredWorkers: cfg.DesiredWorkers,
-		controllerIP:   cfg.ControllerIP,
-		generationID:   cfg.GenerationID,
-		cloud:          cfg.Cloud,
-		healthTimeout:  ht,
-		workers:        make(map[string]*WorkerInfo),
-		conn:           nc,
-		log:            log,
-		closed:         make(chan struct{}),
+		natsURL:         cfg.NATSURL,
+		desiredWorkers:  cfg.DesiredWorkers,
+		controllerIP:    cfg.ControllerIP,
+		generationID:    cfg.GenerationID,
+		cloud:           cfg.Cloud,
+		healthTimeout:   ht,
+		placement:       cfg.Placement.Normalize(cfg.DesiredWorkers),
+		expectedVersion: cfg.ExpectedVersion,
+		cooldownWindow:  cooldown,
+		workers:         make(map[string]*WorkerInfo),
+		cooldowns:       make(map[string]time.Time),
+		conn:            nc,
+		log:             log,
+		closed:          make(chan struct{}),
 	}
 
 	sub, err := nc.Subscribe(HeartbeatSubject, m.handleHeartbeat)
@@ -167,6 +198,9 @@ func (m *NATSFleetManager) handleHeartbeat(msg *nats.Msg) {
 	w.Ready = hb.Ready
 	w.LastHeartbeat = now
 	w.Healthy = true
+
+	delete(m.cooldowns, workerCooldownKey(w))
+	delete(m.cooldowns, "worker:"+w.ID)
 }
 
 // Reconcile snapshots the current fleet state, marking workers whose last
@@ -189,18 +223,28 @@ func (m *NATSFleetManager) Reconcile(ctx context.Context) (*FleetState, error) {
 		if now.Sub(w.LastHeartbeat) > m.healthTimeout {
 			w.Healthy = false
 			w.Ready = false
+			m.cooldowns[workerCooldownKey(w)] = now.Add(m.cooldownWindow)
+			w.QuarantinedUntil = m.cooldowns[workerCooldownKey(w)]
+		} else if until, ok := m.cooldowns[workerCooldownKey(w)]; ok && now.Before(until) {
+			w.QuarantinedUntil = until
+		} else {
+			w.QuarantinedUntil = time.Time{}
 		}
 		cp := *w
 		snapshot[id] = &cp
 	}
 
-	return &FleetState{
-		DesiredWorkers: m.desiredWorkers,
-		Workers:        snapshot,
-		ControllerIP:   m.controllerIP,
-		GenerationID:   m.generationID,
-		Cloud:          m.cloud,
-	}, nil
+	state := &FleetState{
+		DesiredWorkers:  m.desiredWorkers,
+		Workers:         snapshot,
+		ControllerIP:    m.controllerIP,
+		GenerationID:    m.generationID,
+		Cloud:           m.cloud,
+		Placement:       m.placement,
+		ExpectedVersion: m.expectedVersion,
+	}
+	applyAdmissionPolicy(state)
+	return state, nil
 }
 
 // WaitForWorkers polls Reconcile until at least minReady workers report
@@ -212,19 +256,24 @@ func (m *NATSFleetManager) WaitForWorkers(ctx context.Context, minReady int) (*F
 			return nil, err
 		}
 
-		readyCount := 0
-		for _, w := range state.Workers {
-			if w.Ready && w.Healthy {
-				readyCount++
-			}
-		}
+		summary := state.Summarize()
+		readyCount := summary.EligibleCount
+		meetsUniqueIPs := state.Placement.MinUniqueIPs == 0 || summary.UniqueEligibleIPv4Count >= state.Placement.MinUniqueIPs
 
-		if readyCount >= minReady {
-			m.log.Info("Fleet: %d/%d workers ready (desired %d)", readyCount, len(state.Workers), m.desiredWorkers)
+		if readyCount >= minReady && meetsUniqueIPs {
+			m.log.Info("Fleet: %d/%d workers eligible (desired %d)", readyCount, len(state.Workers), m.desiredWorkers)
 			return state, nil
 		}
 
-		m.log.Info("Fleet: waiting for workers — %d/%d ready, need %d", readyCount, len(state.Workers), minReady)
+		msg := fmt.Sprintf("Fleet: waiting for workers — eligible=%d registered=%d unique-ipv4=%d need=%d",
+			readyCount, summary.RegisteredCount, summary.UniqueEligibleIPv4Count, minReady)
+		if !meetsUniqueIPs {
+			msg += fmt.Sprintf(" min-unique-ipv4=%d", state.Placement.MinUniqueIPs)
+		}
+		if reasons := summarizeReasonCounts(summary.ExcludedByReason); reasons != "" {
+			msg += " excluded={" + reasons + "}"
+		}
+		m.log.Info(msg)
 
 		select {
 		case <-ctx.Done():
@@ -255,4 +304,17 @@ func (m *NATSFleetManager) Close() error {
 	}
 	m.log.Info("Fleet manager closed")
 	return nil
+}
+
+func workerCooldownKey(w *WorkerInfo) string {
+	if w == nil {
+		return ""
+	}
+	if w.PublicIPv4 != "" {
+		return "ip:" + w.PublicIPv4
+	}
+	if w.ID != "" {
+		return "worker:" + w.ID
+	}
+	return ""
 }

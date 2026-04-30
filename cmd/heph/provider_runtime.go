@@ -24,7 +24,7 @@ func buildRuntimeProvider(ctx context.Context, kind cloud.Kind, outputs map[stri
 	return factory.BuildForKind(ctx, kind, log)
 }
 
-func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs map[string]string) (int, error) {
+func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs map[string]string, policy fleet.PlacementPolicy) (int, error) {
 	natsURL := outputs["nats_url"]
 	if natsURL == "" {
 		return 0, fmt.Errorf("terraform outputs missing nats_url")
@@ -36,11 +36,13 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 	}
 
 	mgr, err := fleet.NewNATSFleetManager(fleet.NATSFleetManagerConfig{
-		NATSURL:        natsURL,
-		DesiredWorkers: desired,
-		ControllerIP:   outputs["controller_ip"],
-		GenerationID:   outputs["generation_id"],
-		Cloud:          string(kind.Canonical()),
+		NATSURL:         natsURL,
+		DesiredWorkers:  desired,
+		ControllerIP:    outputs["controller_ip"],
+		GenerationID:    outputs["generation_id"],
+		Cloud:           string(kind.Canonical()),
+		Placement:       policy,
+		ExpectedVersion: outputs["docker_image"],
 	}, logger.NewSimpleLogger())
 	if err != nil {
 		return 0, fmt.Errorf("starting provider-native fleet manager: %w", err)
@@ -53,10 +55,10 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 	}
 	summary := state.Summarize()
 	logStatus(
-		"Provider-native fleet ready: %d/%d workers ready, %d IPv6-ready, %d unique IPv4",
-		summary.ReadyCount, summary.DesiredWorkers, summary.IPv6ReadyCount, summary.UniqueIPv4Count,
+		"Provider-native fleet ready: %d/%d eligible, %d IPv6-ready, %d/%d unique IPv4 [%s]",
+		summary.EligibleCount, summary.DesiredWorkers, summary.IPv6ReadyCount, summary.UniqueEligibleIPv4Count, summary.UniqueIPv4Count, policy.Summary(),
 	)
-	return summary.ReadyCount, nil
+	return summary.EligibleCount, nil
 }
 
 func fleetWorkerCount(outputs map[string]string) int {

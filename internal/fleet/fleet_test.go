@@ -457,6 +457,123 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 	}
 }
 
+func TestNATSFleetManager_WaitForWorkers_DiversityPolicy(t *testing.T) {
+	srv := startEmbeddedNATS(t)
+
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("nats connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
+		DesiredWorkers: 2,
+		Cloud:          "hetzner",
+		Placement: PlacementPolicy{
+			Mode:              PlacementModeDiversity,
+			MaxWorkersPerHost: 1,
+		},
+		HealthTimeout: 10 * time.Second,
+	}, logger.NewSimpleLogger())
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	pub, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("pub connect: %v", err)
+	}
+	defer pub.Close()
+
+	heartbeats := []HeartbeatMessage{
+		{WorkerID: "w-0", PublicIPv4: "203.0.113.10", Ready: true, Cloud: "hetzner", Timestamp: time.Now().Unix()},
+		{WorkerID: "w-1", PublicIPv4: "203.0.113.10", Ready: true, Cloud: "hetzner", Timestamp: time.Now().Unix()},
+	}
+	for _, hb := range heartbeats {
+		data, _ := json.Marshal(hb)
+		_ = pub.Publish(HeartbeatSubject, data)
+	}
+	_ = pub.Flush()
+
+	state := awaitWorkers(t, mgr, 2)
+	summary := state.Summarize()
+	if summary.EligibleCount != 1 {
+		t.Fatalf("EligibleCount = %d, want 1", summary.EligibleCount)
+	}
+	if summary.ExcludedByReason[string(ExclusionReasonPlacementLimit)] != 1 {
+		t.Fatalf("placement exclusions = %d, want 1", summary.ExcludedByReason[string(ExclusionReasonPlacementLimit)])
+	}
+}
+
+func TestNATSFleetManager_WaitForWorkers_ExpectedVersion(t *testing.T) {
+	srv := startEmbeddedNATS(t)
+
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("nats connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
+		DesiredWorkers:  2,
+		Cloud:           "hetzner",
+		ExpectedVersion: "heph-httpx-worker:latest",
+		HealthTimeout:   10 * time.Second,
+	}, logger.NewSimpleLogger())
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	pub, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("pub connect: %v", err)
+	}
+	defer pub.Close()
+
+	heartbeats := []HeartbeatMessage{
+		{WorkerID: "w-0", PublicIPv4: "203.0.113.10", Ready: true, Version: "heph-httpx-worker:latest", Cloud: "hetzner", Timestamp: time.Now().Unix()},
+		{WorkerID: "w-1", PublicIPv4: "203.0.113.11", Ready: true, Version: "heph-httpx-worker:previous", Cloud: "hetzner", Timestamp: time.Now().Unix()},
+	}
+	for _, hb := range heartbeats {
+		data, _ := json.Marshal(hb)
+		_ = pub.Publish(HeartbeatSubject, data)
+	}
+	_ = pub.Flush()
+
+	state := awaitWorkers(t, mgr, 2)
+	summary := state.Summarize()
+	if summary.EligibleCount != 1 {
+		t.Fatalf("EligibleCount = %d, want 1", summary.EligibleCount)
+	}
+	if summary.ExcludedByReason[string(ExclusionReasonVersionMismatch)] != 1 {
+		t.Fatalf("version mismatch exclusions = %d, want 1", summary.ExcludedByReason[string(ExclusionReasonVersionMismatch)])
+	}
+}
+
+func TestFleetState_Summarize_IPv6Policy(t *testing.T) {
+	state := &FleetState{
+		DesiredWorkers: 2,
+		Placement: PlacementPolicy{
+			Mode:         PlacementModeDiversity,
+			IPv6Required: true,
+		},
+		Workers: map[string]*WorkerInfo{
+			"w-0": {ID: "w-0", PublicIPv4: "1.1.1.1", PublicIPv6: "2001:db8::1", IPv6Ready: true, Ready: true, Healthy: true},
+			"w-1": {ID: "w-1", PublicIPv4: "2.2.2.2", Ready: true, Healthy: true},
+		},
+	}
+	applyAdmissionPolicy(state)
+	summary := state.Summarize()
+	if summary.EligibleCount != 1 {
+		t.Fatalf("EligibleCount = %d, want 1", summary.EligibleCount)
+	}
+	if summary.ExcludedByReason[string(ExclusionReasonIPv6NotReady)] != 1 {
+		t.Fatalf("ipv6 exclusions = %d, want 1", summary.ExcludedByReason[string(ExclusionReasonIPv6NotReady)])
+	}
+}
+
 func TestNATSFleetManager_WaitForWorkers_ContextCancel(t *testing.T) {
 	srv := startEmbeddedNATS(t)
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"heph4estus/internal/cloud"
@@ -41,14 +43,21 @@ type statusProgress struct {
 
 // statusFleet holds fleet-level observability data for provider-native runs.
 type statusFleet struct {
-	ControllerIP    string `json:"controller_ip,omitempty"`
-	GenerationID    string `json:"generation_id,omitempty"`
-	DesiredWorkers  int    `json:"desired_workers"`
-	RegisteredCount int    `json:"registered"`
-	HealthyCount    int    `json:"healthy"`
-	ReadyCount      int    `json:"ready"`
-	UniqueIPv4Count int    `json:"unique_ipv4"`
-	IPv6ReadyCount  int    `json:"ipv6_ready"`
+	ControllerIP            string         `json:"controller_ip,omitempty"`
+	GenerationID            string         `json:"generation_id,omitempty"`
+	ExpectedWorkerVersion   string         `json:"expected_worker_version,omitempty"`
+	Placement               string         `json:"placement,omitempty"`
+	DesiredWorkers          int            `json:"desired_workers"`
+	RegisteredCount         int            `json:"registered"`
+	HealthyCount            int            `json:"healthy"`
+	ReadyCount              int            `json:"ready"`
+	EligibleCount           int            `json:"eligible"`
+	ExcludedCount           int            `json:"excluded"`
+	QuarantinedCount        int            `json:"quarantined"`
+	UniqueIPv4Count         int            `json:"unique_ipv4"`
+	UniqueEligibleIPv4Count int            `json:"unique_eligible_ipv4"`
+	IPv6ReadyCount          int            `json:"ipv6_ready"`
+	ExcludedByReason        map[string]int `json:"excluded_by_reason,omitempty"`
 }
 
 func runStatus(args []string, log logger.Logger) error {
@@ -111,25 +120,34 @@ func runStatus(args []string, log logger.Logger) error {
 		natsURL := rec.NATSUrl
 		if natsURL != "" {
 			fleetSnap, err := fleet.QueryFleetSnapshot(ctx, fleet.NATSFleetManagerConfig{
-				NATSURL:        natsURL,
-				DesiredWorkers: rec.WorkerCount,
-				ControllerIP:   rec.ControllerIP,
-				GenerationID:   rec.GenerationID,
-				Cloud:          rec.Cloud,
+				NATSURL:         natsURL,
+				DesiredWorkers:  rec.WorkerCount,
+				ControllerIP:    rec.ControllerIP,
+				GenerationID:    rec.GenerationID,
+				Cloud:           rec.Cloud,
+				Placement:       rec.Placement,
+				ExpectedVersion: rec.ExpectedWorkerVersion,
 			}, log)
 			if err != nil {
 				log.Error("Warning: could not query fleet state: %v", err)
 			} else {
 				summary := fleetSnap.Summarize()
 				snap.Fleet = &statusFleet{
-					ControllerIP:    fleetSnap.ControllerIP,
-					GenerationID:    fleetSnap.GenerationID,
-					DesiredWorkers:  summary.DesiredWorkers,
-					RegisteredCount: summary.RegisteredCount,
-					HealthyCount:    summary.HealthyCount,
-					ReadyCount:      summary.ReadyCount,
-					UniqueIPv4Count: summary.UniqueIPv4Count,
-					IPv6ReadyCount:  summary.IPv6ReadyCount,
+					ControllerIP:            fleetSnap.ControllerIP,
+					GenerationID:            fleetSnap.GenerationID,
+					ExpectedWorkerVersion:   rec.ExpectedWorkerVersion,
+					Placement:               rec.Placement.Summary(),
+					DesiredWorkers:          summary.DesiredWorkers,
+					RegisteredCount:         summary.RegisteredCount,
+					HealthyCount:            summary.HealthyCount,
+					ReadyCount:              summary.ReadyCount,
+					EligibleCount:           summary.EligibleCount,
+					ExcludedCount:           summary.ExcludedCount,
+					QuarantinedCount:        summary.QuarantinedCount,
+					UniqueIPv4Count:         summary.UniqueIPv4Count,
+					UniqueEligibleIPv4Count: summary.UniqueEligibleIPv4Count,
+					IPv6ReadyCount:          summary.IPv6ReadyCount,
+					ExcludedByReason:        summary.ExcludedByReason,
 				}
 			}
 		}
@@ -215,10 +233,25 @@ func outputStatusText(snap statusSnapshot) error {
 		if snap.Fleet.GenerationID != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "  Generation:  %s\n", snap.Fleet.GenerationID)
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "  Workers:     %d/%d desired, %d healthy, %d ready\n",
+		if snap.Fleet.ExpectedWorkerVersion != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Version:     %s\n", snap.Fleet.ExpectedWorkerVersion)
+		}
+		if snap.Fleet.Placement != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Placement:   %s\n", snap.Fleet.Placement)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Workers:     %d/%d desired, %d healthy, %d ready, %d eligible\n",
 			snap.Fleet.RegisteredCount, snap.Fleet.DesiredWorkers,
-			snap.Fleet.HealthyCount, snap.Fleet.ReadyCount)
+			snap.Fleet.HealthyCount, snap.Fleet.ReadyCount, snap.Fleet.EligibleCount)
+		if snap.Fleet.ExcludedCount > 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "  Excluded:    %d total, %d quarantined\n", snap.Fleet.ExcludedCount, snap.Fleet.QuarantinedCount)
+			if reasons := summarizeStatusReasons(snap.Fleet.ExcludedByReason); reasons != "" {
+				_, _ = fmt.Fprintf(os.Stdout, "  Reasons:     %s\n", reasons)
+			}
+		}
 		_, _ = fmt.Fprintf(os.Stdout, "  IPv4:        %d unique\n", snap.Fleet.UniqueIPv4Count)
+		if snap.Fleet.UniqueEligibleIPv4Count > 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "  IPv4 Ready:  %d unique eligible\n", snap.Fleet.UniqueEligibleIPv4Count)
+		}
 		_, _ = fmt.Fprintf(os.Stdout, "  IPv6:        %d ready\n", snap.Fleet.IPv6ReadyCount)
 		_, _ = fmt.Fprintln(os.Stdout)
 	}
@@ -259,4 +292,25 @@ func s3PrefixURI(bucket, prefix string) string {
 		return prefix
 	}
 	return fmt.Sprintf("s3://%s/%s", bucket, prefix)
+}
+
+func summarizeStatusReasons(counts map[string]int) string {
+	return fleetSummaryReasons(counts)
+}
+
+func fleetSummaryReasons(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	reasons := make([]string, 0, len(counts))
+	for reason := range counts {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		count := counts[reason]
+		parts = append(parts, fmt.Sprintf("%s=%d", reason, count))
+	}
+	return strings.Join(parts, ", ")
 }

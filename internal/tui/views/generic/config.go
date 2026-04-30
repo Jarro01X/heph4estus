@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
@@ -298,6 +299,11 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 	opCfg, _ := operator.LoadConfig()
 	cleanupPolicy := operator.ResolveCleanupPolicy("", opCfg)
 	outputDir := operator.ResolveOutputDir("", opCfg)
+	placement, placementErr := operator.ResolvePlacementPolicy(fleet.PlacementPolicy{}, opCfg, workerCount)
+	if placementErr != nil {
+		m.errMsg = placementErr.Error()
+		return nil
+	}
 	toolOptions := strings.TrimSpace(m.inputs[cfgFieldOptions].Value())
 
 	if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
@@ -317,6 +323,7 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 					TargetsContent: msg.content,
 					WorkerCount:    workerCount,
 					ComputeMode:    computeMode,
+					Placement:      placement,
 					ToolName:       m.toolName,
 					ToolOptions:    toolOptions,
 					CleanupPolicy:  cleanupPolicy,
@@ -352,6 +359,7 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 				TargetsContent: msg.content,
 				WorkerCount:    workerCount,
 				ComputeMode:    computeMode,
+				Placement:      placement,
 				ToolName:       m.toolName,
 				ToolOptions:    toolOptions,
 				PostDeployView: core.ViewGenericStatus,
@@ -401,6 +409,11 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 	wlCfg, _ := operator.LoadConfig()
 	wlCleanup := operator.ResolveCleanupPolicy("", wlCfg)
 	wlOutDir := operator.ResolveOutputDir("", wlCfg)
+	placement, placementErr := operator.ResolvePlacementPolicy(fleet.PlacementPolicy{}, wlCfg, workerCount)
+	if placementErr != nil {
+		m.errMsg = placementErr.Error()
+		return nil
+	}
 	toolOptions := strings.TrimSpace(m.wlInputs[wlFieldOptions].Value())
 
 	if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
@@ -419,6 +432,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 					S3BucketName:    shCfg.Bucket,
 					WorkerCount:     workerCount,
 					ComputeMode:     computeMode,
+					Placement:       placement,
 					ToolName:        m.toolName,
 					ToolOptions:     toolOptions,
 					WordlistContent: msg.content,
@@ -456,6 +470,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 				TerraformVars:   tc.TerraformVars,
 				WorkerCount:     workerCount,
 				ComputeMode:     computeMode,
+				Placement:       placement,
 				ToolName:        m.toolName,
 				ToolOptions:     toolOptions,
 				PostDeployView:  core.ViewGenericStatus,

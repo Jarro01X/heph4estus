@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/operator"
 	nmaptool "heph4estus/internal/tools/nmap"
 )
@@ -138,6 +139,7 @@ func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
 		"queue-url",
 		operator.NoopTracker(),
 		cloud.KindAWS,
+		fleet.PlacementPolicy{},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -166,6 +168,7 @@ func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
 		"queue-url",
 		operator.NoopTracker(),
 		cloud.KindAWS,
+		fleet.PlacementPolicy{},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -195,6 +198,7 @@ func TestRunNmapScanWithDepsStartedFalseOnLaunchFailure(t *testing.T) {
 		&mockCompute{runContainerErr: errors.New("launch failed")},
 		operator.NoopTracker(),
 		"job-1",
+		fleet.PlacementPolicy{},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -224,6 +228,7 @@ func TestRunNmapScanWithDepsStartedTrueOnOutputFailure(t *testing.T) {
 		&mockCompute{},
 		operator.NoopTracker(),
 		"job-1",
+		fleet.PlacementPolicy{},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -241,7 +246,7 @@ func TestRunNmapScanWithDeps_ProviderNativeSkipsRunContainer(t *testing.T) {
 	}}
 
 	oldWait := waitForProviderNativeFleetFunc
-	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string) (int, error) {
+	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string, fleet.PlacementPolicy) (int, error) {
 		return 1, nil
 	}
 	t.Cleanup(func() { waitForProviderNativeFleetFunc = oldWait })
@@ -263,6 +268,7 @@ func TestRunNmapScanWithDeps_ProviderNativeSkipsRunContainer(t *testing.T) {
 		comp,
 		operator.NoopTracker(),
 		"job-sh",
+		fleet.PlacementPolicy{},
 		cloud.KindHetzner,
 	)
 	if err != nil {
@@ -304,6 +310,7 @@ func TestRunNmapScanWithDeps_SelfhostedNeverCallsSpot(t *testing.T) {
 		comp,
 		operator.NoopTracker(),
 		"job-sh",
+		fleet.PlacementPolicy{},
 		cloud.KindManual,
 	)
 	if err != nil {
@@ -319,7 +326,7 @@ func TestRunNmapScanWithDeps_SelfhostedNeverCallsSpot(t *testing.T) {
 
 func TestRunTargetListScan_ProviderNativeSkipsRunContainer(t *testing.T) {
 	oldWait := waitForProviderNativeFleetFunc
-	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string) (int, error) {
+	waitForProviderNativeFleetFunc = func(context.Context, cloud.Kind, map[string]string, fleet.PlacementPolicy) (int, error) {
 		return 3, nil
 	}
 	t.Cleanup(func() { waitForProviderNativeFleetFunc = oldWait })
@@ -348,6 +355,7 @@ func TestRunTargetListScan_ProviderNativeSkipsRunContainer(t *testing.T) {
 		"heph-tasks",
 		operator.NoopTracker(),
 		cloud.KindHetzner,
+		fleet.PlacementPolicy{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
