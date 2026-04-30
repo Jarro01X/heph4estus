@@ -13,6 +13,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/cloud/factory"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
@@ -34,6 +35,11 @@ func runNmap(args []string, log logger.Logger) error {
 	defaultOptions := fs.String("default-options", "-sS", "Default nmap options")
 	workers := fs.Int("workers", 0, "Number of worker tasks to launch (default: from config or 10)")
 	computeMode := fs.String("compute-mode", "", "Compute mode: auto, fargate, or spot (default: from config or auto)")
+	placementMode := fs.String("placement", "", "Fleet placement policy: diversity or throughput (default: from config or diversity)")
+	maxWorkersPerHost := fs.Int("max-workers-per-host", 0, "Maximum admitted workers per host/public IP (default: from config or policy)")
+	minUniqueIPs := fs.Int("min-unique-ips", 0, "Minimum unique public IPv4 addresses required before scan start")
+	ipv6Required := fs.Bool("ipv6-required", false, "Require IPv6-validated workers before scan start")
+	dualStackRequired := fs.Bool("dual-stack-required", false, "Require workers with both public IPv4 and IPv6-ready public IPv6")
 	mode := fs.String("mode", "target-only", "Distribution mode: target-only or target-ports")
 	portChunks := fs.Int("port-chunks", 5, "Number of port chunks per target (target-ports mode only)")
 	dnsServers := fs.String("dns-servers", "", "DNS servers for nmap (comma-separated)")
@@ -60,6 +66,16 @@ func runNmap(args []string, log logger.Logger) error {
 	*computeMode = operator.ResolveComputeMode(*computeMode, opCfg)
 	if *outDir == "" && opCfg != nil && opCfg.OutputDir != "" {
 		*outDir = opCfg.OutputDir
+	}
+	placementPolicy, err := operator.ResolvePlacementPolicy(fleet.PlacementPolicy{
+		Mode:              fleet.PlacementMode(*placementMode),
+		MaxWorkersPerHost: *maxWorkersPerHost,
+		MinUniqueIPs:      *minUniqueIPs,
+		IPv6Required:      *ipv6Required,
+		DualStackRequired: *dualStackRequired,
+	}, opCfg, *workers)
+	if err != nil {
+		return err
 	}
 
 	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
@@ -191,22 +207,24 @@ func runNmap(args []string, log logger.Logger) error {
 	}
 
 	_ = tracker.Create(&operator.JobRecord{
-		JobID:         jobID,
-		ToolName:      "nmap",
-		Phase:         operator.PhaseEnqueuing,
-		TotalTasks:    len(tasks),
-		WorkerCount:   *workers,
-		ComputeMode:   *computeMode,
-		Cloud:         string(cloudKind),
-		CleanupPolicy: cleanupPolicy,
-		Bucket:        bucket,
-		NATSUrl:       outputs["nats_url"],
-		ControllerIP:  outputs["controller_ip"],
-		GenerationID:  outputs["generation_id"],
+		JobID:                 jobID,
+		ToolName:              "nmap",
+		Phase:                 operator.PhaseEnqueuing,
+		TotalTasks:            len(tasks),
+		WorkerCount:           *workers,
+		ComputeMode:           *computeMode,
+		Cloud:                 string(cloudKind),
+		CleanupPolicy:         cleanupPolicy,
+		Bucket:                bucket,
+		Placement:             placementPolicy,
+		ExpectedWorkerVersion: outputs["docker_image"],
+		NATSUrl:               outputs["nats_url"],
+		ControllerIP:          outputs["controller_ip"],
+		GenerationID:          outputs["generation_id"],
 	})
 
 	// Run the scan.
-	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID, cloudKind)
+	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID, placementPolicy, cloudKind)
 
 	if scanErr != nil {
 		_ = tracker.Fail(jobID, scanErr)
@@ -264,7 +282,7 @@ func runNmap(args []string, log logger.Logger) error {
 	return scanErr
 }
 
-func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string, cloudKind cloud.Kind) (bool, error) {
+func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind cloud.Kind) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
@@ -281,10 +299,10 @@ func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, comput
 	if provErr != nil {
 		return false, fmt.Errorf("building cloud provider: %w", provErr)
 	}
-	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, cloudKind)
+	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, placementPolicy, cloudKind)
 }
 
-func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, cloudKind ...cloud.Kind) (bool, error) {
+func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind ...cloud.Kind) (bool, error) {
 	queueURL := outputs["sqs_queue_url"]
 	bucket := outputs["s3_bucket_name"]
 	if queueURL == "" || bucket == "" {
@@ -330,11 +348,11 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 	defer launchCancel()
 
 	if len(cloudKind) > 0 && cloudKind[0].IsProviderNative() {
-		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind[0], outputs)
+		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind[0], outputs, placementPolicy)
 		if err != nil {
 			return false, err
 		}
-		logStatus("Using provider-native %s fleet (%d ready workers)", cloudKind[0].Canonical(), ready)
+		logStatus("Using provider-native %s fleet (%d eligible workers, policy: %s)", cloudKind[0].Canonical(), ready, placementPolicy.Summary())
 	} else {
 		containerName := "nmap-worker"
 		workerEnv := map[string]string{

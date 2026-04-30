@@ -111,13 +111,13 @@ func TestBuildSnapshotInfersComplete(t *testing.T) {
 func TestBuildSnapshotCompleteSynthesizesCompleted(t *testing.T) {
 	now := time.Now().UTC()
 	rec := &operator.JobRecord{
-		JobID:       "done-job",
-		ToolName:    "httpx",
-		Phase:       operator.PhaseComplete,
-		CreatedAt:   now.Add(-10 * time.Minute),
-		UpdatedAt:   now.Add(-2 * time.Minute),
-		TotalTasks:  50,
-		Bucket:      "results-bucket",
+		JobID:        "done-job",
+		ToolName:     "httpx",
+		Phase:        operator.PhaseComplete,
+		CreatedAt:    now.Add(-10 * time.Minute),
+		UpdatedAt:    now.Add(-2 * time.Minute),
+		TotalTasks:   50,
+		Bucket:       "results-bucket",
 		ResultPrefix: "scans/httpx/done-job/results/",
 	}
 
@@ -323,14 +323,21 @@ func TestOutputStatusTextWithFleet(t *testing.T) {
 		Progress: statusProgress{Completed: 10, Total: 50, Percent: 20.0},
 		Elapsed:  "1m0s",
 		Fleet: &statusFleet{
-			ControllerIP:    "1.2.3.4",
-			GenerationID:    "gen-abc",
-			DesiredWorkers:  5,
-			RegisteredCount: 5,
-			HealthyCount:    4,
-			ReadyCount:      4,
-			UniqueIPv4Count: 5,
-			IPv6ReadyCount:  3,
+			ControllerIP:            "1.2.3.4",
+			GenerationID:            "gen-abc",
+			ExpectedWorkerVersion:   "heph-nmap-worker:latest",
+			Placement:               "diversity, max 1/IP",
+			DesiredWorkers:          5,
+			RegisteredCount:         5,
+			HealthyCount:            4,
+			ReadyCount:              4,
+			EligibleCount:           3,
+			ExcludedCount:           1,
+			QuarantinedCount:        1,
+			UniqueIPv4Count:         5,
+			UniqueEligibleIPv4Count: 3,
+			IPv6ReadyCount:          3,
+			ExcludedByReason:        map[string]int{"version_mismatch": 1},
 		},
 	}
 
@@ -355,8 +362,13 @@ func TestOutputStatusTextWithFleet(t *testing.T) {
 		"Fleet:",
 		"Controller:  1.2.3.4",
 		"Generation:  gen-abc",
-		"Workers:     5/5 desired, 4 healthy, 4 ready",
+		"Version:     heph-nmap-worker:latest",
+		"Placement:   diversity, max 1/IP",
+		"Workers:     5/5 desired, 4 healthy, 4 ready, 3 eligible",
+		"Excluded:    1 total, 1 quarantined",
+		"Reasons:     version_mismatch=1",
 		"IPv4:        5 unique",
+		"IPv4 Ready:  3 unique eligible",
 		"IPv6:        3 ready",
 	}
 	for _, check := range checks {
@@ -375,13 +387,16 @@ func TestOutputStatusJSONWithFleet(t *testing.T) {
 		Progress: statusProgress{Completed: 10, Total: 50, Percent: 20.0},
 		Elapsed:  "1m0s",
 		Fleet: &statusFleet{
-			ControllerIP:    "1.2.3.4",
-			DesiredWorkers:  3,
-			RegisteredCount: 3,
-			HealthyCount:    3,
-			ReadyCount:      3,
-			UniqueIPv4Count: 3,
-			IPv6ReadyCount:  2,
+			ControllerIP:            "1.2.3.4",
+			DesiredWorkers:          3,
+			RegisteredCount:         3,
+			HealthyCount:            3,
+			ReadyCount:              3,
+			EligibleCount:           2,
+			UniqueIPv4Count:         3,
+			UniqueEligibleIPv4Count: 2,
+			IPv6ReadyCount:          2,
+			ExcludedByReason:        map[string]int{"placement_limit_exceeded": 1},
 		},
 	}
 
@@ -410,6 +425,9 @@ func TestOutputStatusJSONWithFleet(t *testing.T) {
 	}
 	if got.Fleet.DesiredWorkers != 3 {
 		t.Errorf("Fleet.DesiredWorkers = %d, want 3", got.Fleet.DesiredWorkers)
+	}
+	if got.Fleet.EligibleCount != 2 {
+		t.Errorf("Fleet.EligibleCount = %d, want 2", got.Fleet.EligibleCount)
 	}
 	if got.Fleet.UniqueIPv4Count != 3 {
 		t.Errorf("Fleet.UniqueIPv4Count = %d, want 3", got.Fleet.UniqueIPv4Count)

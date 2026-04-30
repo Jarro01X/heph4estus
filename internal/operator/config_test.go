@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
 )
 
 func TestLoadConfigFrom_MissingFile(t *testing.T) {
@@ -338,6 +339,79 @@ func TestSaveAndLoadConfig_Cloud(t *testing.T) {
 	if loaded.Cloud != "hetzner" {
 		t.Errorf("cloud = %q, want hetzner", loaded.Cloud)
 	}
+}
+
+func TestResolvePlacementPolicy(t *testing.T) {
+	t.Run("defaults to diversity", func(t *testing.T) {
+		got, err := ResolvePlacementPolicy(fleet.PlacementPolicy{}, &OperatorConfig{}, 10)
+		if err != nil {
+			t.Fatalf("ResolvePlacementPolicy() error = %v", err)
+		}
+		if got.Mode != fleet.PlacementModeDiversity {
+			t.Fatalf("Mode = %q, want diversity", got.Mode)
+		}
+		if got.MaxWorkersPerHost != 1 {
+			t.Fatalf("MaxWorkersPerHost = %d, want 1", got.MaxWorkersPerHost)
+		}
+	})
+
+	t.Run("config values are used", func(t *testing.T) {
+		got, err := ResolvePlacementPolicy(fleet.PlacementPolicy{}, &OperatorConfig{
+			PlacementMode:     "throughput",
+			MaxWorkersPerHost: 4,
+			MinUniqueIPs:      2,
+			IPv6Required:      true,
+		}, 10)
+		if err != nil {
+			t.Fatalf("ResolvePlacementPolicy() error = %v", err)
+		}
+		if got.Mode != fleet.PlacementModeThroughput {
+			t.Fatalf("Mode = %q, want throughput", got.Mode)
+		}
+		if got.MaxWorkersPerHost != 4 {
+			t.Fatalf("MaxWorkersPerHost = %d, want 4", got.MaxWorkersPerHost)
+		}
+		if got.MinUniqueIPs != 2 {
+			t.Fatalf("MinUniqueIPs = %d, want 2", got.MinUniqueIPs)
+		}
+		if !got.IPv6Required {
+			t.Fatal("expected IPv6Required=true")
+		}
+	})
+
+	t.Run("explicit values override config", func(t *testing.T) {
+		got, err := ResolvePlacementPolicy(fleet.PlacementPolicy{
+			Mode:              fleet.PlacementModeDiversity,
+			MaxWorkersPerHost: 2,
+			MinUniqueIPs:      3,
+			DualStackRequired: true,
+		}, &OperatorConfig{
+			PlacementMode:     "throughput",
+			MaxWorkersPerHost: 5,
+		}, 10)
+		if err != nil {
+			t.Fatalf("ResolvePlacementPolicy() error = %v", err)
+		}
+		if got.Mode != fleet.PlacementModeDiversity {
+			t.Fatalf("Mode = %q, want diversity", got.Mode)
+		}
+		if got.MaxWorkersPerHost != 2 {
+			t.Fatalf("MaxWorkersPerHost = %d, want 2", got.MaxWorkersPerHost)
+		}
+		if got.MinUniqueIPs != 3 {
+			t.Fatalf("MinUniqueIPs = %d, want 3", got.MinUniqueIPs)
+		}
+		if !got.DualStackRequired || !got.IPv6Required {
+			t.Fatal("dual-stack should imply IPv6Required")
+		}
+	})
+
+	t.Run("invalid mode errors", func(t *testing.T) {
+		_, err := ResolvePlacementPolicy(fleet.PlacementPolicy{Mode: "burst"}, nil, 10)
+		if err == nil {
+			t.Fatal("expected error for invalid placement mode")
+		}
+	})
 }
 
 func TestApplyEnvDefaults_EmptyConfig(t *testing.T) {

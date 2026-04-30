@@ -45,11 +45,16 @@ func testDeps(cfg *operator.OperatorConfig) Deps {
 
 func TestNew_LoadsSavedConfig(t *testing.T) {
 	cfg := &operator.OperatorConfig{
-		Region:      "eu-west-1",
-		Profile:     "staging",
-		WorkerCount: 20,
-		ComputeMode: "spot",
-		Cloud:       "selfhosted",
+		Region:            "eu-west-1",
+		Profile:           "staging",
+		WorkerCount:       20,
+		ComputeMode:       "spot",
+		PlacementMode:     "throughput",
+		MaxWorkersPerHost: 3,
+		MinUniqueIPs:      2,
+		IPv6Required:      true,
+		DualStackRequired: true,
+		Cloud:             "selfhosted",
 	}
 	m := NewWithDeps(testDeps(cfg))
 
@@ -64,6 +69,21 @@ func TestNew_LoadsSavedConfig(t *testing.T) {
 	}
 	if v := m.inputs[fieldComputeMode].Value(); v != "spot" {
 		t.Errorf("compute mode: got %q, want spot", v)
+	}
+	if v := m.inputs[fieldPlacementMode].Value(); v != "throughput" {
+		t.Errorf("placement: got %q, want throughput", v)
+	}
+	if v := m.inputs[fieldMaxWorkersPerHost].Value(); v != "3" {
+		t.Errorf("max workers/ip: got %q, want 3", v)
+	}
+	if v := m.inputs[fieldMinUniqueIPs].Value(); v != "2" {
+		t.Errorf("min unique IPs: got %q, want 2", v)
+	}
+	if v := m.inputs[fieldIPv6Required].Value(); v != "true" {
+		t.Errorf("ipv6 required: got %q, want true", v)
+	}
+	if v := m.inputs[fieldDualStackRequired].Value(); v != "true" {
+		t.Errorf("dual-stack: got %q, want true", v)
 	}
 	if v := m.inputs[fieldCloud].Value(); v != "manual" {
 		t.Errorf("cloud: got %q, want manual", v)
@@ -110,6 +130,11 @@ func TestSave_PersistsConfig(t *testing.T) {
 	m.inputs[fieldProfile].SetValue("prod")
 	m.inputs[fieldWorkerCount].SetValue("50")
 	m.inputs[fieldComputeMode].SetValue("fargate")
+	m.inputs[fieldPlacementMode].SetValue("throughput")
+	m.inputs[fieldMaxWorkersPerHost].SetValue("4")
+	m.inputs[fieldMinUniqueIPs].SetValue("2")
+	m.inputs[fieldIPv6Required].SetValue("true")
+	m.inputs[fieldDualStackRequired].SetValue("true")
 	m.inputs[fieldCleanupPolicy].SetValue("destroy-after")
 	m.inputs[fieldOutputDir].SetValue("/tmp/out")
 	m.inputs[fieldCloud].SetValue("selfhosted")
@@ -137,6 +162,21 @@ func TestSave_PersistsConfig(t *testing.T) {
 	}
 	if saved.ComputeMode != "fargate" {
 		t.Errorf("compute mode: got %q", saved.ComputeMode)
+	}
+	if saved.PlacementMode != "throughput" {
+		t.Errorf("placement mode: got %q", saved.PlacementMode)
+	}
+	if saved.MaxWorkersPerHost != 4 {
+		t.Errorf("max workers/ip: got %d", saved.MaxWorkersPerHost)
+	}
+	if saved.MinUniqueIPs != 2 {
+		t.Errorf("min unique ips: got %d", saved.MinUniqueIPs)
+	}
+	if !saved.IPv6Required {
+		t.Error("expected IPv6Required=true")
+	}
+	if !saved.DualStackRequired {
+		t.Error("expected DualStackRequired=true")
 	}
 	if saved.CleanupPolicy != "destroy-after" {
 		t.Errorf("cleanup: got %q", saved.CleanupPolicy)
@@ -277,7 +317,7 @@ func TestView_ShowsAllLabels(t *testing.T) {
 	m := NewWithDeps(testDeps(&operator.OperatorConfig{Region: "us-east-1"}))
 	view := m.View()
 
-	for _, label := range []string{"Region:", "Profile:", "Worker Count:", "Compute Mode:", "Cleanup Policy:", "Output Dir:"} {
+	for _, label := range []string{"Region:", "Profile:", "Worker Count:", "Compute Mode:", "Placement:", "Max Workers/IP:", "Min Unique IPs:", "IPv6 Required:", "Dual-Stack:", "Cleanup Policy:", "Output Dir:"} {
 		if !strings.Contains(view, label) {
 			t.Errorf("view missing label %q", label)
 		}
@@ -321,6 +361,11 @@ func TestBuildConfig(t *testing.T) {
 	m.inputs[fieldRegion].SetValue("us-west-2")
 	m.inputs[fieldWorkerCount].SetValue("25")
 	m.inputs[fieldComputeMode].SetValue("spot")
+	m.inputs[fieldPlacementMode].SetValue("throughput")
+	m.inputs[fieldMaxWorkersPerHost].SetValue("2")
+	m.inputs[fieldMinUniqueIPs].SetValue("3")
+	m.inputs[fieldIPv6Required].SetValue("true")
+	m.inputs[fieldDualStackRequired].SetValue("false")
 	m.inputs[fieldCleanupPolicy].SetValue("reuse")
 	m.inputs[fieldOutputDir].SetValue("/data/results")
 
@@ -333,6 +378,21 @@ func TestBuildConfig(t *testing.T) {
 	}
 	if cfg.ComputeMode != "spot" {
 		t.Errorf("mode: %q", cfg.ComputeMode)
+	}
+	if cfg.PlacementMode != "throughput" {
+		t.Errorf("placement: %q", cfg.PlacementMode)
+	}
+	if cfg.MaxWorkersPerHost != 2 {
+		t.Errorf("max workers/ip: %d", cfg.MaxWorkersPerHost)
+	}
+	if cfg.MinUniqueIPs != 3 {
+		t.Errorf("min unique ips: %d", cfg.MinUniqueIPs)
+	}
+	if !cfg.IPv6Required {
+		t.Error("expected IPv6Required=true")
+	}
+	if cfg.DualStackRequired {
+		t.Error("expected DualStackRequired=false")
 	}
 	if cfg.CleanupPolicy != "reuse" {
 		t.Errorf("cleanup: %q", cfg.CleanupPolicy)

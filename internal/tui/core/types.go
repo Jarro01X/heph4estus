@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
 )
 
 // View is the interface that all TUI views implement.
@@ -62,6 +63,7 @@ type DeployConfig struct {
 	NmapOptions    string
 	WorkerCount    int
 	ComputeMode    string // "auto", "fargate", "spot" — default "auto"
+	Placement      fleet.PlacementPolicy
 
 	// Scan hardening settings.
 	JitterMaxSeconds   int
@@ -120,6 +122,7 @@ type InfraOutputs struct {
 	NmapOptions    string
 	WorkerCount    int
 	ComputeMode    string // Resolved compute mode
+	Placement      fleet.PlacementPolicy
 
 	// Scan hardening settings (passed as env vars to workers).
 	JitterMaxSeconds   int
@@ -162,9 +165,10 @@ type InfraOutputs struct {
 
 	// --- Fleet metadata (populated for provider-native VPS paths) ---
 
-	ControllerIP string // Controller VM public IP
-	GenerationID string // Fleet generation marker
-	NATSUrl      string // NATS URL for fleet manager
+	ControllerIP          string // Controller VM public IP
+	GenerationID          string // Fleet generation marker
+	NATSUrl               string // NATS URL for fleet manager
+	ExpectedWorkerVersion string
 }
 
 // LifecycleCheckMsg carries the result of a lifecycle probe back to the deploy view.

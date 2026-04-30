@@ -5,20 +5,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
 )
 
 const appName = "heph4estus"
 
 // OperatorConfig holds persisted per-user operator defaults.
 type OperatorConfig struct {
-	Region        string `json:"region,omitempty"`
-	Profile       string `json:"profile,omitempty"`
-	WorkerCount   int    `json:"worker_count,omitempty"`
-	ComputeMode   string `json:"compute_mode,omitempty"`
-	CleanupPolicy string `json:"cleanup_policy,omitempty"` // "reuse" or "destroy-after"
-	OutputDir     string `json:"output_dir,omitempty"`
+	Region            string `json:"region,omitempty"`
+	Profile           string `json:"profile,omitempty"`
+	WorkerCount       int    `json:"worker_count,omitempty"`
+	ComputeMode       string `json:"compute_mode,omitempty"`
+	PlacementMode     string `json:"placement_mode,omitempty"`
+	MaxWorkersPerHost int    `json:"max_workers_per_host,omitempty"`
+	MinUniqueIPs      int    `json:"min_unique_ips,omitempty"`
+	IPv6Required      bool   `json:"ipv6_required,omitempty"`
+	DualStackRequired bool   `json:"dual_stack_required,omitempty"`
+	CleanupPolicy     string `json:"cleanup_policy,omitempty"` // "reuse" or "destroy-after"
+	OutputDir         string `json:"output_dir,omitempty"`
 	// Cloud is the persisted default cloud kind ("aws", "manual", "hetzner",
 	// etc.). Empty means "use the built-in default" (AWS).
 	Cloud string `json:"cloud,omitempty"`
@@ -105,8 +112,9 @@ func SaveConfigTo(cfg *OperatorConfig, path string) error {
 
 // Defaults holds the built-in default values for operator settings.
 var Defaults = OperatorConfig{
-	WorkerCount: 10,
-	ComputeMode: "auto",
+	WorkerCount:   10,
+	ComputeMode:   "auto",
+	PlacementMode: string(fleet.PlacementModeDiversity),
 }
 
 // ResolveWorkers returns the effective worker count given an explicit flag
@@ -156,6 +164,45 @@ func ResolveCloud(explicit string, cfg *OperatorConfig) (cloud.Kind, error) {
 		return cloud.ParseKind(cfg.Cloud)
 	}
 	return cloud.DefaultKind, nil
+}
+
+// ResolvePlacementPolicy merges explicit per-run policy with saved operator
+// defaults and returns the effective normalized policy.
+func ResolvePlacementPolicy(explicit fleet.PlacementPolicy, cfg *OperatorConfig, desiredWorkers int) (fleet.PlacementPolicy, error) {
+	policy := fleet.PlacementPolicy{
+		Mode: fleet.PlacementMode(Defaults.PlacementMode),
+	}
+	if cfg != nil {
+		if mode := strings.TrimSpace(cfg.PlacementMode); mode != "" {
+			policy.Mode = fleet.PlacementMode(mode)
+		}
+		policy.MaxWorkersPerHost = cfg.MaxWorkersPerHost
+		policy.MinUniqueIPs = cfg.MinUniqueIPs
+		policy.IPv6Required = cfg.IPv6Required
+		policy.DualStackRequired = cfg.DualStackRequired
+	}
+
+	if explicit.Mode != "" {
+		policy.Mode = explicit.Mode
+	}
+	if explicit.MaxWorkersPerHost > 0 {
+		policy.MaxWorkersPerHost = explicit.MaxWorkersPerHost
+	}
+	if explicit.MinUniqueIPs > 0 {
+		policy.MinUniqueIPs = explicit.MinUniqueIPs
+	}
+	if explicit.IPv6Required {
+		policy.IPv6Required = true
+	}
+	if explicit.DualStackRequired {
+		policy.DualStackRequired = true
+	}
+
+	policy = policy.Normalize(desiredWorkers)
+	if err := policy.Validate(); err != nil {
+		return fleet.PlacementPolicy{}, err
+	}
+	return policy, nil
 }
 
 // ResolveOutputDir returns the effective output directory given an explicit

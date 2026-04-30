@@ -255,19 +255,21 @@ func (m *StatusModel) trackCreate() {
 		return
 	}
 	rec := &operator.JobRecord{
-		JobID:         m.infra.JobID,
-		ToolName:      m.infra.ToolName,
-		Phase:         operator.PhaseEnqueuing,
-		TotalTasks:    m.totalTargets,
-		TotalWords:    m.totalWords,
-		WorkerCount:   m.infra.WorkerCount,
-		ComputeMode:   m.infra.ComputeMode,
-		Cloud:         string(m.infra.Cloud),
-		Bucket:        m.infra.S3BucketName,
-		RuntimeTarget: m.infra.RuntimeTarget,
-		NATSUrl:       m.infra.NATSUrl,
-		ControllerIP:  m.infra.ControllerIP,
-		GenerationID:  m.infra.GenerationID,
+		JobID:                 m.infra.JobID,
+		ToolName:              m.infra.ToolName,
+		Phase:                 operator.PhaseEnqueuing,
+		TotalTasks:            m.totalTargets,
+		TotalWords:            m.totalWords,
+		WorkerCount:           m.infra.WorkerCount,
+		ComputeMode:           m.infra.ComputeMode,
+		Cloud:                 string(m.infra.Cloud),
+		Bucket:                m.infra.S3BucketName,
+		Placement:             m.infra.Placement,
+		ExpectedWorkerVersion: m.infra.ExpectedWorkerVersion,
+		RuntimeTarget:         m.infra.RuntimeTarget,
+		NATSUrl:               m.infra.NATSUrl,
+		ControllerIP:          m.infra.ControllerIP,
+		GenerationID:          m.infra.GenerationID,
 	}
 	if m.isWordlist {
 		rec.Phase = operator.PhaseUploading
@@ -503,6 +505,9 @@ func (m *StatusModel) View() string {
 	if m.infra.CleanupPolicy != "" {
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Cleanup:"), m.infra.CleanupPolicy)
 	}
+	if m.infra.Placement.Summary() != "" {
+		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Placement:"), m.infra.Placement.Summary())
+	}
 	b.WriteString("\n")
 
 	unitLabel := "targets"
@@ -547,7 +552,7 @@ func (m *StatusModel) View() string {
 		fmt.Fprintf(&b, "  %s%d active\n", labelStyle.Render("Workers:"), m.workersUp)
 		if m.infra.Cloud.IsProviderNative() && m.infra.ControllerIP != "" {
 			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Controller:"), m.infra.ControllerIP)
-			fmt.Fprintf(&b, "  %s%d unique IPs\n", labelStyle.Render("Fleet:"), m.workersUp)
+			fmt.Fprintf(&b, "  %s%d admitted workers\n", labelStyle.Render("Fleet:"), m.workersUp)
 		}
 		fmt.Fprintf(&b, "  %s%s %d / %d %s  (%.1f%%)\n", labelStyle.Render("Progress:"), bar, m.completed, m.totalTargets, unitLabel, pct)
 		if rate > 0 {

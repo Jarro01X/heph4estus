@@ -24,6 +24,11 @@ const (
 	fieldProfile
 	fieldWorkerCount
 	fieldComputeMode
+	fieldPlacementMode
+	fieldMaxWorkersPerHost
+	fieldMinUniqueIPs
+	fieldIPv6Required
+	fieldDualStackRequired
 	fieldCleanupPolicy
 	fieldOutputDir
 	fieldCloud
@@ -97,7 +102,7 @@ func DefaultDeps() Deps {
 // Model is the editable settings view with diagnostics.
 type Model struct {
 	deps       Deps
-	inputs     [7]textinput.Model
+	inputs     [12]textinput.Model
 	focusIndex int
 	help       help.Model
 	width      int
@@ -145,6 +150,41 @@ func NewWithDeps(deps Deps) *Model {
 		modeInput.SetValue(cfg.ComputeMode)
 	}
 
+	placementInput := textinput.New()
+	placementInput.Placeholder = "diversity"
+	placementInput.CharLimit = 16
+	if cfg.PlacementMode != "" {
+		placementInput.SetValue(cfg.PlacementMode)
+	}
+
+	maxPerHostInput := textinput.New()
+	maxPerHostInput.Placeholder = "auto"
+	maxPerHostInput.CharLimit = 6
+	if cfg.MaxWorkersPerHost > 0 {
+		maxPerHostInput.SetValue(strconv.Itoa(cfg.MaxWorkersPerHost))
+	}
+
+	minUniqueIPsInput := textinput.New()
+	minUniqueIPsInput.Placeholder = "0"
+	minUniqueIPsInput.CharLimit = 6
+	if cfg.MinUniqueIPs > 0 {
+		minUniqueIPsInput.SetValue(strconv.Itoa(cfg.MinUniqueIPs))
+	}
+
+	ipv6RequiredInput := textinput.New()
+	ipv6RequiredInput.Placeholder = "false"
+	ipv6RequiredInput.CharLimit = 5
+	if cfg.IPv6Required {
+		ipv6RequiredInput.SetValue("true")
+	}
+
+	dualStackInput := textinput.New()
+	dualStackInput.Placeholder = "false"
+	dualStackInput.CharLimit = 5
+	if cfg.DualStackRequired {
+		dualStackInput.SetValue("true")
+	}
+
 	cleanupInput := textinput.New()
 	cleanupInput.Placeholder = "reuse"
 	cleanupInput.CharLimit = 14
@@ -176,9 +216,22 @@ func NewWithDeps(deps Deps) *Model {
 	}
 
 	return &Model{
-		deps:   deps,
-		inputs: [7]textinput.Model{regionInput, profileInput, workerInput, modeInput, cleanupInput, outputInput, cloudInput},
-		help:   h,
+		deps: deps,
+		inputs: [12]textinput.Model{
+			regionInput,
+			profileInput,
+			workerInput,
+			modeInput,
+			placementInput,
+			maxPerHostInput,
+			minUniqueIPsInput,
+			ipv6RequiredInput,
+			dualStackInput,
+			cleanupInput,
+			outputInput,
+			cloudInput,
+		},
+		help: h,
 	}
 }
 
@@ -254,7 +307,20 @@ func (m *Model) View() string {
 	focusedLabel := lipgloss.NewStyle().Foreground(core.Ember).Width(18).Bold(true)
 
 	// Editable fields
-	labels := []string{"Region:", "Profile:", "Worker Count:", "Compute Mode:", "Cleanup Policy:", "Output Dir:", "Cloud:"}
+	labels := []string{
+		"Region:",
+		"Profile:",
+		"Worker Count:",
+		"Compute Mode:",
+		"Placement:",
+		"Max Workers/IP:",
+		"Min Unique IPs:",
+		"IPv6 Required:",
+		"Dual-Stack:",
+		"Cleanup Policy:",
+		"Output Dir:",
+		"Cloud:",
+	}
 	for i, label := range labels {
 		ls := labelStyle
 		if m.focusIndex == i {
@@ -357,14 +423,21 @@ func (m *Model) save() tea.Cmd {
 // buildConfig constructs an OperatorConfig from the current input values.
 func (m *Model) buildConfig() *operator.OperatorConfig {
 	wc, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldWorkerCount].Value()))
+	maxWorkersPerHost, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldMaxWorkersPerHost].Value()))
+	minUniqueIPs, _ := strconv.Atoi(strings.TrimSpace(m.inputs[fieldMinUniqueIPs].Value()))
 	return &operator.OperatorConfig{
-		Region:        strings.TrimSpace(m.inputs[fieldRegion].Value()),
-		Profile:       strings.TrimSpace(m.inputs[fieldProfile].Value()),
-		WorkerCount:   wc,
-		ComputeMode:   strings.TrimSpace(m.inputs[fieldComputeMode].Value()),
-		CleanupPolicy: strings.TrimSpace(m.inputs[fieldCleanupPolicy].Value()),
-		OutputDir:     strings.TrimSpace(m.inputs[fieldOutputDir].Value()),
-		Cloud:         normalizeCloudValue(m.inputs[fieldCloud].Value()),
+		Region:            strings.TrimSpace(m.inputs[fieldRegion].Value()),
+		Profile:           strings.TrimSpace(m.inputs[fieldProfile].Value()),
+		WorkerCount:       wc,
+		ComputeMode:       strings.TrimSpace(m.inputs[fieldComputeMode].Value()),
+		PlacementMode:     strings.TrimSpace(m.inputs[fieldPlacementMode].Value()),
+		MaxWorkersPerHost: maxWorkersPerHost,
+		MinUniqueIPs:      minUniqueIPs,
+		IPv6Required:      parseBoolInput(m.inputs[fieldIPv6Required].Value()),
+		DualStackRequired: parseBoolInput(m.inputs[fieldDualStackRequired].Value()),
+		CleanupPolicy:     strings.TrimSpace(m.inputs[fieldCleanupPolicy].Value()),
+		OutputDir:         strings.TrimSpace(m.inputs[fieldOutputDir].Value()),
+		Cloud:             normalizeCloudValue(m.inputs[fieldCloud].Value()),
 	}
 }
 
@@ -424,4 +497,13 @@ func normalizeCloudValue(value string) string {
 		return strings.TrimSpace(value)
 	}
 	return string(kind.Canonical())
+}
+
+func parseBoolInput(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
