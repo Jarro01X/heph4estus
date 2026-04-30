@@ -19,7 +19,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 **AWS** (default, fully integrated): SQS + S3 + ECS Fargate / EC2 Spot Fleet. Infrastructure is provisioned and destroyed automatically via Terraform.
 
-**VPS providers** (`manual`, `hetzner`, `linode`, `scaleway`, `vultr`; provider-aware fleet manager planned): NATS JetStream + S3-compatible storage (MinIO) + Docker-over-SSH compute. Scan execution is supported when the operator provides controller endpoints and worker hosts via environment variables. PR 6.2 opens the manual/operator-managed path; `manual` is the expert/escape-hatch mode, not the flagship operator UX. PR 6.3 is the first polished provider-native VPS path via `hetzner`, and Phase 6 follow-on PRs extend the same fleet-manager model to `linode` and `vultr`. The legacy `selfhosted` selector remains accepted as a compatibility alias for `manual`.
+**VPS providers** (`manual`, `hetzner`, `linode`, `scaleway`, `vultr`): NATS JetStream + S3-compatible storage (MinIO) on a shared VPS runtime family. `manual` is the expert/operator-managed Docker-over-SSH path. `hetzner`, `linode`, and `vultr` are the mainstream provider-native paths: Terraform provisions the controller + workers, cloud-init boots a persistent worker service, workers self-register with the fleet manager, and scans wait for fleet readiness instead of SSH-launching ad hoc workers from the operator machine. `scaleway` remains in the shared runtime family but does not yet have a provider-native adapter. The legacy `selfhosted` selector remains accepted as a compatibility alias for `manual`.
 
 ## Requirements
 
@@ -100,14 +100,16 @@ Both `heph scan` and `heph nmap` accept these lifecycle flags:
 ./bin/heph scan --tool httpx --file targets.txt --no-deploy
 ```
 
-### 5. VPS Scan Execution (Manual/Operator-Managed Today)
+### 5. VPS Scan Execution
 
-The current VPS-family path is intentionally split in two:
+The VPS-family path is intentionally split in two:
 
 - `manual` is the expert mode and escape hatch for operator-managed environments
-- provider-native UX starts with `hetzner` in PR 6.3, then expands to `linode` and `vultr` in later Phase 6 PRs
+- `hetzner`, `linode`, and `vultr` are the provider-native controller-plane paths
 
-Selfhosted scan execution works when the operator has already provisioned:
+#### Manual Mode (`--cloud manual`)
+
+Manual scan execution works when the operator has already provisioned:
 
 - A reachable NATS JetStream endpoint (queue)
 - A reachable MinIO or S3-compatible endpoint (storage)
@@ -144,8 +146,8 @@ Run scans:
 # Nmap scan on the manual/operator-managed VPS path
 ./bin/heph nmap --file targets.txt --cloud manual
 
-# Generic tool scan on a named VPS provider
-./bin/heph scan --tool httpx --file targets.txt --cloud hetzner
+# Generic tool scan on the manual/operator-managed VPS path
+./bin/heph scan --tool httpx --file targets.txt --cloud manual
 ```
 
 Host and network requirements:
@@ -159,20 +161,30 @@ Scheduler rules:
 - The queue is the task scheduler; the host inventory is the source-IP pool.
 - The current selfhosted path is manual: Heph launches workers across `SELFHOSTED_WORKER_HOSTS`, so maximum source-IP diversity today is bounded by the number of unique hosts you supply.
 - For maximum diversity today, keep `--workers` less than or equal to the number of unique worker hosts.
-- The PR 6.3 target is a provider-aware fleet manager that owns host provisioning, health, public IP metadata, IPv6 capability checks, and diversity-aware placement. Its default rule should be one worker container per healthy host/public IP, with multi-worker-per-host reserved for explicit throughput mode.
+- The provider-native fleet manager owns host provisioning, health, public IP metadata, IPv6 capability checks, and diversity-aware placement. Its default rule is one worker container per healthy host/public IP, with multi-worker-per-host reserved for explicit throughput mode.
 
 What success looks like:
 - Tasks enqueue to the NATS queue identified by `SELFHOSTED_QUEUE_ID`
-- Workers launch over SSH on the configured hosts
+- In manual mode, Heph launches workers over SSH on the configured hosts
 - Workers read from NATS and upload results to `SELFHOSTED_BUCKET`
 - `heph status --job-id <id>` can reattach using recorded job metadata
 
+#### Provider-Native VPS Paths (`--cloud hetzner|linode|vultr`)
+
+For the provider-native VPS paths, normal operator flows do not require the raw `SELFHOSTED_*` runtime contract above. The expected flow is:
+
+```bash
+# Provider-native deploy + scan
+./bin/heph infra deploy --tool nmap --cloud hetzner
+./bin/heph nmap --file targets.txt --cloud hetzner
+```
+
+On these paths, Terraform provisions the controller and worker VMs, cloud-init boots the persistent worker service, workers self-register with the fleet manager, and the scan waits for fleet readiness instead of SSH-launching workers from the operator machine. SSH remains a bootstrap/debug tool, not the normal orchestration model.
+
 What is not yet supported:
-- `heph infra deploy --cloud hetzner` polished provider-native UX (deferred to PR 6.3)
-- `heph infra deploy --cloud linode` provider adapter and UX (deferred to PR 6.4)
-- `heph infra deploy --cloud vultr` provider adapter and UX (deferred to PR 6.5)
+- `scaleway` provider-native deploy UX; use `manual` for operator-managed Scaleway environments today
 - `manual` becoming a zero-config mainstream path; it remains expert mode
-- Automatic controller-output consumption by scan paths (scan execution uses the env-driven contract above)
+- Automatic controller-output consumption for `manual`; the manual path still uses the env-driven contract above
 
 ### 6. Explicit Infrastructure Management
 
