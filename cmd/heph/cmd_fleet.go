@@ -225,7 +225,9 @@ func runFleetQuarantine(args []string, log logger.Logger) error {
 	if err := store.SetState(string(kind.Canonical()), *ip, *reason, *notes, state, duration); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Set %s to %s\n", *ip, state)
+	if _, err := fmt.Fprintf(os.Stdout, "Set %s to %s\n", *ip, state); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -251,7 +253,9 @@ func runFleetUnquarantine(args []string, log logger.Logger) error {
 	if err := store.Clear(string(kind.Canonical()), *ip); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Cleared reputation state for %s\n", *ip)
+	if _, err := fmt.Fprintf(os.Stdout, "Cleared reputation state for %s\n", *ip); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -281,7 +285,9 @@ func runFleetReconcile(args []string, log logger.Logger) error {
 	}
 	indexes := repairCandidateIndexes(fctx.Snapshot)
 	if len(indexes) == 0 {
-		fmt.Fprintln(os.Stdout, "No repair candidates found.")
+		if _, err := fmt.Fprintln(os.Stdout, "No repair candidates found."); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err := replaceWorkerIndexes(mainContext(), fctx.ToolConfig, kind, indexes, nil, log); err != nil {
@@ -294,7 +300,9 @@ func runFleetReconcile(args []string, log logger.Logger) error {
 		return err
 	}
 	summary := state.Summarize()
-	fmt.Fprintf(os.Stdout, "Reconciled fleet: %d eligible, %d healthy, %d unique IPv4\n", summary.EligibleCount, summary.HealthyCount, summary.UniqueEligibleIPv4Count)
+	if _, err := fmt.Fprintf(os.Stdout, "Reconciled fleet: %d eligible, %d healthy, %d unique IPv4\n", summary.EligibleCount, summary.HealthyCount, summary.UniqueEligibleIPv4Count); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -344,7 +352,9 @@ func runFleetRolloutStatus(args []string, log logger.Logger) error {
 		return enc.Encode(rollout)
 	}
 	if rollout == nil {
-		fmt.Fprintln(os.Stdout, "No rollout state recorded.")
+		if _, err := fmt.Fprintln(os.Stdout, "No rollout state recorded."); err != nil {
+			return err
+		}
 		return nil
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Phase:      %s\n", rollout.Phase)
@@ -410,7 +420,9 @@ func runFleetRolloutStart(args []string, log logger.Logger) error {
 		if err := fctx.RolloutStore.Save(rollout); err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, "Fleet already matches the target version.")
+		if _, err := fmt.Fprintln(os.Stdout, "Fleet already matches the target version."); err != nil {
+			return err
+		}
 		return nil
 	}
 	previousVersion := choosePreviousVersion(fctx.Snapshot, targetVersion)
