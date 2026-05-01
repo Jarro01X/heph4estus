@@ -176,13 +176,6 @@ func waitForFleetSnapshot(ctx context.Context, kind cloud.Kind, outputs map[stri
 	return mgr.WaitForWorkers(ctx, minReady)
 }
 
-func summarizeVersions(snapshot *fleet.FleetState) map[string]int {
-	if snapshot == nil {
-		return nil
-	}
-	return snapshot.Summarize().VersionCounts
-}
-
 func choosePreviousVersion(snapshot *fleet.FleetState, target string) string {
 	if snapshot == nil {
 		return ""
