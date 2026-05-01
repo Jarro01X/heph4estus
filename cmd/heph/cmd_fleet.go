@@ -468,7 +468,9 @@ func runFleetRolloutStart(args []string, log logger.Logger) error {
 		return fmt.Errorf("canary failed and rollback was attempted: %w", err)
 	}
 	if !*autoPromote {
-		fmt.Fprintf(os.Stdout, "Canary healthy for %v. Run `heph fleet rollout promote --tool %s --cloud %s` to continue.\n", canaryIndexes, *tool, kind.Canonical())
+		if _, err := fmt.Fprintf(os.Stdout, "Canary healthy for %v. Run `heph fleet rollout promote --tool %s --cloud %s` to continue.\n", canaryIndexes, *tool, kind.Canonical()); err != nil {
+			return err
+		}
 		return nil
 	}
 	return promoteRollout(mainContext(), fctx, rollout, remaining, timeout, log)
@@ -545,7 +547,9 @@ func promoteRollout(ctx context.Context, fctx *providerFleetContext, rollout *fl
 	if err := fctx.RolloutStore.Save(rollout); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Rollout promoted to %s\n", rollout.TargetVersion)
+	if _, err := fmt.Fprintf(os.Stdout, "Rollout promoted to %s\n", rollout.TargetVersion); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -587,7 +591,9 @@ func runFleetRollback(args []string, log logger.Logger) error {
 	if err := fctx.RolloutStore.Save(fctx.Rollout); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Rolled back %s to %s\n", *tool, fctx.Rollout.PreviousVersion)
+	if _, err := fmt.Fprintf(os.Stdout, "Rolled back %s to %s\n", *tool, fctx.Rollout.PreviousVersion); err != nil {
+		return err
+	}
 	return nil
 }
 
