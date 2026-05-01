@@ -14,6 +14,7 @@ import (
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/fleet"
+	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
 )
@@ -45,8 +46,11 @@ type statusProgress struct {
 type statusFleet struct {
 	ControllerIP            string         `json:"controller_ip,omitempty"`
 	GenerationID            string         `json:"generation_id,omitempty"`
+	CanaryGeneration        string         `json:"canary_generation,omitempty"`
 	ExpectedWorkerVersion   string         `json:"expected_worker_version,omitempty"`
 	Placement               string         `json:"placement,omitempty"`
+	RolloutPhase            string         `json:"rollout_phase,omitempty"`
+	RollbackReason          string         `json:"rollback_reason,omitempty"`
 	DesiredWorkers          int            `json:"desired_workers"`
 	RegisteredCount         int            `json:"registered"`
 	HealthyCount            int            `json:"healthy"`
@@ -57,6 +61,9 @@ type statusFleet struct {
 	UniqueIPv4Count         int            `json:"unique_ipv4"`
 	UniqueEligibleIPv4Count int            `json:"unique_eligible_ipv4"`
 	IPv6ReadyCount          int            `json:"ipv6_ready"`
+	CanaryWorkerCount       int            `json:"canary_workers,omitempty"`
+	PromotedWorkerCount     int            `json:"promoted_workers,omitempty"`
+	DrainingWorkerCount     int            `json:"draining_workers,omitempty"`
 	ExcludedByReason        map[string]int `json:"excluded_by_reason,omitempty"`
 }
 
@@ -119,14 +126,31 @@ func runStatus(args []string, log logger.Logger) error {
 	if cloudKind.IsProviderNative() && !isTerminalPhase(rec.Phase) {
 		natsURL := rec.NATSUrl
 		if natsURL != "" {
+			canonicalCloud := string(cloudKind.Canonical())
+			var (
+				reputation []fleetstate.ReputationRecord
+				rollout    *fleetstate.RolloutRecord
+			)
+			if store, err := fleetstate.NewReputationStore(); err == nil {
+				reputation, _ = store.List(canonicalCloud)
+			}
+			if store, err := fleetstate.NewRolloutStore(); err == nil {
+				rollout, _ = store.Load(canonicalCloud, rec.ToolName)
+			}
+			generationID := rec.GenerationID
+			if rollout != nil {
+				generationID = ""
+			}
 			fleetSnap, err := fleet.QueryFleetSnapshot(ctx, fleet.NATSFleetManagerConfig{
 				NATSURL:         natsURL,
 				DesiredWorkers:  rec.WorkerCount,
 				ControllerIP:    rec.ControllerIP,
-				GenerationID:    rec.GenerationID,
-				Cloud:           rec.Cloud,
+				GenerationID:    generationID,
+				Cloud:           canonicalCloud,
 				Placement:       rec.Placement,
 				ExpectedVersion: rec.ExpectedWorkerVersion,
+				Reputation:      reputation,
+				Rollout:         rollout,
 			}, log)
 			if err != nil {
 				log.Error("Warning: could not query fleet state: %v", err)
@@ -135,8 +159,11 @@ func runStatus(args []string, log logger.Logger) error {
 				snap.Fleet = &statusFleet{
 					ControllerIP:            fleetSnap.ControllerIP,
 					GenerationID:            fleetSnap.GenerationID,
+					CanaryGeneration:        rolloutCanaryGeneration(rollout),
 					ExpectedWorkerVersion:   rec.ExpectedWorkerVersion,
 					Placement:               rec.Placement.Summary(),
+					RolloutPhase:            summary.RolloutPhase,
+					RollbackReason:          summary.RollbackReason,
 					DesiredWorkers:          summary.DesiredWorkers,
 					RegisteredCount:         summary.RegisteredCount,
 					HealthyCount:            summary.HealthyCount,
@@ -147,6 +174,9 @@ func runStatus(args []string, log logger.Logger) error {
 					UniqueIPv4Count:         summary.UniqueIPv4Count,
 					UniqueEligibleIPv4Count: summary.UniqueEligibleIPv4Count,
 					IPv6ReadyCount:          summary.IPv6ReadyCount,
+					CanaryWorkerCount:       rolloutWorkerCount(rollout, "canary"),
+					PromotedWorkerCount:     rolloutWorkerCount(rollout, "promoted"),
+					DrainingWorkerCount:     rolloutWorkerCount(rollout, "draining"),
 					ExcludedByReason:        summary.ExcludedByReason,
 				}
 			}
@@ -239,14 +269,27 @@ func outputStatusText(snap statusSnapshot) error {
 		if snap.Fleet.Placement != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "  Placement:   %s\n", snap.Fleet.Placement)
 		}
+		if snap.Fleet.RolloutPhase != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Rollout:     %s\n", snap.Fleet.RolloutPhase)
+		}
+		if snap.Fleet.CanaryGeneration != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Canary Gen:  %s\n", snap.Fleet.CanaryGeneration)
+		}
 		_, _ = fmt.Fprintf(os.Stdout, "  Workers:     %d/%d desired, %d healthy, %d ready, %d eligible\n",
 			snap.Fleet.RegisteredCount, snap.Fleet.DesiredWorkers,
 			snap.Fleet.HealthyCount, snap.Fleet.ReadyCount, snap.Fleet.EligibleCount)
+		if snap.Fleet.CanaryWorkerCount > 0 || snap.Fleet.PromotedWorkerCount > 0 || snap.Fleet.DrainingWorkerCount > 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "  Waves:       canary=%d promoted=%d draining=%d\n",
+				snap.Fleet.CanaryWorkerCount, snap.Fleet.PromotedWorkerCount, snap.Fleet.DrainingWorkerCount)
+		}
 		if snap.Fleet.ExcludedCount > 0 {
 			_, _ = fmt.Fprintf(os.Stdout, "  Excluded:    %d total, %d quarantined\n", snap.Fleet.ExcludedCount, snap.Fleet.QuarantinedCount)
 			if reasons := summarizeStatusReasons(snap.Fleet.ExcludedByReason); reasons != "" {
 				_, _ = fmt.Fprintf(os.Stdout, "  Reasons:     %s\n", reasons)
 			}
+		}
+		if snap.Fleet.RollbackReason != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "  Rollback:    %s\n", snap.Fleet.RollbackReason)
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "  IPv4:        %d unique\n", snap.Fleet.UniqueIPv4Count)
 		if snap.Fleet.UniqueEligibleIPv4Count > 0 {
@@ -313,4 +356,27 @@ func fleetSummaryReasons(counts map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", reason, count))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func rolloutCanaryGeneration(rollout *fleetstate.RolloutRecord) string {
+	if rollout == nil {
+		return ""
+	}
+	return rollout.CanaryGeneration
+}
+
+func rolloutWorkerCount(rollout *fleetstate.RolloutRecord, bucket string) int {
+	if rollout == nil {
+		return 0
+	}
+	switch bucket {
+	case "canary":
+		return len(rollout.CanaryWorkerIndexes)
+	case "promoted":
+		return len(rollout.PromotedWorkerIndexes)
+	case "draining":
+		return len(rollout.DrainingWorkerIndexes)
+	default:
+		return 0
+	}
 }
