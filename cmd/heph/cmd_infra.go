@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
+	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
@@ -23,7 +25,7 @@ func resolveToolConfig(tool, backend string, kind ...cloud.Kind) (*infra.ToolCon
 
 func runInfra(args []string, log logger.Logger) error {
 	if len(args) == 0 {
-		return fmt.Errorf("infra requires a subcommand: deploy, destroy")
+		return fmt.Errorf("infra requires a subcommand: deploy, destroy, backup, recover")
 	}
 
 	sub := args[0]
@@ -32,8 +34,12 @@ func runInfra(args []string, log logger.Logger) error {
 		return runInfraDeploy(args[1:], log)
 	case "destroy":
 		return runInfraDestroy(args[1:], log)
+	case "backup":
+		return runInfraBackup(args[1:], log)
+	case "recover":
+		return runInfraRecover(args[1:], log)
 	default:
-		return fmt.Errorf("infra: unknown subcommand %q (expected deploy or destroy)", sub)
+		return fmt.Errorf("infra: unknown subcommand %q (expected deploy, destroy, backup, or recover)", sub)
 	}
 }
 
@@ -122,6 +128,117 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 	}
 
 	return infra.RunDestroy(mainContext(), cfg, os.Stderr, log)
+}
+
+func runInfraBackup(args []string, log logger.Logger) error {
+	fs := flag.NewFlagSet("infra backup", flag.ContinueOnError)
+	tool := fs.String("tool", "", "Tool whose provider-native infrastructure should be backed up")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (required)")
+	outputPath := fs.String("output", "", "Path to write the recovery manifest (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tool == "" {
+		return fmt.Errorf("--tool flag is required")
+	}
+	if strings.TrimSpace(*outputPath) == "" {
+		return fmt.Errorf("--output flag is required")
+	}
+
+	opCfg, _ := operator.LoadConfig()
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if !cloudKind.IsProviderNative() {
+		return fmt.Errorf("infra backup only supports provider-native clouds, got %q", cloudKind.Canonical())
+	}
+
+	fctx, err := loadProviderFleetContext(mainContext(), *tool, cloudKind, fleet.PlacementPolicy{}, true, log)
+	if err != nil {
+		return err
+	}
+	manifest := &fleetstate.RecoveryManifest{
+		ToolName:   *tool,
+		Cloud:      string(cloudKind.Canonical()),
+		Outputs:    fctx.Outputs,
+		Rollout:    fctx.Rollout,
+		Reputation: fctx.Reputation,
+	}
+	if err := fleetstate.WriteRecoveryManifest(*outputPath, manifest); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "Wrote recovery manifest to %s\n", *outputPath)
+	return nil
+}
+
+func runInfraRecover(args []string, log logger.Logger) error {
+	fs := flag.NewFlagSet("infra recover", flag.ContinueOnError)
+	tool := fs.String("tool", "", "Tool whose provider-native infrastructure should be recovered")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (required)")
+	inputPath := fs.String("from", "", "Path to a recovery manifest created by infra backup (required)")
+	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tool == "" {
+		return fmt.Errorf("--tool flag is required")
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		return fmt.Errorf("--from flag is required")
+	}
+	opCfg, _ := operator.LoadConfig()
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if !cloudKind.IsProviderNative() {
+		return fmt.Errorf("infra recover only supports provider-native clouds, got %q", cloudKind.Canonical())
+	}
+	manifest, err := fleetstate.ReadRecoveryManifest(*inputPath)
+	if err != nil {
+		return err
+	}
+	if manifest.ToolName != *tool {
+		return fmt.Errorf("recovery manifest tool mismatch: %q != %q", manifest.ToolName, *tool)
+	}
+	if manifest.Cloud != "" && manifest.Cloud != string(cloudKind.Canonical()) {
+		return fmt.Errorf("recovery manifest cloud mismatch: %q != %q", manifest.Cloud, cloudKind.Canonical())
+	}
+	cfg, err := infra.ResolveToolConfig(*tool, cloudKind)
+	if err != nil {
+		return err
+	}
+	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
+		ToolConfig:  cfg,
+		Cloud:       cloudKind,
+		AutoApprove: *autoApprove,
+		Stream:      os.Stderr,
+		PromptFunc:  deployPrompt,
+	}, log)
+	if err != nil {
+		return err
+	}
+	repStore, err := fleetstate.NewReputationStore()
+	if err != nil {
+		return err
+	}
+	for _, rec := range manifest.Reputation {
+		if err := repStore.Upsert(rec); err != nil {
+			return err
+		}
+	}
+	if manifest.Rollout != nil {
+		rolloutStore, err := fleetstate.NewRolloutStore()
+		if err != nil {
+			return err
+		}
+		if err := rolloutStore.Save(manifest.Rollout); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s\n", cloudKind.Canonical(), *tool, *inputPath)
+	return nil
 }
 
 func deployPrompt(_ string) bool {

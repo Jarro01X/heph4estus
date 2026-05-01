@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
 
 	"github.com/nats-io/nats.go"
@@ -50,6 +51,8 @@ type WorkerInfo struct {
 	Eligible         bool      // true if admitted by placement/rollout policy
 	ExcludedReason   string    // why the worker was excluded from the admitted fleet
 	QuarantinedUntil time.Time // cooldown deadline for unhealthy workers
+	ReputationState  string    // durable reputation state, if any
+	ReputationReason string    // durable reputation reason, if any
 	RegisteredAt     time.Time // when the worker first registered
 	LastHeartbeat    time.Time // last heartbeat timestamp
 }
@@ -63,6 +66,8 @@ type FleetState struct {
 	Cloud           string // provider name ("hetzner")
 	Placement       PlacementPolicy
 	ExpectedVersion string
+	Rollout         *fleetstate.RolloutRecord
+	Reputation      []fleetstate.ReputationRecord
 }
 
 // FleetSummary is a concise view of fleet health for CLI/TUI display.
@@ -80,6 +85,8 @@ type FleetSummary struct {
 	MismatchedVersionCount  int
 	ExcludedByReason        map[string]int
 	VersionCounts           map[string]int
+	RolloutPhase            string
+	RollbackReason          string
 }
 
 // Summarize returns a FleetSummary from the current state.
@@ -93,6 +100,10 @@ func (s *FleetState) Summarize() FleetSummary {
 		VersionCounts:    make(map[string]int),
 	}
 	now := time.Now()
+	if s.Rollout != nil {
+		summary.RolloutPhase = string(s.Rollout.Phase)
+		summary.RollbackReason = s.Rollout.RollbackReason
+	}
 	for _, w := range s.Workers {
 		version := w.Version
 		if version == "" {
@@ -236,6 +247,8 @@ func QueryFleetSnapshot(ctx context.Context, cfg NATSFleetManagerConfig, log log
 		Cloud:           cfg.Cloud,
 		Placement:       cfg.Placement.Normalize(cfg.DesiredWorkers),
 		ExpectedVersion: cfg.ExpectedVersion,
+		Rollout:         cfg.Rollout,
+		Reputation:      cfg.Reputation,
 	}
 	applyAdmissionPolicy(state)
 	return state, nil
@@ -275,6 +288,21 @@ func applyAdmissionPolicy(state *FleetState) {
 			w.ExcludedReason = string(ExclusionReasonQuarantinedUnhealthy)
 			continue
 		}
+		if rec := findReputationRecord(state.Reputation, state.Cloud, w); rec != nil {
+			w.ReputationState = string(rec.EffectiveState(now))
+			w.ReputationReason = rec.Reason
+			switch rec.EffectiveState(now) {
+			case fleetstate.ReputationStateCoolingDown:
+				w.ExcludedReason = "reputation_cooling_down"
+				continue
+			case fleetstate.ReputationStateQuarantined:
+				w.ExcludedReason = "reputation_quarantined"
+				continue
+			case fleetstate.ReputationStateRetired:
+				w.ExcludedReason = "reputation_retired"
+				continue
+			}
+		}
 		if state.ExpectedVersion != "" {
 			if w.Version == "" {
 				w.ExcludedReason = string(ExclusionReasonVersionUnknown)
@@ -282,6 +310,12 @@ func applyAdmissionPolicy(state *FleetState) {
 			}
 			if w.Version != state.ExpectedVersion {
 				w.ExcludedReason = string(ExclusionReasonVersionMismatch)
+				continue
+			}
+		}
+		if state.Rollout != nil {
+			if reason, ok := applyRolloutAdmission(state.Rollout, state.ExpectedVersion, w); !ok {
+				w.ExcludedReason = reason
 				continue
 			}
 		}
@@ -309,6 +343,83 @@ func applyAdmissionPolicy(state *FleetState) {
 
 		w.Eligible = true
 	}
+}
+
+// EvaluatePlacement clones the provided fleet state, re-applies admission
+// using the supplied placement policy, and returns the resulting summary.
+func EvaluatePlacement(state *FleetState, policy PlacementPolicy) FleetSummary {
+	if state == nil {
+		return FleetSummary{}
+	}
+	clone := &FleetState{
+		DesiredWorkers:  state.DesiredWorkers,
+		Workers:         make(map[string]*WorkerInfo, len(state.Workers)),
+		ControllerIP:    state.ControllerIP,
+		GenerationID:    state.GenerationID,
+		Cloud:           state.Cloud,
+		Placement:       policy,
+		ExpectedVersion: state.ExpectedVersion,
+		Rollout:         state.Rollout,
+		Reputation:      append([]fleetstate.ReputationRecord(nil), state.Reputation...),
+	}
+	for id, worker := range state.Workers {
+		cp := *worker
+		clone.Workers[id] = &cp
+	}
+	applyAdmissionPolicy(clone)
+	return clone.Summarize()
+}
+
+func findReputationRecord(records []fleetstate.ReputationRecord, cloud string, w *WorkerInfo) *fleetstate.ReputationRecord {
+	for i := range records {
+		rec := records[i]
+		if rec.Cloud != "" && cloud != "" && rec.Cloud != cloud {
+			continue
+		}
+		switch {
+		case rec.PublicIPv4 != "" && rec.PublicIPv4 == w.PublicIPv4:
+			return &rec
+		case rec.PublicIPv6 != "" && rec.PublicIPv6 == w.PublicIPv6:
+			return &rec
+		case rec.WorkerID != "" && rec.WorkerID == w.ID:
+			return &rec
+		}
+	}
+	return nil
+}
+
+func applyRolloutAdmission(rollout *fleetstate.RolloutRecord, expectedVersion string, w *WorkerInfo) (string, bool) {
+	if rollout == nil {
+		return "", true
+	}
+	targetVersion := expectedVersion
+	if rollout.TargetVersion != "" {
+		targetVersion = rollout.TargetVersion
+	}
+	switch rollout.Phase {
+	case fleetstate.RolloutPhaseCanary:
+		if targetVersion != "" && w.Version != targetVersion {
+			return "draining_old_generation", false
+		}
+		if len(rollout.CanaryWorkerIDs) == 0 {
+			return "", true
+		}
+		for _, id := range rollout.CanaryWorkerIDs {
+			if id == w.ID {
+				return "", true
+			}
+		}
+		return "not_canary", false
+	case fleetstate.RolloutPhasePromoting, fleetstate.RolloutPhaseDrainingOld, fleetstate.RolloutPhaseStable:
+		if targetVersion != "" && w.Version != targetVersion {
+			return "draining_old_generation", false
+		}
+	case fleetstate.RolloutPhaseRolledBack:
+		if rollout.PreviousVersion != "" && w.Version != rollout.PreviousVersion {
+			return "rollback_mismatch", false
+		}
+	}
+	return "", true
 }
 
 func workerPlacementIdentity(w *WorkerInfo) string {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
 
 	"github.com/nats-io/nats.go"
@@ -26,6 +27,8 @@ type NATSFleetManagerConfig struct {
 	Placement       PlacementPolicy
 	ExpectedVersion string
 	CooldownWindow  time.Duration // 0 means default
+	Reputation      []fleetstate.ReputationRecord
+	Rollout         *fleetstate.RolloutRecord
 }
 
 // NATSFleetManager implements Manager by subscribing to NATS heartbeats.
@@ -39,6 +42,8 @@ type NATSFleetManager struct {
 	placement       PlacementPolicy
 	expectedVersion string
 	cooldownWindow  time.Duration
+	reputation      []fleetstate.ReputationRecord
+	rollout         *fleetstate.RolloutRecord
 
 	mu        sync.RWMutex
 	workers   map[string]*WorkerInfo
@@ -91,6 +96,8 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 		placement:       cfg.Placement.Normalize(cfg.DesiredWorkers),
 		expectedVersion: cfg.ExpectedVersion,
 		cooldownWindow:  cooldown,
+		reputation:      cfg.Reputation,
+		rollout:         cfg.Rollout,
 		workers:         make(map[string]*WorkerInfo),
 		cooldowns:       make(map[string]time.Time),
 		conn:            nc,
@@ -138,6 +145,8 @@ func NewNATSFleetManagerFromConn(nc *nats.Conn, cfg NATSFleetManagerConfig, log 
 		placement:       cfg.Placement.Normalize(cfg.DesiredWorkers),
 		expectedVersion: cfg.ExpectedVersion,
 		cooldownWindow:  cooldown,
+		reputation:      cfg.Reputation,
+		rollout:         cfg.Rollout,
 		workers:         make(map[string]*WorkerInfo),
 		cooldowns:       make(map[string]time.Time),
 		conn:            nc,
@@ -242,6 +251,8 @@ func (m *NATSFleetManager) Reconcile(ctx context.Context) (*FleetState, error) {
 		Cloud:           m.cloud,
 		Placement:       m.placement,
 		ExpectedVersion: m.expectedVersion,
+		Rollout:         m.rollout,
+		Reputation:      m.reputation,
 	}
 	applyAdmissionPolicy(state)
 	return state, nil
