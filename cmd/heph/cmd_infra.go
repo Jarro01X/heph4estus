@@ -168,7 +168,9 @@ func runInfraBackup(args []string, log logger.Logger) error {
 	if err := fleetstate.WriteRecoveryManifest(*outputPath, manifest); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Wrote recovery manifest to %s\n", *outputPath)
+	if _, err := fmt.Fprintf(os.Stdout, "Wrote recovery manifest to %s\n", *outputPath); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -237,7 +239,9 @@ func runInfraRecover(args []string, log logger.Logger) error {
 			return err
 		}
 	}
-	fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s\n", cloudKind.Canonical(), *tool, *inputPath)
+	if _, err := fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s\n", cloudKind.Canonical(), *tool, *inputPath); err != nil {
+		return err
+	}
 	return nil
 }
 
