@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -128,6 +129,77 @@ func TestFleetState_Summarize_Empty(t *testing.T) {
 	assertInt(t, "HealthyCount", s.HealthyCount, 0)
 	assertInt(t, "ReadyCount", s.ReadyCount, 0)
 	assertInt(t, "UniqueIPv4Count", s.UniqueIPv4Count, 0)
+}
+
+func TestApplyAdmissionPolicy_ReputationExcludesWorker(t *testing.T) {
+	state := &FleetState{
+		DesiredWorkers: 1,
+		Cloud:          "hetzner",
+		Workers: map[string]*WorkerInfo{
+			"heph-worker-0": {
+				ID:         "heph-worker-0",
+				PublicIPv4: "203.0.113.10",
+				Healthy:    true,
+				Ready:      true,
+			},
+		},
+		Reputation: []fleetstate.ReputationRecord{{
+			Cloud:         "hetzner",
+			PublicIPv4:    "203.0.113.10",
+			State:         fleetstate.ReputationStateQuarantined,
+			Reason:        "burned",
+			CooldownUntil: time.Now().Add(time.Hour),
+		}},
+	}
+
+	applyAdmissionPolicy(state)
+	worker := state.Workers["heph-worker-0"]
+	if worker.Eligible {
+		t.Fatal("expected worker to be excluded")
+	}
+	if worker.ExcludedReason != "reputation_quarantined" {
+		t.Fatalf("ExcludedReason = %q, want reputation_quarantined", worker.ExcludedReason)
+	}
+	if worker.ReputationReason != "burned" {
+		t.Fatalf("ReputationReason = %q, want burned", worker.ReputationReason)
+	}
+}
+
+func TestApplyAdmissionPolicy_RolloutCanaryRestrictsAdmission(t *testing.T) {
+	state := &FleetState{
+		DesiredWorkers:  2,
+		ExpectedVersion: "registry/heph-httpx:2",
+		Rollout: &fleetstate.RolloutRecord{
+			Phase:           fleetstate.RolloutPhaseCanary,
+			TargetVersion:   "registry/heph-httpx:2",
+			CanaryWorkerIDs: []string{"heph-worker-1"},
+		},
+		Workers: map[string]*WorkerInfo{
+			"heph-worker-0": {
+				ID:      "heph-worker-0",
+				Version: "registry/heph-httpx:2",
+				Healthy: true,
+				Ready:   true,
+			},
+			"heph-worker-1": {
+				ID:      "heph-worker-1",
+				Version: "registry/heph-httpx:2",
+				Healthy: true,
+				Ready:   true,
+			},
+		},
+	}
+
+	applyAdmissionPolicy(state)
+	if !state.Workers["heph-worker-1"].Eligible {
+		t.Fatal("expected canary worker to be eligible")
+	}
+	if state.Workers["heph-worker-0"].Eligible {
+		t.Fatal("expected non-canary worker to be excluded")
+	}
+	if state.Workers["heph-worker-0"].ExcludedReason != "not_canary" {
+		t.Fatalf("ExcludedReason = %q, want not_canary", state.Workers["heph-worker-0"].ExcludedReason)
+	}
 }
 
 func TestNATSFleetManager_Heartbeat(t *testing.T) {
