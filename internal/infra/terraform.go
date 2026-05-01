@@ -64,6 +64,27 @@ func (t *TerraformClient) Apply(ctx context.Context, workDir string, vars map[st
 	return nil
 }
 
+// ApplyReplace runs terraform apply while forcing replacement of the provided
+// resource addresses.
+func (t *TerraformClient) ApplyReplace(ctx context.Context, workDir string, vars map[string]string, replaceAddrs []string, stream io.Writer) error {
+	t.logger.Info("Running terraform apply -replace in %s", workDir)
+	args := []string{"terraform", "apply", "-auto-approve", "-input=false", "-no-color"}
+	for _, addr := range replaceAddrs {
+		if addr == "" {
+			continue
+		}
+		args = append(args, "-replace="+addr)
+	}
+	args = append(args, varFlags(vars)...)
+
+	result, err := t.runCmd(ctx, workDir, stream, args...)
+	if err != nil {
+		t.logger.Error("terraform apply -replace failed: %s", string(result.Stderr))
+		return fmt.Errorf("terraform apply -replace: %w", err)
+	}
+	return nil
+}
+
 // Destroy runs terraform destroy with auto-approve and streams output.
 func (t *TerraformClient) Destroy(ctx context.Context, workDir string, stream io.Writer) error {
 	t.logger.Info("Running terraform destroy in %s", workDir)

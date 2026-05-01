@@ -21,7 +21,9 @@ const usage = `Usage: heph <command> [options]
 Commands:
   nmap     Run an nmap scan (auto-deploys infrastructure if needed)
   scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
-  infra    Manage cloud infrastructure explicitly (deploy/destroy)
+  infra    Manage cloud infrastructure explicitly (deploy/destroy/backup/recover)
+  fleet    Inspect and manage provider-native fleet state
+  bench    Run provider-native fleet benchmark probes
   status   Check job status (--job-id required)
   doctor   Check prerequisites and environment health
   init     Set up or update operator defaults (region, profile, workers, etc.)
@@ -44,6 +46,10 @@ func run(args []string, log logger.Logger) error {
 		return runScan(cmdArgs, log)
 	case "infra":
 		return runInfra(cmdArgs, log)
+	case "fleet":
+		return runFleet(cmdArgs, log)
+	case "bench":
+		return runBench(cmdArgs, log)
 	case "status":
 		return runStatus(cmdArgs, log)
 	case "doctor":
