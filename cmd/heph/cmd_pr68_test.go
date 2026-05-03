@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"heph4estus/internal/bench"
+	"heph4estus/internal/fleetstate"
+	"heph4estus/internal/infra"
 )
 
 func TestRunFleetNoSubcommand(t *testing.T) {
@@ -54,6 +56,16 @@ func TestRunInfraBackupRequiresOutput(t *testing.T) {
 
 func TestRunInfraRecoverRequiresFrom(t *testing.T) {
 	err := runInfraRecover([]string{"--tool", "httpx", "--cloud", "hetzner"}, testLogger())
+	if err == nil {
+		t.Fatal("expected missing --from error")
+	}
+	if !strings.Contains(err.Error(), "--from flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunInfraBackupInspectRequiresFrom(t *testing.T) {
+	err := runInfraBackup([]string{"inspect"}, testLogger())
 	if err == nil {
 		t.Fatal("expected missing --from error")
 	}
@@ -165,5 +177,41 @@ func TestRunBenchHistoryJSON(t *testing.T) {
 	}
 	if len(reports) != 1 || reports[0].Tool != "httpx" {
 		t.Fatalf("unexpected reports: %+v", reports)
+	}
+}
+
+func TestOutputRecoveryManifestText(t *testing.T) {
+	manifest := fleetstate.BuildRecoveryManifest("httpx", "hetzner", map[string]string{"generation_id": "gen-1", "worker_count": "4"}, nil, nil)
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	err := outputRecoveryManifestText(manifest)
+	_ = w.Close()
+	os.Stdout = old
+	if err != nil {
+		t.Fatalf("outputRecoveryManifestText: %v", err)
+	}
+	buf := make([]byte, 2048)
+	n, _ := r.Read(buf)
+	out := string(buf[:n])
+	for _, want := range []string{"Manifest:", "Tool:        httpx", "Generation:  gen-1", "Workers:     4"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestPlanRecoveryActionReadyMismatchForcesDeploy(t *testing.T) {
+	manifest := fleetstate.BuildRecoveryManifest("httpx", "hetzner", map[string]string{"generation_id": "gen-new", "worker_count": "8", "nats_url": "nats://x"}, nil, nil)
+	probe := infra.ProbeResult{Status: infra.StatusReady, Outputs: map[string]string{"generation_id": "gen-old", "worker_count": "8"}}
+	shouldDeploy, action, reason, err := planRecoveryAction(manifest, probe, false)
+	if err != nil {
+		t.Fatalf("planRecoveryAction: %v", err)
+	}
+	if !shouldDeploy {
+		t.Fatal("expected deploy when generation mismatches")
+	}
+	if !strings.Contains(action, "redeploy") || !strings.Contains(reason, "generation mismatch") {
+		t.Fatalf("unexpected action=%q reason=%q", action, reason)
 	}
 }
