@@ -138,6 +138,9 @@ func replaceWorkerIndexes(ctx context.Context, cfg *infra.ToolConfig, kind cloud
 	for k, v := range varsOverride {
 		vars[k] = v
 	}
+	if err := infra.ValidateProviderNativeTerraformVars(kind, vars); err != nil {
+		return err
+	}
 	tf := infra.NewTerraformClient(stream)
 	return tf.ApplyReplace(ctx, cfg.TerraformDir, vars, addrs, nil)
 }
