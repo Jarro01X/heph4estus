@@ -71,6 +71,8 @@ module "controller" {
   controller_ip = hcloud_primary_ip.controller.ip_address
   tool_name     = var.tool_name
   minio_bucket  = var.minio_bucket
+
+  controller_security_mode = var.controller_security_mode
 }
 
 # --- Networking ---

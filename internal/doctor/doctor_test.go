@@ -266,8 +266,8 @@ func TestRunAll_ReturnsAllChecks(t *testing.T) {
 	d := baseDeps()
 	d.Getenv = envWith(map[string]string{"AWS_REGION": "us-east-1"})
 	results := RunAll(context.Background(), d)
-	if len(results) != 13 {
-		t.Fatalf("expected 13 checks, got %d", len(results))
+	if len(results) != 15 {
+		t.Fatalf("expected 15 checks, got %d", len(results))
 	}
 }
 
@@ -309,7 +309,9 @@ func TestRunAll_OrderIsStable(t *testing.T) {
 		"hetzner_token",
 		"hetzner_ssh_key",
 		"linode_token",
+		"linode_ssh_key",
 		"vultr_api_key",
+		"vultr_ssh_key",
 	}
 	for i, name := range expected {
 		if results[i].Name != name {
@@ -469,6 +471,7 @@ func TestRunForCloud_Linode(t *testing.T) {
 
 	names := checkNames(results)
 	assertContains(t, names, "linode_token")
+	assertContains(t, names, "linode_ssh_key")
 	assertContains(t, names, "controller_reachable")
 	assertNotContains(t, names, "aws_binary")
 	assertNotContains(t, names, "hetzner_token")
@@ -481,6 +484,7 @@ func TestRunForCloud_Vultr(t *testing.T) {
 
 	names := checkNames(results)
 	assertContains(t, names, "vultr_api_key")
+	assertContains(t, names, "vultr_ssh_key")
 	assertContains(t, names, "controller_reachable")
 	assertNotContains(t, names, "aws_binary")
 	assertNotContains(t, names, "hetzner_token")
@@ -540,6 +544,53 @@ func TestCheckRegistryExposure_Unset(t *testing.T) {
 	r := checkRegistryExposure(d)
 	if r.Status != StatusWarn {
 		t.Fatalf("expected warn, got %s: %s", r.Status, r.Summary)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
+	results := RunProviderNativeOutputChecks(cloud.KindHetzner, map[string]string{
+		"controller_security_mode": "private-auth",
+		"nats_url":                 "nats://heph:secret@10.0.1.2:4222",
+		"nats_user":                "heph",
+		"nats_password":            "secret",
+		"nats_tls_enabled":         "false",
+		"nats_auth_enabled":        "true",
+		"s3_endpoint":              "http://10.0.1.2:9000",
+		"minio_tls_enabled":        "false",
+		"registry_url":             "10.0.1.2:5000",
+		"registry_tls_enabled":     "false",
+		"registry_auth_enabled":    "false",
+	})
+
+	names := checkNames(results)
+	assertContains(t, names, "controller_security_mode")
+	assertContains(t, names, "nats_auth_posture")
+	assertContains(t, names, "nats_tls_posture")
+	assertContains(t, names, "minio_tls_posture")
+	assertContains(t, names, "registry_tls_posture")
+	assertContains(t, names, "registry_auth_posture")
+
+	if results[0].Status != StatusWarn {
+		t.Fatalf("private-auth mode should warn, got %s", results[0].Status)
+	}
+	if HasFailures(results) {
+		t.Fatalf("private-auth compatibility outputs should warn but not fail: %+v", results)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_TLSModeRequiresTLSEndpoints(t *testing.T) {
+	results := RunProviderNativeOutputChecks(cloud.KindHetzner, map[string]string{
+		"controller_security_mode": "tls",
+		"nats_url":                 "nats://heph:secret@10.0.1.2:4222",
+		"nats_user":                "heph",
+		"nats_password":            "secret",
+		"nats_auth_enabled":        "true",
+		"s3_endpoint":              "http://10.0.1.2:9000",
+		"registry_url":             "10.0.1.2:5000",
+	})
+
+	if !HasFailures(results) {
+		t.Fatalf("tls mode without TLS endpoints should fail: %+v", results)
 	}
 }
 

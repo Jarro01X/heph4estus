@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"heph4estus/internal/cloud"
@@ -83,8 +84,10 @@ func RunAll(ctx context.Context, deps Deps) []CheckResult {
 		checkHetznerSSHKey(deps),
 		// Linode checks.
 		checkLinodeToken(deps),
+		checkLinodeSSHKey(deps),
 		// Vultr checks.
 		checkVultrAPIKey(deps),
+		checkVultrSSHKey(deps),
 	}
 }
 
@@ -123,6 +126,7 @@ func RunForCloud(ctx context.Context, deps Deps, kind cloud.Kind) []CheckResult 
 	case cloud.KindLinode:
 		return append(common,
 			checkLinodeToken(deps),
+			checkLinodeSSHKey(deps),
 			checkControllerReachable(deps),
 			checkNATSAuth(deps),
 			checkRegistryExposure(deps),
@@ -130,6 +134,7 @@ func RunForCloud(ctx context.Context, deps Deps, kind cloud.Kind) []CheckResult 
 	case cloud.KindVultr:
 		return append(common,
 			checkVultrAPIKey(deps),
+			checkVultrSSHKey(deps),
 			checkControllerReachable(deps),
 			checkNATSAuth(deps),
 			checkRegistryExposure(deps),
@@ -143,6 +148,22 @@ func RunForCloud(ctx context.Context, deps Deps, kind cloud.Kind) []CheckResult 
 	default:
 		// Unknown provider — return the full set.
 		return RunAll(ctx, deps)
+	}
+}
+
+// RunProviderNativeOutputChecks validates the security posture surfaced by
+// Terraform outputs for provider-native controller fleets.
+func RunProviderNativeOutputChecks(kind cloud.Kind, outputs map[string]string) []CheckResult {
+	if !kind.IsProviderNative() {
+		return nil
+	}
+	return []CheckResult{
+		checkControllerSecurityMode(outputs),
+		checkOutputNATSAuth(outputs),
+		checkOutputNATSTLS(outputs),
+		checkOutputMinIOTLS(outputs),
+		checkOutputRegistryTLS(outputs),
+		checkOutputRegistryAuth(outputs),
 	}
 }
 
@@ -341,30 +362,65 @@ func checkHetznerToken(deps Deps) CheckResult {
 
 // checkHetznerSSHKey checks for an SSH key that can be used for Hetzner VMs.
 func checkHetznerSSHKey(deps Deps) CheckResult {
+	return checkProviderSSHKey(deps, "hetzner", "Hetzner")
+}
+
+func checkLinodeSSHKey(deps Deps) CheckResult {
+	return checkProviderSSHKey(deps, "linode", "Linode")
+}
+
+func checkVultrSSHKey(deps Deps) CheckResult {
+	return checkProviderSSHKey(deps, "vultr", "Vultr")
+}
+
+func checkProviderSSHKey(deps Deps, name, label string) CheckResult {
+	for _, env := range []string{"HEPH_SSH_PUBLIC_KEY", "SSH_PUBLIC_KEY"} {
+		if deps.Getenv(env) != "" {
+			return CheckResult{
+				Name:    name + "_ssh_key",
+				Status:  StatusPass,
+				Summary: fmt.Sprintf("SSH public key found in %s", env),
+			}
+		}
+	}
+	for _, env := range []string{"HEPH_SSH_PUBLIC_KEY_PATH", "SSH_PUBLIC_KEY_PATH"} {
+		path := deps.Getenv(env)
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			return CheckResult{
+				Name:    name + "_ssh_key",
+				Status:  StatusPass,
+				Summary: fmt.Sprintf("SSH public key found at %s", path),
+			}
+		}
+	}
+
 	// Check common SSH key paths.
 	home := deps.Getenv("HOME")
 	if home == "" {
 		return CheckResult{
-			Name:    "hetzner_ssh_key",
+			Name:    name + "_ssh_key",
 			Status:  StatusWarn,
 			Summary: "Cannot determine HOME directory for SSH key check",
 		}
 	}
-	for _, name := range []string{"id_ed25519", "id_rsa"} {
-		path := filepath.Join(home, ".ssh", name+".pub")
+	for _, keyName := range []string{"id_ed25519", "id_rsa"} {
+		path := filepath.Join(home, ".ssh", keyName+".pub")
 		if _, err := os.Stat(path); err == nil {
 			return CheckResult{
-				Name:    "hetzner_ssh_key",
+				Name:    name + "_ssh_key",
 				Status:  StatusPass,
 				Summary: fmt.Sprintf("SSH public key found at %s", path),
 			}
 		}
 	}
 	return CheckResult{
-		Name:    "hetzner_ssh_key",
+		Name:    name + "_ssh_key",
 		Status:  StatusWarn,
-		Summary: "No SSH public key found in ~/.ssh/ (needed for Hetzner VM access)",
-		Fix:     "Generate an SSH key with 'ssh-keygen -t ed25519' or skip if not using Hetzner.",
+		Summary: fmt.Sprintf("No SSH public key found for %s VM access", label),
+		Fix:     "Set HEPH_SSH_PUBLIC_KEY_PATH, set HEPH_SSH_PUBLIC_KEY, or generate an SSH key with 'ssh-keygen -t ed25519'.",
 	}
 }
 
@@ -488,6 +544,164 @@ func checkRegistryExposure(deps Deps) CheckResult {
 		Summary: "Container registry is using HTTP (insecure); images are pulled without TLS",
 		Fix:     "Configure TLS for the registry or restrict access to the private network.",
 	}
+}
+
+func checkControllerSecurityMode(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	switch mode {
+	case "private-auth":
+		return CheckResult{
+			Name:    "controller_security_mode",
+			Status:  StatusWarn,
+			Summary: "Controller security mode is private-auth compatibility mode",
+			Fix:     "Use controller_security_mode=tls after the TLS hardening path is enabled.",
+		}
+	case "tls":
+		return CheckResult{
+			Name:    "controller_security_mode",
+			Status:  StatusPass,
+			Summary: "Controller security mode is tls",
+		}
+	case "mtls":
+		return CheckResult{
+			Name:    "controller_security_mode",
+			Status:  StatusPass,
+			Summary: "Controller security mode is mtls",
+		}
+	case "":
+		return CheckResult{
+			Name:    "controller_security_mode",
+			Status:  StatusWarn,
+			Summary: "Controller security mode output is missing",
+			Fix:     "Redeploy or recover the provider-native fleet so hardening posture outputs are available.",
+		}
+	default:
+		return CheckResult{
+			Name:    "controller_security_mode",
+			Status:  StatusFail,
+			Summary: fmt.Sprintf("Controller security mode %q is unsupported", mode),
+			Fix:     "Use one of: private-auth, tls, mtls.",
+		}
+	}
+}
+
+func checkOutputNATSAuth(outputs map[string]string) CheckResult {
+	if outputBool(outputs["nats_auth_enabled"]) || (strings.TrimSpace(outputs["nats_user"]) != "" && strings.TrimSpace(outputs["nats_password"]) != "") {
+		return CheckResult{
+			Name:    "nats_auth_posture",
+			Status:  StatusPass,
+			Summary: "NATS authentication is enabled in provider outputs",
+		}
+	}
+	return CheckResult{
+		Name:    "nats_auth_posture",
+		Status:  StatusFail,
+		Summary: "NATS authentication is not enabled in provider outputs",
+		Fix:     "Redeploy with authenticated NATS before using this controller fleet.",
+	}
+}
+
+func checkOutputNATSTLS(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	enabled := outputBool(outputs["nats_tls_enabled"])
+	natsURL := strings.TrimSpace(outputs["nats_url"])
+	if mode == "tls" || mode == "mtls" {
+		if enabled && strings.HasPrefix(natsURL, "tls://") {
+			return CheckResult{Name: "nats_tls_posture", Status: StatusPass, Summary: "NATS TLS is enabled"}
+		}
+		return CheckResult{
+			Name:    "nats_tls_posture",
+			Status:  StatusFail,
+			Summary: "Controller security mode requires NATS TLS, but outputs do not show a tls:// NATS endpoint",
+			Fix:     "Redeploy after enabling NATS TLS support and verify nats_tls_enabled plus nats_url.",
+		}
+	}
+	if enabled || strings.HasPrefix(natsURL, "tls://") {
+		return CheckResult{Name: "nats_tls_posture", Status: StatusPass, Summary: "NATS TLS is enabled"}
+	}
+	return CheckResult{
+		Name:    "nats_tls_posture",
+		Status:  StatusWarn,
+		Summary: "NATS TLS is disabled in private-auth compatibility mode",
+		Fix:     "Restrict NATS to the private fleet network and migrate to controller_security_mode=tls when available.",
+	}
+}
+
+func checkOutputMinIOTLS(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	enabled := outputBool(outputs["minio_tls_enabled"])
+	endpoint := strings.TrimSpace(outputs["s3_endpoint"])
+	if mode == "tls" || mode == "mtls" {
+		if enabled && strings.HasPrefix(endpoint, "https://") {
+			return CheckResult{Name: "minio_tls_posture", Status: StatusPass, Summary: "MinIO TLS is enabled"}
+		}
+		return CheckResult{
+			Name:    "minio_tls_posture",
+			Status:  StatusFail,
+			Summary: "Controller security mode requires MinIO TLS, but outputs do not show an https:// S3 endpoint",
+			Fix:     "Redeploy after enabling MinIO TLS support and verify minio_tls_enabled plus s3_endpoint.",
+		}
+	}
+	if enabled || strings.HasPrefix(endpoint, "https://") {
+		return CheckResult{Name: "minio_tls_posture", Status: StatusPass, Summary: "MinIO TLS is enabled"}
+	}
+	return CheckResult{
+		Name:    "minio_tls_posture",
+		Status:  StatusWarn,
+		Summary: "MinIO TLS is disabled in private-auth compatibility mode",
+		Fix:     "Restrict MinIO to the private fleet network and migrate to controller_security_mode=tls when available.",
+	}
+}
+
+func checkOutputRegistryTLS(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	enabled := outputBool(outputs["registry_tls_enabled"])
+	registryURL := strings.TrimSpace(outputs["registry_url"])
+	if mode == "tls" || mode == "mtls" {
+		if enabled && hasHTTPSScheme(registryURL) {
+			return CheckResult{Name: "registry_tls_posture", Status: StatusPass, Summary: "Registry TLS is enabled"}
+		}
+		return CheckResult{
+			Name:    "registry_tls_posture",
+			Status:  StatusFail,
+			Summary: "Controller security mode requires registry TLS, but outputs do not show an HTTPS registry endpoint",
+			Fix:     "Redeploy after enabling registry TLS and update Docker trust bootstrap.",
+		}
+	}
+	if enabled || hasHTTPSScheme(registryURL) {
+		return CheckResult{Name: "registry_tls_posture", Status: StatusPass, Summary: "Registry TLS is enabled"}
+	}
+	return CheckResult{
+		Name:    "registry_tls_posture",
+		Status:  StatusWarn,
+		Summary: "Registry TLS is disabled in private-auth compatibility mode",
+		Fix:     "Restrict the registry to the private fleet network and migrate to controller_security_mode=tls when available.",
+	}
+}
+
+func checkOutputRegistryAuth(outputs map[string]string) CheckResult {
+	if outputBool(outputs["registry_auth_enabled"]) {
+		return CheckResult{Name: "registry_auth_posture", Status: StatusPass, Summary: "Registry authentication is enabled"}
+	}
+	return CheckResult{
+		Name:    "registry_auth_posture",
+		Status:  StatusWarn,
+		Summary: "Registry authentication is disabled",
+		Fix:     "Keep the registry private-network-only and enable registry auth in the credential-scoping hardening slice.",
+	}
+}
+
+func outputBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasHTTPSScheme(value string) bool {
+	return strings.HasPrefix(value, "https://")
 }
 
 func checkOutputDir(deps Deps) CheckResult {

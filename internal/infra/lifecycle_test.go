@@ -12,15 +12,15 @@ import (
 // fullOutputs returns a complete set of terraform outputs for testing.
 func fullOutputs(tool string) map[string]string {
 	return map[string]string{
-		"tool_name":           tool,
-		"sqs_queue_url":       "https://sqs.example.com/q",
-		"s3_bucket_name":      "results-bucket",
-		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/" + tool,
-		"ecs_cluster_name":    "cluster",
-		"task_definition_arn": "arn:aws:ecs:td",
-		"subnet_ids":          "[subnet-a subnet-b]",
-		"security_group_id":   "sg-123",
-		"ami_id":              "ami-123",
+		"tool_name":            tool,
+		"sqs_queue_url":        "https://sqs.example.com/q",
+		"s3_bucket_name":       "results-bucket",
+		"ecr_repo_url":         "123.dkr.ecr.us-east-1.amazonaws.com/" + tool,
+		"ecs_cluster_name":     "cluster",
+		"task_definition_arn":  "arn:aws:ecs:td",
+		"subnet_ids":           "[subnet-a subnet-b]",
+		"security_group_id":    "sg-123",
+		"ami_id":               "ami-123",
 		"instance_profile_arn": "arn:aws:iam::role",
 	}
 }
@@ -329,10 +329,17 @@ func TestRequiredOutputKeysForCloud_Hetzner(t *testing.T) {
 		t.Fatalf("Hetzner keys length = %d, want %d", len(keys), len(HetznerRequiredOutputKeys))
 	}
 	want := map[string]bool{
-		"nats_url":      true,
-		"controller_ip": true,
-		"generation_id": true,
-		"worker_hosts":  true,
+		"controller_security_mode": true,
+		"nats_url":                 true,
+		"nats_tls_enabled":         true,
+		"nats_auth_enabled":        true,
+		"minio_tls_enabled":        true,
+		"minio_auth_enabled":       true,
+		"registry_tls_enabled":     true,
+		"registry_auth_enabled":    true,
+		"controller_ip":            true,
+		"generation_id":            true,
+		"worker_hosts":             true,
 	}
 	for _, k := range keys {
 		delete(want, k)
@@ -348,10 +355,17 @@ func TestRequiredOutputKeysForCloud_Linode(t *testing.T) {
 		t.Fatalf("Linode keys length = %d, want %d", len(keys), len(LinodeRequiredOutputKeys))
 	}
 	want := map[string]bool{
-		"nats_url":      true,
-		"controller_ip": true,
-		"generation_id": true,
-		"worker_hosts":  true,
+		"controller_security_mode": true,
+		"nats_url":                 true,
+		"nats_tls_enabled":         true,
+		"nats_auth_enabled":        true,
+		"minio_tls_enabled":        true,
+		"minio_auth_enabled":       true,
+		"registry_tls_enabled":     true,
+		"registry_auth_enabled":    true,
+		"controller_ip":            true,
+		"generation_id":            true,
+		"worker_hosts":             true,
 	}
 	for _, k := range keys {
 		delete(want, k)
@@ -402,15 +416,22 @@ func hetznerOutputs(tool string) string {
 	return fmt.Sprintf(`{
 		"tool_name":{"value":"%s"},
 		"cloud":{"value":"hetzner"},
+		"controller_security_mode":{"value":"private-auth"},
 		"nats_url":{"value":"nats://heph:secret@10.0.1.2:4222"},
 		"nats_stream":{"value":"heph"},
 		"nats_user":{"value":"heph"},
 		"nats_password":{"value":"secret"},
+		"nats_tls_enabled":{"value":"false"},
+		"nats_auth_enabled":{"value":"true"},
 		"s3_endpoint":{"value":"http://10.0.1.2:9000"},
 		"s3_access_key":{"value":"admin"},
 		"s3_secret_key":{"value":"secret"},
 		"s3_bucket_name":{"value":"heph-results"},
+		"minio_tls_enabled":{"value":"false"},
+		"minio_auth_enabled":{"value":"true"},
 		"registry_url":{"value":"10.0.1.2:5000"},
+		"registry_tls_enabled":{"value":"false"},
+		"registry_auth_enabled":{"value":"false"},
 		"docker_image":{"value":"scanner-nmap:latest"},
 		"sqs_queue_url":{"value":"nmap"},
 		"controller_ip":{"value":"1.2.3.4"},

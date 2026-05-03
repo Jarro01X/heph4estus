@@ -92,12 +92,17 @@ Both `heph scan` and `heph nmap` accept these lifecycle flags:
 - `--auto-approve` — skip deploy confirmation prompts when lifecycle work is needed
 - `--destroy-after` — tear down infrastructure after the run completes
 
+Both scan commands also accept provider/runtime flags including `--cloud`, `--workers`, `--placement`, `--max-workers-per-host`, `--min-unique-ips`, `--ipv6-required`, and `--dual-stack-required`. Placement flags matter on provider-native VPS fleets: `diversity` is the default and admits one worker per healthy public IP, while `throughput` allows multiple workers per host when raw concurrency matters more than source-IP diversity.
+
 ```bash
 # CI pipeline: deploy, scan, tear down, no prompts
 ./bin/heph nmap --file targets.txt --auto-approve --destroy-after
 
 # Explicit "infra must already exist" mode
 ./bin/heph scan --tool httpx --file targets.txt --no-deploy
+
+# VPS diversity gate: wait for 25 unique IPv4-backed workers before scanning
+./bin/heph scan --tool httpx --file targets.txt --cloud hetzner --workers 25 --min-unique-ips 25
 ```
 
 ### 5. VPS Scan Execution
@@ -169,6 +174,8 @@ What success looks like:
 - Workers read from NATS and upload results to `SELFHOSTED_BUCKET`
 - `heph status --job-id <id>` can reattach using recorded job metadata
 
+Cleanup note: `manual` mode is operator-managed infrastructure, so `--destroy-after` is intentionally skipped. Use `manual` when you own the controller and worker lifecycle yourself; use `hetzner`, `linode`, or `vultr` when you want Heph to own deploy/destroy.
+
 #### Provider-Native VPS Paths (`--cloud hetzner|linode|vultr`)
 
 For the provider-native VPS paths, normal operator flows do not require the raw `SELFHOSTED_*` runtime contract above. The expected flow is:
@@ -181,10 +188,76 @@ For the provider-native VPS paths, normal operator flows do not require the raw 
 
 On these paths, Terraform provisions the controller and worker VMs, cloud-init boots the persistent worker service, workers self-register with the fleet manager, and the scan waits for fleet readiness instead of SSH-launching workers from the operator machine. SSH remains a bootstrap/debug tool, not the normal orchestration model.
 
+Provider setup:
+
+- Hetzner: set `HCLOUD_TOKEN`
+- Linode: set `LINODE_TOKEN`
+- Vultr: set `VULTR_API_KEY`
+- SSH public key: Heph uses `HEPH_SSH_PUBLIC_KEY`, `SSH_PUBLIC_KEY`, `HEPH_SSH_PUBLIC_KEY_PATH`, `SSH_PUBLIC_KEY_PATH`, or the first existing `~/.ssh/id_ed25519.pub` / `~/.ssh/id_rsa.pub`
+
+```bash
+export HCLOUD_TOKEN="..."
+export HEPH_SSH_PUBLIC_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
+
+./bin/heph init \
+  --cloud hetzner \
+  --placement diversity \
+  --workers 25 \
+  --min-unique-ips 25 \
+  --output-dir ./results \
+  --cleanup-policy destroy-after
+
+./bin/heph doctor --cloud hetzner
+```
+
+Cost and teardown posture:
+- Provider-native defaults create one controller plus three worker VMs unless `--workers` on scan sets a different `worker_count` for deploy.
+- VPS providers bill while VMs exist. Use `--destroy-after` for one-shot runs or `./bin/heph infra destroy --tool <tool> --cloud <provider>` after validation.
+- Use `--out <dir>` or a saved output directory before destroy if you need local result copies. Results in MinIO disappear when the controller VM is destroyed.
+
+Security posture:
+- New provider-native Terraform outputs include `controller_security_mode` plus NATS, MinIO, and registry TLS/auth posture flags.
+- The current compatibility mode is `private-auth`: provider firewalls keep controller services private and NATS/MinIO require credentials, but NATS, MinIO, and the controller registry are not yet using TLS.
+- After deploy, run `./bin/heph doctor --cloud <provider> --tool <tool>` to read Terraform outputs and report controller security posture. TLS and credential rotation are tracked as Phase 6 security hardening work.
+
+Useful provider-native fleet operations:
+
+```bash
+# Provider-specific prerequisite checks
+./bin/heph doctor --cloud hetzner
+
+# Provider-specific checks plus deployed controller security posture
+./bin/heph doctor --cloud hetzner --tool nmap
+
+# Inspect fleet health, IP diversity, placement, rollout, and reputation state
+./bin/heph fleet status --tool nmap --cloud hetzner
+
+# Repair unhealthy or quarantined workers
+./bin/heph fleet reconcile --tool nmap --cloud hetzner
+
+# Quarantine or clear a public IP
+./bin/heph fleet quarantine --cloud hetzner --ip 203.0.113.10 --reason "rate limited"
+./bin/heph fleet unquarantine --cloud hetzner --ip 203.0.113.10
+
+# Canary a new worker image and promote or roll back
+./bin/heph fleet rollout start --tool nmap --cloud hetzner
+./bin/heph fleet rollout status --tool nmap --cloud hetzner
+
+# Benchmark deploy/readiness/IP diversity and compare recent runs
+./bin/heph bench fleet --tool nmap --cloud hetzner
+./bin/heph bench history --tool nmap --cloud hetzner
+
+# Save/inspect/recover local fleet recovery metadata
+./bin/heph infra backup --tool nmap --cloud hetzner --output recovery/nmap-hetzner.json
+./bin/heph infra backup inspect --from recovery/nmap-hetzner.json
+./bin/heph infra recover --tool nmap --cloud hetzner --from recovery/nmap-hetzner.json --dry-run
+```
+
 What is not yet supported:
 - `scaleway` provider-native deploy UX; use `manual` for operator-managed Scaleway environments today
 - `manual` becoming a zero-config mainstream path; it remains expert mode
 - Automatic controller-output consumption for `manual`; the manual path still uses the env-driven contract above
+- Live provider validation coverage in this repo; real Hetzner/Linode/Vultr smoke tests still need to be run against throwaway accounts before calling Phase 6 fully production-ready
 
 ### 6. Explicit Infrastructure Management
 
@@ -193,6 +266,9 @@ What is not yet supported:
 ```bash
 # Deploy infrastructure for a tool
 ./bin/heph infra deploy --tool nmap
+
+# Deploy provider-native VPS infrastructure
+./bin/heph infra deploy --tool nmap --cloud hetzner
 
 # Tear down (empty S3 bucket first if destroy fails)
 ./bin/heph infra destroy --tool nmap

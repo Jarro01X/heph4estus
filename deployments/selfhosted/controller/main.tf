@@ -31,7 +31,14 @@ resource "random_password" "nats_password" {
 # --- Cloud-init rendering ---
 
 locals {
-  nats_user = "heph"
+  nats_user                = "heph"
+  nats_tls_enabled         = contains(["tls", "mtls"], var.controller_security_mode)
+  minio_tls_enabled        = contains(["tls", "mtls"], var.controller_security_mode)
+  registry_tls_enabled     = contains(["tls", "mtls"], var.controller_security_mode)
+  registry_auth_enabled    = false
+  nats_auth_enabled        = true
+  minio_auth_enabled       = true
+  controller_security_mode = var.controller_security_mode
 
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml", {
     minio_access_key   = random_id.minio_access_key.hex
