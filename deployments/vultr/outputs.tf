@@ -16,6 +16,41 @@ output "cloud" {
   value       = "vultr"
 }
 
+output "controller_security_mode" {
+  description = "Controller service security mode."
+  value       = module.controller.controller_security_mode
+}
+
+output "nats_tls_enabled" {
+  description = "Whether the NATS client listener is configured for TLS."
+  value       = module.controller.nats_tls_enabled
+}
+
+output "nats_auth_enabled" {
+  description = "Whether the NATS client listener requires authentication."
+  value       = module.controller.nats_auth_enabled
+}
+
+output "minio_tls_enabled" {
+  description = "Whether the MinIO S3 API is configured for TLS."
+  value       = module.controller.minio_tls_enabled
+}
+
+output "minio_auth_enabled" {
+  description = "Whether MinIO requires credentials."
+  value       = module.controller.minio_auth_enabled
+}
+
+output "registry_tls_enabled" {
+  description = "Whether the controller registry is configured for TLS."
+  value       = module.controller.registry_tls_enabled
+}
+
+output "registry_auth_enabled" {
+  description = "Whether the controller registry requires authentication."
+  value       = module.controller.registry_auth_enabled
+}
+
 output "nats_url" {
   description = "NATS client URL for workers and the operator CLI (includes auth credentials)."
   value       = "nats://${module.controller.nats_user}:${module.controller.nats_password}@${vultr_instance.controller.main_ip}:4222"

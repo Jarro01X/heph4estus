@@ -123,6 +123,8 @@ module "controller" {
   controller_ip = "0.0.0.0"
   tool_name     = var.tool_name
   minio_bucket  = var.minio_bucket
+
+  controller_security_mode = var.controller_security_mode
 }
 
 # --- Controller Instance ---

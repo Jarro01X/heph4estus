@@ -115,6 +115,8 @@ module "controller" {
   controller_ip = "0.0.0.0"
   tool_name     = var.tool_name
   minio_bucket  = var.minio_bucket
+
+  controller_security_mode = var.controller_security_mode
 }
 
 # --- Controller Instance ---
@@ -125,7 +127,7 @@ resource "linode_instance" "controller" {
   type   = var.controller_type
   image  = "linode/ubuntu24.04"
 
-  root_pass      = random_password.root_pass.result
+  root_pass       = random_password.root_pass.result
   authorized_keys = [trimspace(var.ssh_public_key)]
 
   metadata {
@@ -181,7 +183,7 @@ resource "linode_instance" "worker" {
   type   = var.worker_type
   image  = "linode/ubuntu24.04"
 
-  root_pass      = random_password.root_pass.result
+  root_pass       = random_password.root_pass.result
   authorized_keys = [trimspace(var.ssh_public_key)]
 
   metadata {

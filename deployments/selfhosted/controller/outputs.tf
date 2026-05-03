@@ -15,6 +15,41 @@ output "nats_url" {
   value       = "nats://${var.controller_ip}:${var.nats_port}"
 }
 
+output "controller_security_mode" {
+  description = "Controller service security mode."
+  value       = local.controller_security_mode
+}
+
+output "nats_tls_enabled" {
+  description = "Whether the NATS client listener is configured for TLS."
+  value       = local.nats_tls_enabled
+}
+
+output "nats_auth_enabled" {
+  description = "Whether the NATS client listener requires authentication."
+  value       = local.nats_auth_enabled
+}
+
+output "minio_tls_enabled" {
+  description = "Whether the MinIO S3 API is configured for TLS."
+  value       = local.minio_tls_enabled
+}
+
+output "minio_auth_enabled" {
+  description = "Whether MinIO requires credentials."
+  value       = local.minio_auth_enabled
+}
+
+output "registry_tls_enabled" {
+  description = "Whether the controller registry is configured for TLS."
+  value       = local.registry_tls_enabled
+}
+
+output "registry_auth_enabled" {
+  description = "Whether the controller registry requires authentication."
+  value       = local.registry_auth_enabled
+}
+
 output "nats_stream" {
   description = "NATS JetStream stream name."
   value       = var.nats_stream_name

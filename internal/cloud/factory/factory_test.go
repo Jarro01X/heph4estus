@@ -345,6 +345,14 @@ func TestSelfhostedConfigFromOutputs(t *testing.T) {
 		"registry_url":   "10.0.1.2:5000",
 		"docker_image":   "heph-nmap-worker:latest",
 		"worker_hosts":   "203.0.113.10,203.0.113.11",
+
+		"controller_security_mode": "private-auth",
+		"nats_tls_enabled":         "false",
+		"nats_auth_enabled":        "true",
+		"minio_tls_enabled":        "false",
+		"minio_auth_enabled":       "true",
+		"registry_tls_enabled":     "false",
+		"registry_auth_enabled":    "false",
 	})
 
 	if cfg.QueueID != "heph-tasks" {
@@ -355,6 +363,15 @@ func TestSelfhostedConfigFromOutputs(t *testing.T) {
 	}
 	if len(cfg.WorkerHosts) != 2 {
 		t.Fatalf("WorkerHosts = %v, want 2 entries", cfg.WorkerHosts)
+	}
+	if cfg.ControllerSecurityMode != "private-auth" {
+		t.Fatalf("ControllerSecurityMode = %q, want private-auth", cfg.ControllerSecurityMode)
+	}
+	if !cfg.NATSAuthEnabled || !cfg.MinIOAuthEnabled {
+		t.Fatalf("expected NATS and MinIO auth enabled, got nats=%t minio=%t", cfg.NATSAuthEnabled, cfg.MinIOAuthEnabled)
+	}
+	if cfg.NATSTLSEnabled || cfg.MinIOTLSEnabled || cfg.RegistryTLSEnabled || cfg.RegistryAuthEnabled {
+		t.Fatalf("unexpected TLS/auth posture: natsTLS=%t minioTLS=%t registryTLS=%t registryAuth=%t", cfg.NATSTLSEnabled, cfg.MinIOTLSEnabled, cfg.RegistryTLSEnabled, cfg.RegistryAuthEnabled)
 	}
 }
 

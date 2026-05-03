@@ -14,6 +14,17 @@ variable "minio_bucket" {
   default     = "heph-results"
 }
 
+variable "controller_security_mode" {
+  description = "Controller service security mode. private-auth is the current compatibility mode; tls and mtls are reserved for hardened controller service transport."
+  type        = string
+  default     = "private-auth"
+
+  validation {
+    condition     = contains(["private-auth", "tls", "mtls"], var.controller_security_mode)
+    error_message = "controller_security_mode must be one of: private-auth, tls, mtls."
+  }
+}
+
 variable "nats_port" {
   description = "NATS client port."
   type        = number

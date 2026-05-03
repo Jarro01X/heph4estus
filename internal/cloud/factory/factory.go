@@ -37,6 +37,16 @@ type SelfhostedConfig struct {
 	AckWaitSeconds int
 	MaxDeliver     int
 
+	// Provider-native controller security posture, derived from Terraform
+	// outputs when Heph owns the controller fleet.
+	ControllerSecurityMode string
+	NATSTLSEnabled         bool
+	NATSAuthEnabled        bool
+	MinIOTLSEnabled        bool
+	MinIOAuthEnabled       bool
+	RegistryTLSEnabled     bool
+	RegistryAuthEnabled    bool
+
 	// S3-compatible object store settings.
 	S3Endpoint  string
 	S3Region    string
@@ -218,11 +228,28 @@ func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
 		QueueID:     outputs["sqs_queue_url"],
 		Bucket:      outputs["s3_bucket_name"],
 		DockerImage: outputs["registry_url"] + "/" + outputs["docker_image"],
+
+		ControllerSecurityMode: outputs["controller_security_mode"],
+		NATSTLSEnabled:         parseOutputBool(outputs["nats_tls_enabled"]),
+		NATSAuthEnabled:        parseOutputBool(outputs["nats_auth_enabled"]),
+		MinIOTLSEnabled:        parseOutputBool(outputs["minio_tls_enabled"]),
+		MinIOAuthEnabled:       parseOutputBool(outputs["minio_auth_enabled"]),
+		RegistryTLSEnabled:     parseOutputBool(outputs["registry_tls_enabled"]),
+		RegistryAuthEnabled:    parseOutputBool(outputs["registry_auth_enabled"]),
 	}
 	if hosts := outputs["worker_hosts"]; hosts != "" {
 		cfg.WorkerHosts = splitCommaList(hosts)
 	}
 	return cfg
+}
+
+func parseOutputBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func envOr(key, fallback string) string {
