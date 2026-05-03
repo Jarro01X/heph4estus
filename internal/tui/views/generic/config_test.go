@@ -163,6 +163,8 @@ func TestGenericConfigInvalidComputeMode(t *testing.T) {
 
 func TestGenericConfigHetznerNavigatesToDeploy(t *testing.T) {
 	// Hetzner is provider-native: goes through deploy view, not direct to status.
+	t.Setenv("HCLOUD_TOKEN", "hcloud-test")
+	t.Setenv("HEPH_SSH_PUBLIC_KEY", "ssh-ed25519 tui-test")
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldCloud].SetValue("hetzner")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})

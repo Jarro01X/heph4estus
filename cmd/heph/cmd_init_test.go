@@ -52,12 +52,18 @@ func TestInitShowPopulatedConfig(t *testing.T) {
 	os.Stdout = w
 
 	cfg := &operator.OperatorConfig{
-		Region:        "us-west-2",
-		Profile:       "pentest",
-		WorkerCount:   20,
-		ComputeMode:   "spot",
-		CleanupPolicy: "destroy-after",
-		OutputDir:     "/tmp/results",
+		Region:            "us-west-2",
+		Profile:           "pentest",
+		WorkerCount:       20,
+		ComputeMode:       "spot",
+		Cloud:             "hetzner",
+		PlacementMode:     "throughput",
+		MaxWorkersPerHost: 4,
+		MinUniqueIPs:      10,
+		IPv6Required:      true,
+		DualStackRequired: true,
+		CleanupPolicy:     "destroy-after",
+		OutputDir:         "/tmp/results",
 	}
 	err := printConfig(cfg)
 	_ = w.Close()
@@ -76,6 +82,12 @@ func TestInitShowPopulatedConfig(t *testing.T) {
 		"profile:        pentest",
 		"worker_count:   20",
 		"compute_mode:   spot",
+		"cloud:          hetzner",
+		"placement:      throughput",
+		"max_per_host:   4",
+		"min_unique_ips: 10",
+		"ipv6_required:  true",
+		"dual_stack:     true",
 		"cleanup_policy: destroy-after",
 		"output_dir:     /tmp/results",
 	}
@@ -92,8 +104,13 @@ func TestInitNonInteractiveWritesConfig(t *testing.T) {
 
 	cfg := &operator.OperatorConfig{}
 	explicit := map[string]bool{
-		"region":  true,
-		"workers": true,
+		"region":               true,
+		"workers":              true,
+		"cloud":                true,
+		"placement":            true,
+		"max-workers-per-host": true,
+		"min-unique-ips":       true,
+		"dual-stack-required":  true,
 	}
 
 	// Redirect stdout to discard printConfig output.
@@ -101,7 +118,7 @@ func TestInitNonInteractiveWritesConfig(t *testing.T) {
 	_, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := runInitNonInteractive(cfg, explicit, "eu-west-1", "", 25, "", "", "")
+	err := runInitNonInteractive(cfg, explicit, "eu-west-1", "", 25, "", "selfhosted", "throughput", 3, 12, false, true, "", "")
 	_ = w.Close()
 	os.Stdout = old
 
@@ -120,6 +137,21 @@ func TestInitNonInteractiveWritesConfig(t *testing.T) {
 	if cfg.WorkerCount != 25 {
 		t.Errorf("worker_count = %d, want 25", cfg.WorkerCount)
 	}
+	if cfg.Cloud != "manual" {
+		t.Errorf("cloud = %q, want manual", cfg.Cloud)
+	}
+	if cfg.PlacementMode != "throughput" {
+		t.Errorf("placement = %q, want throughput", cfg.PlacementMode)
+	}
+	if cfg.MaxWorkersPerHost != 3 {
+		t.Errorf("max_workers_per_host = %d, want 3", cfg.MaxWorkersPerHost)
+	}
+	if cfg.MinUniqueIPs != 12 {
+		t.Errorf("min_unique_ips = %d, want 12", cfg.MinUniqueIPs)
+	}
+	if !cfg.IPv6Required || !cfg.DualStackRequired {
+		t.Errorf("dual-stack should set both IPv6Required and DualStackRequired, got ipv6=%t dual=%t", cfg.IPv6Required, cfg.DualStackRequired)
+	}
 
 	// Also test round-trip via file.
 	cfg2 := &operator.OperatorConfig{}
@@ -128,7 +160,7 @@ func TestInitNonInteractiveWritesConfig(t *testing.T) {
 		"compute-mode": true,
 	}
 
-	err = runInitNonInteractiveToPath(cfg2, explicit2, "ap-southeast-1", "", 0, "spot", "", "", path)
+	err = runInitNonInteractiveToPath(cfg2, explicit2, "ap-southeast-1", "", 0, "spot", "", "", 0, 0, false, false, "", "", path)
 	if err != nil {
 		t.Fatalf("non-interactive to path: %v", err)
 	}
@@ -153,17 +185,25 @@ func TestInitNonInteractiveValidation(t *testing.T) {
 		explicit map[string]bool
 		workers  int
 		compute  string
+		cloud    string
+		place    string
+		maxHost  int
+		minIPs   int
 		cleanup  string
 		wantErr  string
 	}{
-		{"bad workers", map[string]bool{"workers": true}, -1, "", "", "--workers must be positive"},
-		{"bad compute", map[string]bool{"compute-mode": true}, 0, "gpu", "", "--compute-mode must be"},
-		{"bad cleanup", map[string]bool{"cleanup-policy": true}, 0, "", "never", "--cleanup-policy must be"},
+		{"bad workers", map[string]bool{"workers": true}, -1, "", "", "", 0, 0, "", "--workers must be positive"},
+		{"bad compute", map[string]bool{"compute-mode": true}, 0, "gpu", "", "", 0, 0, "", "--compute-mode must be"},
+		{"bad cloud", map[string]bool{"cloud": true}, 0, "", "do", "", 0, 0, "", "--cloud: unsupported cloud"},
+		{"bad placement", map[string]bool{"placement": true}, 0, "", "", "burst", 0, 0, "", "placement defaults"},
+		{"bad max per host", map[string]bool{"max-workers-per-host": true}, 0, "", "", "", -1, 0, "", "--max-workers-per-host must be non-negative"},
+		{"bad min unique", map[string]bool{"min-unique-ips": true}, 0, "", "", "", 0, -1, "", "--min-unique-ips must be non-negative"},
+		{"bad cleanup", map[string]bool{"cleanup-policy": true}, 0, "", "", "", 0, 0, "never", "--cleanup-policy must be"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runInitNonInteractive(cfg, tt.explicit, "", "", tt.workers, tt.compute, tt.cleanup, "")
+			err := runInitNonInteractive(cfg, tt.explicit, "", "", tt.workers, tt.compute, tt.cloud, tt.place, tt.maxHost, tt.minIPs, false, false, tt.cleanup, "")
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -175,7 +215,7 @@ func TestInitNonInteractiveValidation(t *testing.T) {
 }
 
 // runInitNonInteractiveToPath is a test helper that saves to a specific path.
-func runInitNonInteractiveToPath(cfg *operator.OperatorConfig, explicit map[string]bool, region, profile string, workers int, computeMode, cleanupPolicy, outputDir, path string) error {
+func runInitNonInteractiveToPath(cfg *operator.OperatorConfig, explicit map[string]bool, region, profile string, workers int, computeMode, cloudValue, placementMode string, maxWorkersPerHost, minUniqueIPs int, ipv6Required, dualStackRequired bool, cleanupPolicy, outputDir, path string) error {
 	if explicit["region"] {
 		cfg.Region = region
 	}
@@ -187,6 +227,24 @@ func runInitNonInteractiveToPath(cfg *operator.OperatorConfig, explicit map[stri
 	}
 	if explicit["compute-mode"] {
 		cfg.ComputeMode = computeMode
+	}
+	if explicit["cloud"] {
+		cfg.Cloud = cloudValue
+	}
+	if explicit["placement"] {
+		cfg.PlacementMode = placementMode
+	}
+	if explicit["max-workers-per-host"] {
+		cfg.MaxWorkersPerHost = maxWorkersPerHost
+	}
+	if explicit["min-unique-ips"] {
+		cfg.MinUniqueIPs = minUniqueIPs
+	}
+	if explicit["ipv6-required"] {
+		cfg.IPv6Required = ipv6Required
+	}
+	if explicit["dual-stack-required"] {
+		cfg.DualStackRequired = dualStackRequired
 	}
 	if explicit["cleanup-policy"] {
 		cfg.CleanupPolicy = cleanupPolicy

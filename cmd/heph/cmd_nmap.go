@@ -164,6 +164,7 @@ func runNmap(args []string, log logger.Logger) error {
 		if err != nil {
 			return err
 		}
+		toolCfg.TerraformVars["worker_count"] = strconv.Itoa(*workers)
 		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
 			NoDeploy:     *noDeploy,
 			AutoApprove:  *autoApprove,

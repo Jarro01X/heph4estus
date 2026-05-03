@@ -35,6 +35,9 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 	tf := NewTerraformClient(log)
 	docker := NewDockerClient(log)
 	ecr := NewECRClient(log)
+	if err := ValidateProviderNativeTerraformVars(opts.Cloud, cfg.TerraformVars); err != nil {
+		return nil, err
+	}
 
 	// 1. Terraform init
 	if err := writeLine(opts.Stream, "==> Terraform init"); err != nil {
