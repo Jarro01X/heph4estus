@@ -12,19 +12,33 @@ COPY . .
 # Build the generic worker binary
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/worker ./cmd/workers/generic
 
-# Install Go-based tools (e.g. nuclei, httpx) into /app/bin
-ARG GO_INSTALL_CMD="true"
+# Install Go-based tools (e.g. nuclei, httpx) into /app/bin.
+# GO_INSTALL_CMD is used by the runtime deploy path; TOOL_INSTALL_CMD is a
+# Makefile-friendly compatibility arg for per-tool image targets.
+ARG GO_INSTALL_CMD=""
+ARG TOOL_INSTALL_CMD=""
 ENV GOBIN=/app/bin
-RUN sh -c "${GO_INSTALL_CMD}"
+RUN if [ -n "${GO_INSTALL_CMD}" ]; then sh -c "${GO_INSTALL_CMD}"; fi; \
+    case "${TOOL_INSTALL_CMD}" in \
+        go\ install\ *) sh -c "${TOOL_INSTALL_CMD}" ;; \
+        *) true ;; \
+    esac
 
 # Create a minimal production image
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
 
-# Install system-packaged tools (e.g. nmap, masscan)
-ARG RUNTIME_INSTALL_CMD="true"
-RUN sh -c "${RUNTIME_INSTALL_CMD}"
+# Install system-packaged tools (e.g. nmap, masscan). Runtime deploys use
+# RUNTIME_INSTALL_CMD; per-tool Make targets may pass apk commands through
+# TOOL_INSTALL_CMD.
+ARG RUNTIME_INSTALL_CMD=""
+ARG TOOL_INSTALL_CMD=""
+RUN if [ -n "${RUNTIME_INSTALL_CMD}" ]; then sh -c "${RUNTIME_INSTALL_CMD}"; fi; \
+    case "${TOOL_INSTALL_CMD}" in \
+        ""|go\ install\ *) true ;; \
+        *) sh -c "${TOOL_INSTALL_CMD}" ;; \
+    esac
 
 WORKDIR /app
 

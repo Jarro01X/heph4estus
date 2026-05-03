@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"fmt"
 	"testing"
 
 	"heph4estus/internal/cloud"
@@ -38,6 +39,41 @@ func TestResolveToolConfig_Httpx(t *testing.T) {
 	}
 	if cfg.ECRRepoName != "heph-dev-httpx" {
 		t.Errorf("ECRRepoName = %q", cfg.ECRRepoName)
+	}
+}
+
+func TestResolveToolConfig_HighPriorityToolImagesUseGenericContainer(t *testing.T) {
+	tests := []struct {
+		tool        string
+		buildArgKey string
+	}{
+		{"nmap", "RUNTIME_INSTALL_CMD"},
+		{"nuclei", "GO_INSTALL_CMD"},
+		{"subfinder", "GO_INSTALL_CMD"},
+		{"httpx", "GO_INSTALL_CMD"},
+		{"masscan", "RUNTIME_INSTALL_CMD"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			cfg, err := ResolveToolConfig(tt.tool)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.Dockerfile != "containers/generic/Dockerfile" {
+				t.Fatalf("Dockerfile = %q, want generic Dockerfile", cfg.Dockerfile)
+			}
+			if cfg.DockerCtx != "." {
+				t.Fatalf("DockerCtx = %q, want .", cfg.DockerCtx)
+			}
+			wantTag := fmt.Sprintf("heph-%s-worker:latest", tt.tool)
+			if cfg.DockerTag != wantTag {
+				t.Fatalf("DockerTag = %q, want %q", cfg.DockerTag, wantTag)
+			}
+			if cfg.BuildArgs[tt.buildArgKey] == "" {
+				t.Fatalf("BuildArgs missing %s", tt.buildArgKey)
+			}
+		})
 	}
 }
 

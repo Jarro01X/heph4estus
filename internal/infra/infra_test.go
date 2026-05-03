@@ -271,6 +271,26 @@ func TestDockerBuild(t *testing.T) {
 	assertArgs(t, cap.calls[0], "docker", "build", "-f", "Dockerfile", "-t", "myimg:latest", ".")
 }
 
+func TestDockerBuildWithArgs(t *testing.T) {
+	cap, exec := newCapturingExecutor("")
+	dc := &DockerClient{runCmd: exec, logger: nopLogger{}}
+
+	err := dc.BuildWithArgs(context.Background(), "Dockerfile", ".", "img:latest", map[string]string{
+		"RUNTIME_INSTALL_CMD": "apk add --no-cache nmap",
+		"GO_INSTALL_CMD":      "go install github.com/example/tool@v1.0.0",
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertArgs(t, cap.calls[0],
+		"docker", "build", "-f", "Dockerfile", "-t", "img:latest",
+		"--build-arg", "GO_INSTALL_CMD=go install github.com/example/tool@v1.0.0",
+		"--build-arg", "RUNTIME_INSTALL_CMD=apk add --no-cache nmap",
+		".",
+	)
+}
+
 func TestDockerBuild_Error(t *testing.T) {
 	dc := &DockerClient{
 		runCmd: newMockExecutor("", "err", 1, errors.New("exit 1")),
@@ -480,4 +500,3 @@ func assertVarFlag(t *testing.T, args []string, key, value string) {
 	}
 	t.Fatalf("expected -var %s in args %v", expected, args)
 }
-
