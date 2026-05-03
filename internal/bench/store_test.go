@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,11 +22,20 @@ func TestStoreSaveLoadListAndCompare(t *testing.T) {
 		IPv6ReadyCount:          8,
 		DiversityEligible:       10,
 		ThroughputEligible:      14,
+		CompletedTasks:          120,
+		TotalTasks:              120,
+		CompletionPercent:       100,
+		ActiveRuntime:           12 * time.Minute,
+		TasksPerMinute:          10,
 	}
 	next := base
 	next.GeneratedAt = base.GeneratedAt.Add(10 * time.Minute)
 	next.SteadyStateDuration = 2*time.Minute + 30*time.Second
 	next.UniqueIPv4Count = 12
+	next.CompletedTasks = 150
+	next.TotalTasks = 150
+	next.ActiveRuntime = 10 * time.Minute
+	next.TasksPerMinute = 15
 
 	basePath, err := store.Save(base)
 	if err != nil {
@@ -63,5 +73,14 @@ func TestStoreSaveLoadListAndCompare(t *testing.T) {
 	}
 	if comparison.Delta.UniqueIPv4Count != 2 {
 		t.Fatalf("unique IPv4 delta = %d, want 2", comparison.Delta.UniqueIPv4Count)
+	}
+	if comparison.Delta.CompletedTasks != 30 {
+		t.Fatalf("completed task delta = %d, want 30", comparison.Delta.CompletedTasks)
+	}
+	if comparison.Delta.ActiveRuntime != -2*time.Minute {
+		t.Fatalf("active runtime delta = %s, want -2m", comparison.Delta.ActiveRuntime)
+	}
+	if math.Abs(comparison.Delta.TasksPerMinute-5) > 0.0001 {
+		t.Fatalf("tasks/min delta = %.2f, want 5.00", comparison.Delta.TasksPerMinute)
 	}
 }

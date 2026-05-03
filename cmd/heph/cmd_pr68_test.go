@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,11 @@ import (
 	"time"
 
 	"heph4estus/internal/bench"
+	"heph4estus/internal/cloud"
+	"heph4estus/internal/fleet"
 	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/infra"
+	"heph4estus/internal/operator"
 )
 
 func TestRunFleetNoSubcommand(t *testing.T) {
@@ -118,6 +122,10 @@ func TestOutputBenchComparisonText(t *testing.T) {
 			GeneratedAt:         time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC),
 			SteadyStateDuration: 3 * time.Minute,
 			UniqueIPv4Count:     10,
+			JobID:               "job-a",
+			CompletedTasks:      100,
+			ActiveRuntime:       10 * time.Minute,
+			TasksPerMinute:      10,
 		},
 		bench.FleetReport{
 			Tool:                "httpx",
@@ -125,6 +133,10 @@ func TestOutputBenchComparisonText(t *testing.T) {
 			GeneratedAt:         time.Date(2026, 5, 2, 11, 0, 0, 0, time.UTC),
 			SteadyStateDuration: 2 * time.Minute,
 			UniqueIPv4Count:     12,
+			JobID:               "job-b",
+			CompletedTasks:      120,
+			ActiveRuntime:       8 * time.Minute,
+			TasksPerMinute:      15,
 		},
 	)
 
@@ -140,7 +152,7 @@ func TestOutputBenchComparisonText(t *testing.T) {
 	buf := make([]byte, 2048)
 	n, _ := r.Read(buf)
 	out := string(buf[:n])
-	for _, want := range []string{"Baseline:", "Candidate:", "Steady:     -1m0s", "IPv4:       +2"} {
+	for _, want := range []string{"Baseline:", "Candidate:", "Steady:     -1m0s", "IPv4:       +2", "Completed:  +20", "Tasks/min:  +5.00"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
 		}
@@ -177,6 +189,46 @@ func TestRunBenchHistoryJSON(t *testing.T) {
 	}
 	if len(reports) != 1 || reports[0].Tool != "httpx" {
 		t.Fatalf("unexpected reports: %+v", reports)
+	}
+}
+
+func TestApplyJobBenchmarkMetricsCompleteJob(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	store, err := operator.NewJobStore()
+	if err != nil {
+		t.Fatalf("NewJobStore: %v", err)
+	}
+	started := time.Now().UTC().Add(-10 * time.Minute)
+	rec := &operator.JobRecord{
+		JobID:        "job-123",
+		ToolName:     "httpx",
+		Cloud:        "hetzner",
+		Phase:        operator.PhaseComplete,
+		CreatedAt:    started.Add(-1 * time.Minute),
+		StartedAt:    started,
+		TotalTasks:   40,
+		Placement:    fleet.PlacementPolicy{Mode: fleet.PlacementModeThroughput},
+		Bucket:       "ignored",
+		ResultPrefix: "scans/httpx/job-123/results/",
+	}
+	if err := store.Create(rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	report := bench.FleetReport{Tool: "httpx", Cloud: "hetzner"}
+	if err := applyJobBenchmarkMetrics(mainContext(), &report, "job-123", cloud.KindHetzner, testLogger()); err != nil {
+		t.Fatalf("applyJobBenchmarkMetrics: %v", err)
+	}
+	if report.JobID != "job-123" || report.CompletedTasks != 40 || report.TotalTasks != 40 {
+		t.Fatalf("unexpected report task fields: %+v", report)
+	}
+	if report.ActiveRuntime < 9*time.Minute+59*time.Second || report.ActiveRuntime > 10*time.Minute+1*time.Second {
+		t.Fatalf("ActiveRuntime = %s, want about 10m", report.ActiveRuntime)
+	}
+	if math.Abs(report.TasksPerMinute-4.0) > 0.0001 {
+		t.Fatalf("TasksPerMinute = %.2f, want 4.00", report.TasksPerMinute)
+	}
+	if report.Placement != rec.Placement.Summary() {
+		t.Fatalf("unexpected placement summary: %q", report.Placement)
 	}
 }
 
