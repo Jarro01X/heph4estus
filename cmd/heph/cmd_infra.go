@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -61,7 +62,6 @@ func runInfraDeploy(args []string, log logger.Logger) error {
 		return fmt.Errorf("--backend must be generic (got %q)", *backend)
 	}
 
-	// Resolve region from operator config when not explicitly set.
 	opCfg, _ := operator.LoadConfig()
 	*region = operator.ResolveRegion(*region, opCfg)
 
@@ -131,6 +131,10 @@ func runInfraDestroy(args []string, log logger.Logger) error {
 }
 
 func runInfraBackup(args []string, log logger.Logger) error {
+	if len(args) > 0 && args[0] == "inspect" {
+		return runInfraBackupInspect(args[1:], log)
+	}
+
 	fs := flag.NewFlagSet("infra backup", flag.ContinueOnError)
 	tool := fs.String("tool", "", "Tool whose provider-native infrastructure should be backed up")
 	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (required)")
@@ -158,13 +162,7 @@ func runInfraBackup(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	manifest := &fleetstate.RecoveryManifest{
-		ToolName:   *tool,
-		Cloud:      string(cloudKind.Canonical()),
-		Outputs:    fctx.Outputs,
-		Rollout:    fctx.Rollout,
-		Reputation: fctx.Reputation,
-	}
+	manifest := fleetstate.BuildRecoveryManifest(*tool, string(cloudKind.Canonical()), fctx.Outputs, fctx.Rollout, fctx.Reputation)
 	if err := fleetstate.WriteRecoveryManifest(*outputPath, manifest); err != nil {
 		return err
 	}
@@ -174,12 +172,35 @@ func runInfraBackup(args []string, log logger.Logger) error {
 	return nil
 }
 
+func runInfraBackupInspect(args []string, log logger.Logger) error {
+	fs := flag.NewFlagSet("infra backup inspect", flag.ContinueOnError)
+	inputPath := fs.String("from", "", "Path to a recovery manifest (required)")
+	format := fs.String("format", "text", "Output format: text or json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		return fmt.Errorf("--from flag is required")
+	}
+	manifest, err := fleetstate.ReadRecoveryManifest(*inputPath)
+	if err != nil {
+		return err
+	}
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(manifest)
+	}
+	return outputRecoveryManifestText(manifest)
+}
+
 func runInfraRecover(args []string, log logger.Logger) error {
 	fs := flag.NewFlagSet("infra recover", flag.ContinueOnError)
 	tool := fs.String("tool", "", "Tool whose provider-native infrastructure should be recovered")
 	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (required)")
 	inputPath := fs.String("from", "", "Path to a recovery manifest created by infra backup (required)")
 	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
+	dryRun := fs.Bool("dry-run", false, "Show the recovery plan without deploying or restoring state")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -201,25 +222,32 @@ func runInfraRecover(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	if manifest.ToolName != *tool {
-		return fmt.Errorf("recovery manifest tool mismatch: %q != %q", manifest.ToolName, *tool)
-	}
-	if manifest.Cloud != "" && manifest.Cloud != string(cloudKind.Canonical()) {
-		return fmt.Errorf("recovery manifest cloud mismatch: %q != %q", manifest.Cloud, cloudKind.Canonical())
+	if err := manifest.Validate(*tool, string(cloudKind.Canonical())); err != nil {
+		return err
 	}
 	cfg, err := infra.ResolveToolConfig(*tool, cloudKind)
 	if err != nil {
 		return err
 	}
-	_, err = infra.RunDeploy(mainContext(), infra.DeployOpts{
-		ToolConfig:  cfg,
-		Cloud:       cloudKind,
-		AutoApprove: *autoApprove,
-		Stream:      os.Stderr,
-		PromptFunc:  deployPrompt,
-	}, log)
+	tf := infra.NewTerraformClient(log)
+	probe := infra.Probe(mainContext(), tf, cloudKind, cfg.TerraformDir, *tool)
+	shouldDeploy, action, reason, err := planRecoveryAction(manifest, probe, *autoApprove)
 	if err != nil {
 		return err
+	}
+	if *dryRun {
+		return outputRecoveryPlanText(manifest, probe, action, reason, shouldDeploy)
+	}
+	if shouldDeploy {
+		if _, err := infra.RunDeploy(mainContext(), infra.DeployOpts{
+			ToolConfig:  cfg,
+			Cloud:       cloudKind,
+			AutoApprove: *autoApprove,
+			Stream:      os.Stderr,
+			PromptFunc:  deployPrompt,
+		}, log); err != nil {
+			return err
+		}
 	}
 	repStore, err := fleetstate.NewReputationStore()
 	if err != nil {
@@ -239,7 +267,82 @@ func runInfraRecover(args []string, log logger.Logger) error {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s\n", cloudKind.Canonical(), *tool, *inputPath); err != nil {
+	mode := "reused"
+	if shouldDeploy {
+		mode = "redeployed"
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s (%s)\n", cloudKind.Canonical(), *tool, *inputPath, mode); err != nil {
+		return err
+	}
+	return nil
+}
+
+func planRecoveryAction(manifest *fleetstate.RecoveryManifest, probe infra.ProbeResult, autoApprove bool) (bool, string, string, error) {
+	if probe.Status == infra.StatusReady {
+		if mismatch := recoveryProbeMismatch(manifest, probe.Outputs); mismatch != "" {
+			return true, "redeploy infrastructure and restore local recovery state", mismatch, nil
+		}
+		return false, "reuse current infrastructure and restore local recovery state", "", nil
+	}
+	decision := infra.Decide(probe, infra.LifecyclePolicy{AutoApprove: autoApprove})
+	if decision.Decision == infra.DecisionBlock {
+		return false, "", "", fmt.Errorf("recovery blocked: %s", decision.Message)
+	}
+	return decision.Decision == infra.DecisionDeploy, decision.Message, "", nil
+}
+
+func recoveryProbeMismatch(manifest *fleetstate.RecoveryManifest, outputs map[string]string) string {
+	if manifest == nil || outputs == nil {
+		return ""
+	}
+	if manifest.ControllerGeneration != "" && outputs["generation_id"] != "" && outputs["generation_id"] != manifest.ControllerGeneration {
+		return fmt.Sprintf("generation mismatch: current=%s backup=%s", outputs["generation_id"], manifest.ControllerGeneration)
+	}
+	if manifest.WorkerCount > 0 && outputs["worker_count"] != "" && outputs["worker_count"] != fmt.Sprint(manifest.WorkerCount) {
+		return fmt.Sprintf("worker count mismatch: current=%s backup=%d", outputs["worker_count"], manifest.WorkerCount)
+	}
+	return ""
+}
+
+func outputRecoveryManifestText(manifest *fleetstate.RecoveryManifest) error {
+	for _, line := range manifest.SummaryLines() {
+		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func outputRecoveryPlanText(manifest *fleetstate.RecoveryManifest, probe infra.ProbeResult, action, reason string, shouldDeploy bool) error {
+	for _, line := range manifest.SummaryLines() {
+		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Current:     %s\n", probe.Status); err != nil {
+		return err
+	}
+	if probe.Outputs != nil {
+		if generation := probe.Outputs["generation_id"]; generation != "" {
+			if _, err := fmt.Fprintf(os.Stdout, "Current Gen: %s\n", generation); err != nil {
+				return err
+			}
+		}
+		if workers := probe.Outputs["worker_count"]; workers != "" {
+			if _, err := fmt.Fprintf(os.Stdout, "Current Workers: %s\n", workers); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Action:      %s\n", action); err != nil {
+		return err
+	}
+	if reason != "" {
+		if _, err := fmt.Fprintf(os.Stdout, "Reason:      %s\n", reason); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Deploy:      %t\n", shouldDeploy); err != nil {
 		return err
 	}
 	return nil
@@ -249,7 +352,6 @@ func deployPrompt(_ string) bool {
 	return cliPrompt("Apply these changes?")
 }
 
-// cliPrompt asks the operator a yes/no question on stderr/stdin.
 func cliPrompt(question string) bool {
 	if strings.TrimSpace(question) == "" {
 		question = "Apply these changes?"
