@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"heph4estus/internal/logger"
 )
@@ -37,8 +38,13 @@ func (d *DockerClient) Build(ctx context.Context, dockerfile, buildContext, tag 
 func (d *DockerClient) BuildWithArgs(ctx context.Context, dockerfile, buildContext, tag string, buildArgs map[string]string, stream io.Writer) error {
 	d.logger.Info("Building Docker image %s", tag)
 	args := []string{"docker", "build", "-f", dockerfile, "-t", tag}
-	for k, v := range buildArgs {
-		args = append(args, "--build-arg", k+"="+v)
+	keys := make([]string, 0, len(buildArgs))
+	for k := range buildArgs {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		args = append(args, "--build-arg", k+"="+buildArgs[k])
 	}
 	args = append(args, buildContext)
 	result, err := d.runCmd(ctx, "", stream, args...)
