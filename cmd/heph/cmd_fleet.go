@@ -357,6 +357,10 @@ func runFleetRolloutStatus(args []string, log logger.Logger) error {
 		}
 		return nil
 	}
+	outcomes, err := loadRolloutOutcomeSummary(*tool, kind, rollout.DesiredGeneration, rollout.TargetVersion, rolloutOutcomeLookback)
+	if err != nil {
+		return err
+	}
 	_, _ = fmt.Fprintf(os.Stdout, "Phase:      %s\n", rollout.Phase)
 	_, _ = fmt.Fprintf(os.Stdout, "Target:     %s\n", rollout.TargetVersion)
 	if rollout.PreviousVersion != "" {
@@ -370,6 +374,9 @@ func runFleetRolloutStatus(args []string, log logger.Logger) error {
 	}
 	if rollout.RollbackReason != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "Rollback:   %s\n", rollout.RollbackReason)
+	}
+	if line := outcomeSummaryLine(outcomes); line != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "Outcomes:   %s (last %s)\n", line, rolloutOutcomeLookback)
 	}
 	return nil
 }
@@ -467,8 +474,15 @@ func runFleetRolloutStart(args []string, log logger.Logger) error {
 		_ = replaceWorkerIndexes(mainContext(), fctx.ToolConfig, kind, canaryIndexes, map[string]string{"docker_image": previousVersion}, log)
 		return fmt.Errorf("canary failed and rollback was attempted: %w", err)
 	}
+	outcomes, err := loadRolloutOutcomeSummary(*tool, kind, rollout.DesiredGeneration, rollout.TargetVersion, rolloutOutcomeLookback)
+	if err != nil {
+		return err
+	}
+	if err := validateRolloutOutcomeSummary(outcomes); err != nil {
+		return rollbackCanaryOutcomeFailure(mainContext(), fctx, rollout, outcomes, log)
+	}
 	if !*autoPromote {
-		if _, err := fmt.Fprintf(os.Stdout, "Canary healthy for %v. Run `heph fleet rollout promote --tool %s --cloud %s` to continue.\n", canaryIndexes, *tool, kind.Canonical()); err != nil {
+		if _, err := fmt.Fprintf(os.Stdout, "Canary healthy for %v with outcomes %s. Run `heph fleet rollout promote --tool %s --cloud %s` to continue.\n", canaryIndexes, outcomes.String(), *tool, kind.Canonical()); err != nil {
 			return err
 		}
 		return nil
@@ -512,6 +526,13 @@ func runFleetRolloutPromote(args []string, log logger.Logger) error {
 }
 
 func promoteRollout(ctx context.Context, fctx *providerFleetContext, rollout *fleetstate.RolloutRecord, remaining []int, timeout time.Duration, log logger.Logger) error {
+	outcomes, err := loadRolloutOutcomeSummary(fctx.ToolConfig.ToolName, fctx.Cloud, rollout.DesiredGeneration, rollout.TargetVersion, rolloutOutcomeLookback)
+	if err != nil {
+		return err
+	}
+	if err := validateRolloutOutcomeSummary(outcomes); err != nil {
+		return rollbackCanaryOutcomeFailure(ctx, fctx, rollout, outcomes, log)
+	}
 	rollout.Phase = fleetstate.RolloutPhasePromoting
 	if err := fctx.RolloutStore.Save(rollout); err != nil {
 		return err
