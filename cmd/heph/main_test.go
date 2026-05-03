@@ -65,7 +65,7 @@ func TestNmapHelp(t *testing.T) {
 }
 
 func TestNmapInvalidComputeMode(t *testing.T) {
-	err := run([]string{"nmap", "--file", "targets.txt", "--compute-mode", "gpu"}, testLogger())
+	err := run([]string{"nmap", "--file", "targets.txt", "--cloud", "aws", "--compute-mode", "gpu"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for invalid compute mode")
 	}
@@ -190,7 +190,7 @@ func TestScanInvalidFormat(t *testing.T) {
 }
 
 func TestScanInvalidComputeMode(t *testing.T) {
-	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--compute-mode", "gpu"}, testLogger())
+	err := run([]string{"scan", "--tool", "httpx", "--file", "targets.txt", "--cloud", "aws", "--compute-mode", "gpu"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for invalid compute mode")
 	}
@@ -245,7 +245,7 @@ func TestInfraDeployMissingTool(t *testing.T) {
 }
 
 func TestInfraDeployUnknownTool(t *testing.T) {
-	err := run([]string{"infra", "deploy", "--tool", "hashcat", "--backend", "generic"}, testLogger())
+	err := run([]string{"infra", "deploy", "--tool", "hashcat", "--backend", "generic", "--cloud", "aws"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
@@ -298,7 +298,7 @@ func TestInfraDestroyMissingTool(t *testing.T) {
 }
 
 func TestInfraDestroyUnknownTool(t *testing.T) {
-	err := run([]string{"infra", "destroy", "--tool", "hashcat", "--backend", "generic"}, testLogger())
+	err := run([]string{"infra", "destroy", "--tool", "hashcat", "--backend", "generic", "--cloud", "aws"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}

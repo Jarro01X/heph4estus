@@ -118,6 +118,8 @@ func TestGenericConfigWordlistShowsFields(t *testing.T) {
 
 func TestGenericConfigFileRead(t *testing.T) {
 	m := NewConfig("httpx")
+	m.inputs[cfgFieldComputeMode].SetValue("auto")
+	m.inputs[cfgFieldCloud].SetValue("aws")
 	// Simulate successful file read.
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n10.0.0.1\n"})
 	if cmd == nil {
@@ -151,6 +153,7 @@ func TestGenericConfigFileRead(t *testing.T) {
 
 func TestGenericConfigInvalidComputeMode(t *testing.T) {
 	m := NewConfig("httpx")
+	m.inputs[cfgFieldCloud].SetValue("aws")
 	m.inputs[cfgFieldComputeMode].SetValue("gpu")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd != nil {
@@ -166,6 +169,7 @@ func TestGenericConfigHetznerNavigatesToDeploy(t *testing.T) {
 	t.Setenv("HCLOUD_TOKEN", "hcloud-test")
 	t.Setenv("HEPH_SSH_PUBLIC_KEY", "ssh-ed25519 tui-test")
 	m := NewConfig("httpx")
+	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("hetzner")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd == nil {
@@ -199,6 +203,7 @@ func TestGenericConfigManualNavigatesToStatus(t *testing.T) {
 	t.Setenv("SELFHOSTED_DOCKER_IMAGE", "worker:latest")
 
 	m := NewConfig("httpx")
+	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("manual")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd == nil {
@@ -239,6 +244,7 @@ func TestGenericConfigManualMissingEnv(t *testing.T) {
 	t.Setenv("SELFHOSTED_BUCKET", "")
 
 	m := NewConfig("httpx")
+	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("manual")
 	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
 	if cmd != nil {
