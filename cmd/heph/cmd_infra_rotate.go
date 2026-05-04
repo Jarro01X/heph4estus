@@ -19,15 +19,60 @@ import (
 
 func runInfraRotate(args []string, log logger.Logger) error {
 	if len(args) == 0 {
-		return fmt.Errorf("infra rotate requires a subcommand: credentials")
+		return fmt.Errorf("infra rotate requires a subcommand: credentials or certs")
 	}
 	sub := args[0]
 	switch sub {
 	case "credentials":
 		return runInfraRotateCredentials(args[1:], log)
+	case "certs":
+		return runInfraRotateCerts(args[1:], log)
 	default:
-		return fmt.Errorf("infra rotate: unknown subcommand %q (expected credentials)", sub)
+		return fmt.Errorf("infra rotate: unknown subcommand %q (expected credentials or certs)", sub)
 	}
+}
+
+func runInfraRotateCerts(args []string, log logger.Logger) error {
+	fs := flag.NewFlagSet("infra rotate certs", flag.ContinueOnError)
+	tool := fs.String("tool", "", "Tool whose provider-native certificates should be rotated")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
+	component := fs.String("component", "", "Certificate component: controller, worker, ca, or all")
+	dryRun := fs.Bool("dry-run", false, "Show certificate rotation preflight and blast radius without changing anything")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tool == "" {
+		return fmt.Errorf("--tool flag is required")
+	}
+	if strings.TrimSpace(*component) == "" {
+		return fmt.Errorf("--component flag is required (controller, worker, ca, or all)")
+	}
+	if _, err := infra.ParseCertificateRotationComponents(*component); err != nil {
+		return err
+	}
+	if !*dryRun {
+		return fmt.Errorf("certificate rotation mutation currently supports --dry-run only")
+	}
+
+	opCfg, _ := operator.LoadConfig()
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if !cloudKind.IsProviderNative() {
+		return fmt.Errorf("infra rotate certs only supports provider-native clouds, got %q", cloudKind.Canonical())
+	}
+
+	cfg, err := infra.ResolveToolConfig(*tool, cloudKind)
+	if err != nil {
+		return err
+	}
+	probe := infra.Probe(mainContext(), infra.NewTerraformClient(log), cloudKind, cfg.TerraformDir, *tool)
+	plan, err := infra.PlanCertificateRotation(cloudKind, *tool, *component, probe)
+	if err != nil {
+		return err
+	}
+	return outputCertificateRotationPlanText(os.Stdout, plan)
 }
 
 func runInfraRotateCredentials(args []string, log logger.Logger) error {
@@ -528,10 +573,127 @@ func outputCredentialRotationPlanText(w io.Writer, plan *infra.CredentialRotatio
 	return nil
 }
 
+func outputCertificateRotationPlanText(w io.Writer, plan *infra.CertificateRotationPlan) error {
+	if plan == nil {
+		return fmt.Errorf("certificate rotation plan is nil")
+	}
+	if _, err := fmt.Fprintln(w, "Certificate rotation dry run"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Tool:        %s\n", plan.Tool); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Cloud:       %s\n", plan.Cloud); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Components:  %s\n", certificateComponentList(plan.Components)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Generation:  %s\n", plan.GenerationID); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Mode:        %s\n", plan.ControllerSecurityMode); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "CA sha256:   %s\n", plan.ControllerCAFingerprintSHA256); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Cert expiry: %s\n", plan.ControllerCertNotAfter); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "TLS services:%s\n", optionalJoinedList(plan.TLSEnabledServices)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "\nPreflight:"); err != nil {
+		return err
+	}
+	for _, line := range []string{
+		"Terraform outputs are present and match the requested tool/provider.",
+		"Current controller CA fingerprint and certificate expiry metadata are available when present in outputs.",
+		"No certificates will be changed in this dry run.",
+	} {
+		if _, err := fmt.Fprintf(w, "  - %s\n", line); err != nil {
+			return err
+		}
+	}
+	if len(plan.Warnings) > 0 {
+		if _, err := fmt.Fprintln(w, "\nWarnings:"); err != nil {
+			return err
+		}
+		for _, warning := range plan.Warnings {
+			if _, err := fmt.Fprintf(w, "  - %s\n", warning); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := fmt.Fprintln(w, "\nBlast radius:"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  - Controller services restarted: %s\n", certificateControllerServiceText(plan.ControllerServices)); err != nil {
+		return err
+	}
+	workerAction := fmt.Sprintf("replace or restart %s workers", plan.WorkerCount)
+	if !plan.WorkerRecycleRequired {
+		workerAction = "not required"
+	}
+	if _, err := fmt.Fprintf(w, "  - Worker reconcile: %s\n", workerAction); err != nil {
+		return err
+	}
+	trustAction := "not required"
+	if plan.OperatorTrustRefreshRequired {
+		trustAction = "refresh operator-side controller CA trust"
+	}
+	if _, err := fmt.Fprintf(w, "  - Operator trust refresh: %s\n", trustAction); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "\nPlanned actions:"); err != nil {
+		return err
+	}
+	for _, action := range plan.Actions {
+		if _, err := fmt.Fprintf(w, "  - %s\n", action); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(w, "\nPost-rotation verification:"); err != nil {
+		return err
+	}
+	for _, check := range plan.Verification {
+		if _, err := fmt.Fprintf(w, "  - %s\n", check); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(w, "\nDry run: no Terraform apply, service restart, worker replacement, trust write, or certificate write was performed."); err != nil {
+		return err
+	}
+	return nil
+}
+
 func credentialComponentList(components []infra.CredentialRotationComponent) string {
 	parts := make([]string, 0, len(components))
 	for _, component := range components {
 		parts = append(parts, string(component))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func certificateComponentList(components []infra.CertificateRotationComponent) string {
+	parts := make([]string, 0, len(components))
+	for _, component := range components {
+		parts = append(parts, string(component))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func optionalJoinedList(values []string) string {
+	if len(values) == 0 {
+		return " none"
+	}
+	return " " + strings.Join(values, ", ")
+}
+
+func certificateControllerServiceText(services []string) string {
+	if len(services) == 0 {
+		return "none"
+	}
+	return strings.Join(services, ", ")
 }
