@@ -422,7 +422,13 @@ func outputCredentialRotationPlanText(w io.Writer, plan *infra.CredentialRotatio
 	if _, err := fmt.Fprintf(w, "Scope:       %s\n", plan.CredentialScopeVersion); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "NATS creds:  %s\n", plan.NATSCredentialGeneration); err != nil {
+	if _, err := fmt.Fprintf(w, "NATS creds:  %s (rotated: %s)\n", plan.NATSCredentialGeneration, plan.NATSCredentialRotatedAt); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "MinIO creds: %s (rotated: %s)\n", plan.MinIOCredentialGeneration, plan.MinIOCredentialRotatedAt); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Registry:    %s (rotated: %s)\n", plan.RegistryCredentialGeneration, plan.RegistryCredentialRotatedAt); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Mode:        %s\n", plan.ControllerSecurityMode); err != nil {
