@@ -42,7 +42,8 @@ write_files:
 %{ endif }
       authorization {
         users = [
-          { user: "${nats_user}", password: "${nats_password}" }
+          { user: "${nats_operator_user}", password: "${nats_operator_password}" },
+          { user: "${nats_worker_user}", password: "${nats_worker_password}" }
         ]
       }
 
@@ -146,7 +147,7 @@ runcmd:
   # ack-wait=5m matches SQS visibility timeout for long-running scans.
   - |
     for i in $(seq 1 30); do
-      docker run --rm --network host %{ if tls_enabled }-v /data/tls/ca.crt:/ca.crt:ro %{ endif }natsio/nats-box nats %{ if tls_enabled }--tlsca=/ca.crt %{ endif }-s ${nats_scheme}://${nats_user}:${nats_password}@localhost:${nats_port} \
+      docker run --rm --network host %{ if tls_enabled }-v /data/tls/ca.crt:/ca.crt:ro %{ endif }natsio/nats-box nats %{ if tls_enabled }--tlsca=/ca.crt %{ endif }-s ${nats_scheme}://${nats_operator_user}:${nats_operator_password}@localhost:${nats_port} \
         stream add ${nats_stream_name} \
         --subjects="${nats_stream_name}.*" \
         --retention=work \

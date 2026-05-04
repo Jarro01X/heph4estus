@@ -35,6 +35,11 @@ resource "random_password" "nats_password" {
   special = false
 }
 
+resource "random_password" "nats_worker_password" {
+  length  = 32
+  special = false
+}
+
 # --- TLS material ---
 
 resource "tls_private_key" "controller_ca" {
@@ -92,7 +97,10 @@ resource "tls_locally_signed_cert" "controller_server" {
 # --- Cloud-init rendering ---
 
 locals {
-  nats_user                = "heph"
+  credential_scope_version = "nats-role-v1"
+  nats_operator_user       = "heph-operator"
+  nats_worker_user         = "heph-worker"
+  nats_user                = local.nats_operator_user
   nats_tls_enabled         = contains(["tls", "mtls"], var.controller_security_mode)
   minio_tls_enabled        = contains(["tls", "mtls"], var.controller_security_mode)
   registry_tls_enabled     = contains(["tls", "mtls"], var.controller_security_mode)
@@ -115,8 +123,10 @@ locals {
     nats_monitor_port       = var.nats_monitor_port
     nats_stream_name        = var.nats_stream_name
     registry_port           = var.registry_port
-    nats_user               = local.nats_user
-    nats_password           = random_password.nats_password.result
+    nats_operator_user      = local.nats_operator_user
+    nats_operator_password  = random_password.nats_password.result
+    nats_worker_user        = local.nats_worker_user
+    nats_worker_password    = random_password.nats_worker_password.result
     tls_enabled             = local.nats_tls_enabled
     nats_scheme             = local.nats_scheme
     minio_scheme            = local.minio_scheme
