@@ -47,6 +47,7 @@ write_files:
       Restart=always
       RestartSec=10
       ExecStartPre=-/usr/bin/docker rm -f heph-worker
+      ExecStartPre=/bin/sh -c 'printf %s ${registry_password} | /usr/bin/docker login --username ${registry_username} --password-stdin ${controller_host}:${registry_port}'
       ExecStartPre=/usr/bin/docker pull ${controller_host}:${registry_port}/${docker_image}
       ExecStart=/usr/bin/docker run --name heph-worker \
         --add-host ${controller_host}:${controller_private_ip} \
@@ -93,7 +94,7 @@ runcmd:
   # Wait for controller registry to be reachable
   - |
     for i in $(seq 1 60); do
-      curl -sf ${registry_scheme}://${controller_host}:${registry_port}/v2/ && break
+      curl -sf -u ${registry_username}:${registry_password} ${registry_scheme}://${controller_host}:${registry_port}/v2/ && break
       echo "Waiting for controller registry (attempt $i)..."
       sleep 5
     done

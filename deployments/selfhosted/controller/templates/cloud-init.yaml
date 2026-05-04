@@ -8,6 +8,7 @@
 package_update: true
 
 packages:
+  - apache2-utils
   - docker.io
   - jq
 
@@ -146,6 +147,10 @@ write_files:
       ExecStart=/usr/bin/docker run --name registry \
         -p ${registry_port}:5000 \
         -v /data/registry:/var/lib/registry \
+        -v /data/registry-auth:/auth:ro \
+        -e REGISTRY_AUTH=htpasswd \
+        -e REGISTRY_AUTH_HTPASSWD_REALM=heph-controller \
+        -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
 %{ if tls_enabled }
         -v /data/tls:/certs:ro \
         -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/public.crt \
@@ -158,7 +163,11 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  - mkdir -p /data/nats /data/minio /data/registry /data/tls
+  - install -d -m 0755 /data/nats /data/minio /data/registry /data/tls
+  - install -d -m 0700 /data/registry-auth
+  - htpasswd -Bbn ${registry_publisher_user} ${registry_publisher_password} > /data/registry-auth/htpasswd
+  - htpasswd -Bbn ${registry_worker_user} ${registry_worker_password} >> /data/registry-auth/htpasswd
+  - chmod 0600 /data/registry-auth/htpasswd
   - systemctl daemon-reload
   - systemctl enable --now docker
   - systemctl enable --now nats

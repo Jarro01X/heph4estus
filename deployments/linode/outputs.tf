@@ -158,6 +158,28 @@ output "registry_url" {
   value       = "${module.controller.registry_tls_enabled ? "https" : "http"}://${linode_instance.controller.ip_address}:5000"
 }
 
+output "registry_username" {
+  description = "Backward-compatible Docker registry publisher username."
+  value       = module.controller.registry_publisher_username
+}
+
+output "registry_password" {
+  description = "Backward-compatible Docker registry publisher password."
+  value       = module.controller.registry_publisher_password
+  sensitive   = true
+}
+
+output "registry_publisher_username" {
+  description = "Docker registry publisher username."
+  value       = module.controller.registry_publisher_username
+}
+
+output "registry_publisher_password" {
+  description = "Docker registry publisher password."
+  value       = module.controller.registry_publisher_password
+  sensitive   = true
+}
+
 output "docker_image" {
   description = "Worker Docker image path relative to the controller registry."
   value       = var.docker_image
