@@ -140,10 +140,20 @@ output "nats_operator_client_cert_pem" {
   sensitive   = true
 }
 
+output "nats_operator_client_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the NATS operator mTLS client certificate."
+  value       = module.controller.nats_operator_client_cert_not_after
+}
+
 output "nats_operator_client_key_pem" {
   description = "PEM-encoded NATS mTLS client private key for operator connections."
   value       = module.controller.nats_operator_client_key_pem
   sensitive   = true
+}
+
+output "nats_worker_client_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the NATS worker mTLS client certificate."
+  value       = module.controller.nats_worker_client_cert_not_after
 }
 
 output "s3_endpoint" {
