@@ -31,6 +31,11 @@ output "nats_tls_enabled" {
   value       = module.controller.nats_tls_enabled
 }
 
+output "nats_mtls_enabled" {
+  description = "Whether the NATS client listener requires client certificates."
+  value       = module.controller.nats_mtls_enabled
+}
+
 output "nats_auth_enabled" {
   description = "Whether the NATS client listener requires authentication."
   value       = module.controller.nats_auth_enabled
@@ -127,6 +132,18 @@ output "nats_credential_rotated_at" {
 output "nats_stream" {
   description = "NATS JetStream stream name."
   value       = module.controller.nats_stream
+}
+
+output "nats_operator_client_cert_pem" {
+  description = "PEM-encoded NATS mTLS client certificate for operator connections."
+  value       = module.controller.nats_operator_client_cert_pem
+  sensitive   = true
+}
+
+output "nats_operator_client_key_pem" {
+  description = "PEM-encoded NATS mTLS client private key for operator connections."
+  value       = module.controller.nats_operator_client_key_pem
+  sensitive   = true
 }
 
 output "s3_endpoint" {

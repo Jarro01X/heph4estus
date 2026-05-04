@@ -24,6 +24,10 @@ type QueueConfig struct {
 	RootCAPEM      string
 	RootCAFile     string
 	ServerName     string
+	ClientCertPEM  string
+	ClientKeyPEM   string
+	ClientCertFile string
+	ClientKeyFile  string
 }
 
 func (c QueueConfig) ackWait() time.Duration {
@@ -96,7 +100,15 @@ func NewQueue(cfg QueueConfig, log logger.Logger) (*Queue, error) {
 }
 
 func natsOptions(cfg QueueConfig) ([]nats.Option, error) {
-	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.RootCAPEM, cfg.RootCAFile, cfg.ServerName)
+	tlsConfig, err := tlsutil.ClientConfigWithIdentity(
+		cfg.RootCAPEM,
+		cfg.RootCAFile,
+		cfg.ServerName,
+		cfg.ClientCertPEM,
+		cfg.ClientKeyPEM,
+		cfg.ClientCertFile,
+		cfg.ClientKeyFile,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("selfhosted: NATS TLS trust: %w", err)
 	}

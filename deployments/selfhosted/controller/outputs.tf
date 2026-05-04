@@ -30,6 +30,11 @@ output "nats_tls_enabled" {
   value       = local.nats_tls_enabled
 }
 
+output "nats_mtls_enabled" {
+  description = "Whether the NATS client listener requires client certificates."
+  value       = local.nats_mtls_enabled
+}
+
 output "nats_auth_enabled" {
   description = "Whether the NATS client listener requires authentication."
   value       = local.nats_auth_enabled
@@ -88,6 +93,30 @@ output "controller_host" {
 output "nats_stream" {
   description = "NATS JetStream stream name."
   value       = var.nats_stream_name
+}
+
+output "nats_operator_client_cert_pem" {
+  description = "PEM-encoded NATS mTLS client certificate for operator connections."
+  value       = tls_locally_signed_cert.nats_operator_client.cert_pem
+  sensitive   = true
+}
+
+output "nats_operator_client_key_pem" {
+  description = "PEM-encoded NATS mTLS client private key for operator connections."
+  value       = tls_private_key.nats_operator_client.private_key_pem
+  sensitive   = true
+}
+
+output "nats_worker_client_cert_pem" {
+  description = "PEM-encoded NATS mTLS client certificate for worker connections."
+  value       = tls_locally_signed_cert.nats_worker_client.cert_pem
+  sensitive   = true
+}
+
+output "nats_worker_client_key_pem" {
+  description = "PEM-encoded NATS mTLS client private key for worker connections."
+  value       = tls_private_key.nats_worker_client.private_key_pem
+  sensitive   = true
 }
 
 output "s3_endpoint" {

@@ -111,6 +111,8 @@ func TestSelfhostedConfigFromEnv(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", "mykey")
 	t.Setenv("S3_SECRET_KEY", "mysecret")
 	t.Setenv("S3_PATH_STYLE", "true")
+	t.Setenv("HEPH_NATS_CLIENT_CERT_FILE", "/etc/heph/nats-client.crt")
+	t.Setenv("HEPH_NATS_CLIENT_KEY_FILE", "/etc/heph/nats-client.key")
 
 	cfg := SelfhostedConfigFromEnv()
 
@@ -128,6 +130,9 @@ func TestSelfhostedConfigFromEnv(t *testing.T) {
 	}
 	if cfg.S3AccessKey != "mykey" {
 		t.Errorf("S3AccessKey = %q", cfg.S3AccessKey)
+	}
+	if cfg.NATSClientCertFile != "/etc/heph/nats-client.crt" || cfg.NATSClientKeyFile != "/etc/heph/nats-client.key" {
+		t.Errorf("NATS client cert files = %q/%q", cfg.NATSClientCertFile, cfg.NATSClientKeyFile)
 	}
 	if cfg.S3Secret != "mysecret" {
 		t.Errorf("S3Secret = %q", cfg.S3Secret)
@@ -333,18 +338,20 @@ func TestBuildSelfhostedWithComputeConfig(t *testing.T) {
 
 func TestSelfhostedConfigFromOutputs(t *testing.T) {
 	cfg := SelfhostedConfigFromOutputs(map[string]string{
-		"nats_url":       "nats://ctrl:4222",
-		"nats_stream":    "heph-tasks",
-		"s3_endpoint":    "http://ctrl:9000",
-		"s3_region":      "us-east-1",
-		"s3_access_key":  "ak",
-		"s3_secret_key":  "sk",
-		"s3_path_style":  "true",
-		"sqs_queue_url":  "heph-tasks",
-		"s3_bucket_name": "heph-results",
-		"registry_url":   "10.0.1.2:5000",
-		"docker_image":   "heph-nmap-worker:latest",
-		"worker_hosts":   "203.0.113.10,203.0.113.11",
+		"nats_url":                      "nats://ctrl:4222",
+		"nats_stream":                   "heph-tasks",
+		"s3_endpoint":                   "http://ctrl:9000",
+		"s3_region":                     "us-east-1",
+		"s3_access_key":                 "ak",
+		"s3_secret_key":                 "sk",
+		"s3_path_style":                 "true",
+		"sqs_queue_url":                 "heph-tasks",
+		"s3_bucket_name":                "heph-results",
+		"registry_url":                  "10.0.1.2:5000",
+		"docker_image":                  "heph-nmap-worker:latest",
+		"worker_hosts":                  "203.0.113.10,203.0.113.11",
+		"nats_operator_client_cert_pem": "operator-cert",
+		"nats_operator_client_key_pem":  "operator-key",
 
 		"controller_security_mode": "private-auth",
 		"nats_tls_enabled":         "false",
@@ -366,6 +373,9 @@ func TestSelfhostedConfigFromOutputs(t *testing.T) {
 	}
 	if cfg.ControllerSecurityMode != "private-auth" {
 		t.Fatalf("ControllerSecurityMode = %q, want private-auth", cfg.ControllerSecurityMode)
+	}
+	if cfg.NATSClientCertPEM != "operator-cert" || cfg.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS client cert material = %q/%q", cfg.NATSClientCertPEM, cfg.NATSClientKeyPEM)
 	}
 	if !cfg.NATSAuthEnabled || !cfg.MinIOAuthEnabled {
 		t.Fatalf("expected NATS and MinIO auth enabled, got nats=%t minio=%t", cfg.NATSAuthEnabled, cfg.MinIOAuthEnabled)

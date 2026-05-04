@@ -10,6 +10,8 @@ var sensitivePatterns = []string{
 	"token",
 	"credential",
 	"access_key",
+	"key_pem",
+	"client_cert",
 	"nats_url", // contains embedded auth credentials
 	"controller_ca_pem",
 }

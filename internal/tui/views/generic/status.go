@@ -272,6 +272,8 @@ func (m *StatusModel) trackCreate() {
 		GenerationID:          m.infra.GenerationID,
 		ControllerCAPEM:       m.infra.ControllerCAPEM,
 		ControllerHost:        m.infra.ControllerHost,
+		NATSClientCertPEM:     m.infra.NATSClientCertPEM,
+		NATSClientKeyPEM:      m.infra.NATSClientKeyPEM,
 	}
 	if m.isWordlist {
 		rec.Phase = operator.PhaseUploading

@@ -240,6 +240,8 @@ func runScan(args []string, log logger.Logger) error {
 		GenerationID:          outputs["generation_id"],
 		ControllerCAPEM:       outputs["controller_ca_pem"],
 		ControllerHost:        outputs["controller_host"],
+		NATSClientCertPEM:     outputs["nats_operator_client_cert_pem"],
+		NATSClientKeyPEM:      outputs["nats_operator_client_key_pem"],
 	})
 
 	var (

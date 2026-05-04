@@ -570,6 +570,7 @@ func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
 	assertContains(t, names, "controller_security_mode")
 	assertContains(t, names, "nats_auth_posture")
 	assertContains(t, names, "nats_tls_posture")
+	assertContains(t, names, "nats_mtls_posture")
 	assertContains(t, names, "minio_tls_posture")
 	assertContains(t, names, "registry_tls_posture")
 	assertContains(t, names, "controller_ca_posture")
@@ -631,6 +632,24 @@ func TestRunProviderNativeOutputChecks_TLSModeRequiresTLSEndpoints(t *testing.T)
 
 	if !HasFailures(results) {
 		t.Fatalf("tls mode without TLS endpoints should fail: %+v", results)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_MTLSModeRequiresClientOutputs(t *testing.T) {
+	outputs := providerNativeHealthyOutputs()
+	outputs["controller_security_mode"] = "mtls"
+	outputs["nats_mtls_enabled"] = "false"
+	results := RunProviderNativeOutputChecks(cloud.KindHetzner, outputs)
+	if got := findCheck(results, "nats_mtls_posture"); got.Status != StatusFail {
+		t.Fatalf("missing mTLS output should fail, got %s: %s", got.Status, got.Summary)
+	}
+
+	outputs["nats_mtls_enabled"] = "true"
+	outputs["nats_operator_client_cert_pem"] = "cert"
+	outputs["nats_operator_client_key_pem"] = "key"
+	results = RunProviderNativeOutputChecks(cloud.KindHetzner, outputs)
+	if got := findCheck(results, "nats_mtls_posture"); got.Status != StatusPass {
+		t.Fatalf("complete mTLS outputs should pass, got %s: %s", got.Status, got.Summary)
 	}
 }
 

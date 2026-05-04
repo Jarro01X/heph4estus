@@ -165,6 +165,7 @@ func runProviderNativeOutputChecksAt(kind cloud.Kind, outputs map[string]string,
 		checkControllerSecurityMode(outputs),
 		checkOutputNATSAuth(outputs),
 		checkOutputNATSTLS(outputs),
+		checkOutputNATSMTLS(outputs),
 		checkOutputMinIOTLS(outputs),
 		checkOutputRegistryTLS(outputs),
 		checkOutputControllerCA(outputs),
@@ -635,6 +636,34 @@ func checkOutputNATSTLS(outputs map[string]string) CheckResult {
 		Summary: "NATS TLS is disabled in private-auth compatibility mode",
 		Fix:     "Restrict NATS to the private fleet network and migrate to controller_security_mode=tls when available.",
 	}
+}
+
+func checkOutputNATSMTLS(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	enabled := outputBool(outputs["nats_mtls_enabled"])
+	if mode != "mtls" {
+		if enabled {
+			return CheckResult{Name: "nats_mtls_posture", Status: StatusPass, Summary: "NATS mTLS is enabled"}
+		}
+		return CheckResult{Name: "nats_mtls_posture", Status: StatusPass, Summary: "NATS mTLS is not required outside mtls mode"}
+	}
+	if !enabled {
+		return CheckResult{
+			Name:    "nats_mtls_posture",
+			Status:  StatusFail,
+			Summary: "Controller security mode is mtls, but nats_mtls_enabled is not true",
+			Fix:     "Redeploy after enabling NATS mTLS support and verify nats_mtls_enabled.",
+		}
+	}
+	if strings.TrimSpace(outputs["nats_operator_client_cert_pem"]) == "" || strings.TrimSpace(outputs["nats_operator_client_key_pem"]) == "" {
+		return CheckResult{
+			Name:    "nats_mtls_posture",
+			Status:  StatusFail,
+			Summary: "Controller security mode is mtls, but operator NATS client certificate outputs are missing",
+			Fix:     "Redeploy the provider-native fleet so operator NATS mTLS client material is available.",
+		}
+	}
+	return CheckResult{Name: "nats_mtls_posture", Status: StatusPass, Summary: "NATS mTLS strict mode is enabled"}
 }
 
 func checkOutputMinIOTLS(outputs map[string]string) CheckResult {

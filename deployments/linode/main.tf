@@ -186,6 +186,7 @@ locals {
       controller_host       = local.controller_host
       nats_port             = 4222
       nats_scheme           = module.controller.nats_tls_enabled ? "tls" : "nats"
+      nats_mtls_enabled     = module.controller.nats_mtls_enabled
       nats_subject          = module.controller.nats_stream
       nats_user             = local.nats_worker_user
       nats_password         = local.nats_worker_password
@@ -200,6 +201,8 @@ locals {
       registry_username     = local.registry_worker_username
       registry_password     = local.registry_worker_password
       controller_ca_pem_b64 = base64encode(module.controller.controller_ca_pem)
+      nats_client_cert_b64  = base64encode(module.controller.nats_worker_client_cert_pem)
+      nats_client_key_b64   = base64encode(module.controller.nats_worker_client_key_pem)
       tool_name             = var.tool_name
       docker_image          = var.docker_image
       generation_id         = local.generation_id

@@ -248,6 +248,7 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 	update := infra.NATSControllerAuthUpdate{
 		Credentials: creds,
 		TLSEnabled:  rotationOutputBool(prepared.Outputs["nats_tls_enabled"]),
+		MTLSEnabled: rotationOutputBool(prepared.Outputs["nats_mtls_enabled"]),
 	}
 
 	if err := printStdout("Rotating NATS credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {

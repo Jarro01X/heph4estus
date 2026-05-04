@@ -122,6 +122,60 @@ resource "tls_locally_signed_cert" "controller_server" {
   ]
 }
 
+resource "tls_private_key" "nats_operator_client" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "tls_cert_request" "nats_operator_client" {
+  private_key_pem = tls_private_key.nats_operator_client.private_key_pem
+
+  subject {
+    common_name  = "heph-nats-operator"
+    organization = "heph4estus"
+  }
+}
+
+resource "tls_locally_signed_cert" "nats_operator_client" {
+  cert_request_pem      = tls_cert_request.nats_operator_client.cert_request_pem
+  ca_private_key_pem    = local.controller_ca_key_pem
+  ca_cert_pem           = local.controller_ca_pem
+  validity_period_hours = var.controller_cert_validity_hours
+
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "client_auth",
+  ]
+}
+
+resource "tls_private_key" "nats_worker_client" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "tls_cert_request" "nats_worker_client" {
+  private_key_pem = tls_private_key.nats_worker_client.private_key_pem
+
+  subject {
+    common_name  = "heph-nats-worker"
+    organization = "heph4estus"
+  }
+}
+
+resource "tls_locally_signed_cert" "nats_worker_client" {
+  cert_request_pem      = tls_cert_request.nats_worker_client.cert_request_pem
+  ca_private_key_pem    = local.controller_ca_key_pem
+  ca_cert_pem           = local.controller_ca_pem
+  validity_period_hours = var.controller_cert_validity_hours
+
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "client_auth",
+  ]
+}
+
 # --- Cloud-init rendering ---
 
 locals {
@@ -132,6 +186,7 @@ locals {
   registry_worker_user     = "heph-registry-worker"
   nats_user                = local.nats_operator_user
   nats_tls_enabled         = contains(["tls", "mtls"], var.controller_security_mode)
+  nats_mtls_enabled        = var.controller_security_mode == "mtls"
   minio_tls_enabled        = contains(["tls", "mtls"], var.controller_security_mode)
   registry_tls_enabled     = contains(["tls", "mtls"], var.controller_security_mode)
   registry_auth_enabled    = true
@@ -174,10 +229,13 @@ locals {
     nats_worker_user            = local.nats_worker_user
     nats_worker_password        = random_password.nats_worker_password.result
     tls_enabled                 = local.nats_tls_enabled
+    nats_mtls_enabled           = local.nats_mtls_enabled
     nats_scheme                 = local.nats_scheme
     minio_scheme                = local.minio_scheme
     controller_ca_pem_b64       = base64encode(local.controller_ca_pem)
     controller_cert_pem_b64     = base64encode(local.controller_cert_pem)
     controller_key_pem_b64      = base64encode(local.controller_key_pem)
+    nats_operator_cert_pem_b64  = base64encode(tls_locally_signed_cert.nats_operator_client.cert_pem)
+    nats_operator_key_pem_b64   = base64encode(tls_private_key.nats_operator_client.private_key_pem)
   })
 }

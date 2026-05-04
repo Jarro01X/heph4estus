@@ -49,6 +49,10 @@ type SelfhostedConfig struct {
 	ControllerCAPEM        string
 	ControllerCAFile       string
 	ControllerServerName   string
+	NATSClientCertPEM      string
+	NATSClientKeyPEM       string
+	NATSClientCertFile     string
+	NATSClientKeyFile      string
 
 	// S3-compatible object store settings.
 	S3Endpoint  string
@@ -119,6 +123,10 @@ func Build(cfg Config) (cloud.Provider, error) {
 				RootCAPEM:      cfg.Selfhosted.ControllerCAPEM,
 				RootCAFile:     cfg.Selfhosted.ControllerCAFile,
 				ServerName:     cfg.Selfhosted.ControllerServerName,
+				ClientCertPEM:  cfg.Selfhosted.NATSClientCertPEM,
+				ClientKeyPEM:   cfg.Selfhosted.NATSClientKeyPEM,
+				ClientCertFile: cfg.Selfhosted.NATSClientCertFile,
+				ClientKeyFile:  cfg.Selfhosted.NATSClientKeyFile,
 			}
 		}
 		if len(cfg.Selfhosted.WorkerHosts) > 0 {
@@ -159,6 +167,10 @@ func Build(cfg Config) (cloud.Provider, error) {
 				RootCAPEM:      cfg.Selfhosted.ControllerCAPEM,
 				RootCAFile:     cfg.Selfhosted.ControllerCAFile,
 				ServerName:     cfg.Selfhosted.ControllerServerName,
+				ClientCertPEM:  cfg.Selfhosted.NATSClientCertPEM,
+				ClientKeyPEM:   cfg.Selfhosted.NATSClientKeyPEM,
+				ClientCertFile: cfg.Selfhosted.NATSClientCertFile,
+				ClientKeyFile:  cfg.Selfhosted.NATSClientKeyFile,
 			}
 		}
 		return selfhosted.NewProvider(pcfg, cfg.Logger)
@@ -182,6 +194,10 @@ func SelfhostedConfigFromEnv() *SelfhostedConfig {
 		ControllerCAPEM:      os.Getenv("HEPH_CONTROLLER_CA_PEM"),
 		ControllerCAFile:     os.Getenv("HEPH_CONTROLLER_CA_FILE"),
 		ControllerServerName: os.Getenv("HEPH_CONTROLLER_SERVER_NAME"),
+		NATSClientCertPEM:    os.Getenv("HEPH_NATS_CLIENT_CERT_PEM"),
+		NATSClientKeyPEM:     os.Getenv("HEPH_NATS_CLIENT_KEY_PEM"),
+		NATSClientCertFile:   os.Getenv("HEPH_NATS_CLIENT_CERT_FILE"),
+		NATSClientKeyFile:    os.Getenv("HEPH_NATS_CLIENT_KEY_FILE"),
 
 		// Scan runtime settings.
 		QueueID: os.Getenv("SELFHOSTED_QUEUE_ID"),
@@ -256,6 +272,8 @@ func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
 		RegistryAuthEnabled:    parseOutputBool(outputs["registry_auth_enabled"]),
 		ControllerCAPEM:        outputs["controller_ca_pem"],
 		ControllerServerName:   outputs["controller_host"],
+		NATSClientCertPEM:      outputs["nats_operator_client_cert_pem"],
+		NATSClientKeyPEM:       outputs["nats_operator_client_key_pem"],
 	}
 	if hosts := outputs["worker_hosts"]; hosts != "" {
 		cfg.WorkerHosts = splitCommaList(hosts)

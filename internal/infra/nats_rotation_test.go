@@ -62,7 +62,7 @@ func TestNATSTerraformVars(t *testing.T) {
 }
 
 func TestNATSAuthConfigTLS(t *testing.T) {
-	cfg := NATSAuthConfig(testNATSCredentials(), true)
+	cfg := NATSAuthConfig(testNATSCredentials(), true, false)
 	for _, want := range []string{
 		"tls {",
 		`cert_file: "/tls/public.crt"`,
@@ -72,6 +72,13 @@ func TestNATSAuthConfigTLS(t *testing.T) {
 		if !strings.Contains(cfg, want) {
 			t.Fatalf("config missing %q:\n%s", want, cfg)
 		}
+	}
+}
+
+func TestNATSAuthConfigMTLS(t *testing.T) {
+	cfg := NATSAuthConfig(testNATSCredentials(), true, true)
+	if !strings.Contains(cfg, "verify: true") {
+		t.Fatalf("mTLS config missing verify: true:\n%s", cfg)
 	}
 }
 
@@ -103,6 +110,7 @@ func TestUpdateControllerNATSAuthFinal(t *testing.T) {
 	err := UpdateControllerNATSAuth(context.Background(), runner, "1.2.3.4", NATSControllerAuthUpdate{
 		Credentials: testNATSCredentials(),
 		TLSEnabled:  true,
+		MTLSEnabled: true,
 		Mode:        NATSAuthUpdateFinal,
 	})
 	if err != nil {
@@ -111,6 +119,7 @@ func TestUpdateControllerNATSAuthFinal(t *testing.T) {
 	for _, want := range []string{
 		"<<'HEPH_NATS_AUTH'",
 		"tls {",
+		"verify: true",
 		`{ user: "heph-worker-new", password: "worker-secret" }`,
 		"systemctl restart nats",
 	} {
