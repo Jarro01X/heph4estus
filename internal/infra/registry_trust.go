@@ -103,7 +103,7 @@ func EnsureRegistryTrust(cfg RegistryTrustConfig) (*RegistryTrustResult, error) 
 		return result, fmt.Errorf("read Docker registry CA trust at %s: %w\n\n%s", result.DockerCAPath, err, registryTrustInstallInstructions(result))
 	}
 	if normalizeCertificatePEM(string(dockerCA)) != caPEM {
-		return result, fmt.Errorf("Docker registry CA trust at %s does not match controller CA saved at %s\n\n%s", result.DockerCAPath, result.LocalCAPath, registryTrustInstallInstructions(result))
+		return result, fmt.Errorf("docker registry CA trust at %s does not match controller CA saved at %s\n\n%s", result.DockerCAPath, result.LocalCAPath, registryTrustInstallInstructions(result))
 	}
 
 	result.Trusted = true
