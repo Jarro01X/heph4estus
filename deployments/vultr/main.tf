@@ -160,8 +160,8 @@ locals {
       nats_password         = module.controller.nats_worker_password
       minio_port            = 9000
       minio_scheme          = module.controller.minio_tls_enabled ? "https" : "http"
-      minio_access_key      = module.controller.s3_access_key
-      minio_secret_key      = module.controller.s3_secret_key
+      minio_access_key      = module.controller.s3_worker_access_key
+      minio_secret_key      = module.controller.s3_worker_secret_key
       minio_bucket          = var.minio_bucket
       registry_port         = 5000
       registry_scheme       = module.controller.registry_tls_enabled ? "https" : "http"

@@ -91,14 +91,38 @@ output "s3_region" {
 }
 
 output "s3_access_key" {
-  description = "MinIO root access key."
-  value       = random_id.minio_access_key.hex
+  description = "Backward-compatible MinIO operator access key."
+  value       = random_id.minio_operator_access_key.hex
   sensitive   = true
 }
 
 output "s3_secret_key" {
-  description = "MinIO root secret key."
-  value       = random_password.minio_secret_key.result
+  description = "Backward-compatible MinIO operator secret key."
+  value       = random_password.minio_operator_secret_key.result
+  sensitive   = true
+}
+
+output "s3_operator_access_key" {
+  description = "MinIO operator access key."
+  value       = random_id.minio_operator_access_key.hex
+  sensitive   = true
+}
+
+output "s3_operator_secret_key" {
+  description = "MinIO operator secret key."
+  value       = random_password.minio_operator_secret_key.result
+  sensitive   = true
+}
+
+output "s3_worker_access_key" {
+  description = "MinIO worker access key."
+  value       = random_id.minio_worker_access_key.hex
+  sensitive   = true
+}
+
+output "s3_worker_secret_key" {
+  description = "MinIO worker secret key, intended for worker cloud-init only."
+  value       = random_password.minio_worker_secret_key.result
   sensitive   = true
 }
 
