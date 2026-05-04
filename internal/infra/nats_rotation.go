@@ -205,10 +205,6 @@ func natsGraceAuthCommand(creds NATSCredentials) string {
 	}, "\n")
 }
 
-func natsFinalAuthCommand(creds NATSCredentials, tlsEnabled bool) string {
-	return natsFinalAuthCommandWithMTLS(creds, tlsEnabled, false)
-}
-
 func natsFinalAuthCommandWithMTLS(creds NATSCredentials, tlsEnabled, mtlsEnabled bool) string {
 	return strings.Join([]string{
 		"set -eu",
