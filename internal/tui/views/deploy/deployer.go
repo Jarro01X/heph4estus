@@ -72,6 +72,9 @@ func (d *RealDeployer) DockerBuildWithArgs(ctx context.Context, dockerfile, buil
 }
 
 func (d *RealDeployer) RegistryAuth(ctx context.Context, kind cloud.Kind, region string, outputs map[string]string) error {
+	if _, err := infra.EnsureProviderRegistryTrust(kind, outputs); err != nil {
+		return err
+	}
 	pub := infra.NewPublisher(kind, d.docker, d.ecr, outputs, region)
 	return pub.Authenticate(ctx)
 }
