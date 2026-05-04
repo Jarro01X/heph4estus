@@ -58,6 +58,16 @@ resource "random_password" "nats_worker_password" {
   special = false
 }
 
+resource "random_password" "registry_publisher_password" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "registry_worker_password" {
+  length  = 32
+  special = false
+}
+
 # --- TLS material ---
 
 resource "tls_private_key" "controller_ca" {
@@ -115,14 +125,16 @@ resource "tls_locally_signed_cert" "controller_server" {
 # --- Cloud-init rendering ---
 
 locals {
-  credential_scope_version = "nats-minio-role-v1"
+  credential_scope_version = "nats-minio-registry-role-v1"
   nats_operator_user       = "heph-operator"
   nats_worker_user         = "heph-worker"
+  registry_publisher_user  = "heph-registry-publisher"
+  registry_worker_user     = "heph-registry-worker"
   nats_user                = local.nats_operator_user
   nats_tls_enabled         = contains(["tls", "mtls"], var.controller_security_mode)
   minio_tls_enabled        = contains(["tls", "mtls"], var.controller_security_mode)
   registry_tls_enabled     = contains(["tls", "mtls"], var.controller_security_mode)
-  registry_auth_enabled    = false
+  registry_auth_enabled    = true
   nats_auth_enabled        = true
   minio_auth_enabled       = true
   controller_security_mode = var.controller_security_mode
@@ -132,28 +144,32 @@ locals {
   registry_scheme          = local.registry_tls_enabled ? "https" : "http"
 
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml", {
-    minio_root_access_key     = random_id.minio_access_key.hex
-    minio_root_secret_key     = random_password.minio_secret_key.result
-    minio_operator_access_key = random_id.minio_operator_access_key.hex
-    minio_operator_secret_key = random_password.minio_operator_secret_key.result
-    minio_worker_access_key   = random_id.minio_worker_access_key.hex
-    minio_worker_secret_key   = random_password.minio_worker_secret_key.result
-    minio_bucket              = var.minio_bucket
-    minio_port                = var.minio_port
-    minio_console_port        = var.minio_console_port
-    nats_port                 = var.nats_port
-    nats_monitor_port         = var.nats_monitor_port
-    nats_stream_name          = var.nats_stream_name
-    registry_port             = var.registry_port
-    nats_operator_user        = local.nats_operator_user
-    nats_operator_password    = random_password.nats_password.result
-    nats_worker_user          = local.nats_worker_user
-    nats_worker_password      = random_password.nats_worker_password.result
-    tls_enabled               = local.nats_tls_enabled
-    nats_scheme               = local.nats_scheme
-    minio_scheme              = local.minio_scheme
-    controller_ca_pem_b64     = base64encode(tls_self_signed_cert.controller_ca.cert_pem)
-    controller_cert_pem_b64   = base64encode(tls_locally_signed_cert.controller_server.cert_pem)
-    controller_key_pem_b64    = base64encode(tls_private_key.controller_server.private_key_pem)
+    minio_root_access_key       = random_id.minio_access_key.hex
+    minio_root_secret_key       = random_password.minio_secret_key.result
+    minio_operator_access_key   = random_id.minio_operator_access_key.hex
+    minio_operator_secret_key   = random_password.minio_operator_secret_key.result
+    minio_worker_access_key     = random_id.minio_worker_access_key.hex
+    minio_worker_secret_key     = random_password.minio_worker_secret_key.result
+    minio_bucket                = var.minio_bucket
+    minio_port                  = var.minio_port
+    minio_console_port          = var.minio_console_port
+    nats_port                   = var.nats_port
+    nats_monitor_port           = var.nats_monitor_port
+    nats_stream_name            = var.nats_stream_name
+    registry_port               = var.registry_port
+    registry_publisher_user     = local.registry_publisher_user
+    registry_publisher_password = random_password.registry_publisher_password.result
+    registry_worker_user        = local.registry_worker_user
+    registry_worker_password    = random_password.registry_worker_password.result
+    nats_operator_user          = local.nats_operator_user
+    nats_operator_password      = random_password.nats_password.result
+    nats_worker_user            = local.nats_worker_user
+    nats_worker_password        = random_password.nats_worker_password.result
+    tls_enabled                 = local.nats_tls_enabled
+    nats_scheme                 = local.nats_scheme
+    minio_scheme                = local.minio_scheme
+    controller_ca_pem_b64       = base64encode(tls_self_signed_cert.controller_ca.cert_pem)
+    controller_cert_pem_b64     = base64encode(tls_locally_signed_cert.controller_server.cert_pem)
+    controller_key_pem_b64      = base64encode(tls_private_key.controller_server.private_key_pem)
   })
 }

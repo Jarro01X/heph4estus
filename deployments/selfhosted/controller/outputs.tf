@@ -141,6 +141,39 @@ output "registry_url" {
   value       = "${local.registry_scheme}://${var.controller_ip}:${var.registry_port}"
 }
 
+output "registry_username" {
+  description = "Backward-compatible Docker registry publisher username."
+  value       = local.registry_publisher_user
+}
+
+output "registry_password" {
+  description = "Backward-compatible Docker registry publisher password."
+  value       = random_password.registry_publisher_password.result
+  sensitive   = true
+}
+
+output "registry_publisher_username" {
+  description = "Docker registry publisher username."
+  value       = local.registry_publisher_user
+}
+
+output "registry_publisher_password" {
+  description = "Docker registry publisher password."
+  value       = random_password.registry_publisher_password.result
+  sensitive   = true
+}
+
+output "registry_worker_username" {
+  description = "Docker registry worker username, intended for worker image pulls."
+  value       = local.registry_worker_user
+}
+
+output "registry_worker_password" {
+  description = "Docker registry worker password, intended for worker cloud-init image pulls only."
+  value       = random_password.registry_worker_password.result
+  sensitive   = true
+}
+
 output "nats_user" {
   description = "Backward-compatible NATS operator authentication username."
   value       = local.nats_operator_user

@@ -225,6 +225,8 @@ locals {
       registry_port         = 5000
       registry_scheme       = module.controller.registry_tls_enabled ? "https" : "http"
       registry_tls_enabled  = module.controller.registry_tls_enabled
+      registry_username     = module.controller.registry_worker_username
+      registry_password     = module.controller.registry_worker_password
       controller_ca_pem_b64 = base64encode(module.controller.controller_ca_pem)
       tool_name             = var.tool_name
       docker_image          = var.docker_image
