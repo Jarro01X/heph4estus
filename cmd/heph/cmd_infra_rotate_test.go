@@ -19,12 +19,12 @@ func TestRunInfraRotateRequiresSubcommand(t *testing.T) {
 	}
 }
 
-func TestRunInfraRotateCredentialsRequiresDryRun(t *testing.T) {
-	err := runInfraRotateCredentials([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "nats"}, testLogger())
+func TestRunInfraRotateCredentialsRejectsNonNATSMutationBeforeTerraform(t *testing.T) {
+	err := runInfraRotateCredentials([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "registry"}, testLogger())
 	if err == nil {
-		t.Fatal("expected dry-run guard error")
+		t.Fatal("expected unsupported mutation error")
 	}
-	if !strings.Contains(err.Error(), "not implemented yet") {
+	if !strings.Contains(err.Error(), "currently supports only --component nats") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -46,6 +46,39 @@ func TestRunInfraRotateCredentialsRejectsInvalidComponentBeforeTerraform(t *test
 	}
 	if !strings.Contains(err.Error(), "--component must be") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseRotationWorkerCount(t *testing.T) {
+	got, err := parseRotationWorkerCount(map[string]string{"worker_count": "3"})
+	if err != nil {
+		t.Fatalf("parseRotationWorkerCount: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("worker count = %d, want 3", got)
+	}
+}
+
+func TestParseRotationWorkerCountRejectsInvalid(t *testing.T) {
+	_, err := parseRotationWorkerCount(map[string]string{"worker_count": "0"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "positive worker_count") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAllWorkerIndexes(t *testing.T) {
+	got := allWorkerIndexes(3)
+	want := []int{0, 1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("index %d = %d, want %d", i, got[i], want[i])
+		}
 	}
 }
 

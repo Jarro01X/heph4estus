@@ -22,19 +22,20 @@ var allCredentialRotationComponents = []CredentialRotationComponent{
 }
 
 type CredentialRotationPlan struct {
-	Tool                   string
-	Cloud                  cloud.Kind
-	RequestedComponent     string
-	Components             []CredentialRotationComponent
-	ControllerServices     []string
-	OperatorOutputKeys     []string
-	WorkerRecycleRequired  bool
-	WorkerCount            string
-	CredentialScopeVersion string
-	ControllerSecurityMode string
-	GenerationID           string
-	Actions                []string
-	Verification           []string
+	Tool                     string
+	Cloud                    cloud.Kind
+	RequestedComponent       string
+	Components               []CredentialRotationComponent
+	ControllerServices       []string
+	OperatorOutputKeys       []string
+	WorkerRecycleRequired    bool
+	WorkerCount              string
+	CredentialScopeVersion   string
+	NATSCredentialGeneration string
+	ControllerSecurityMode   string
+	GenerationID             string
+	Actions                  []string
+	Verification             []string
 }
 
 func ParseCredentialRotationComponents(raw string) ([]CredentialRotationComponent, error) {
@@ -70,15 +71,16 @@ func PlanCredentialRotation(kind cloud.Kind, tool, component string, probe Probe
 	}
 	outputs := probe.Outputs
 	plan := &CredentialRotationPlan{
-		Tool:                   tool,
-		Cloud:                  kind.Canonical(),
-		RequestedComponent:     strings.TrimSpace(strings.ToLower(component)),
-		Components:             components,
-		WorkerRecycleRequired:  true,
-		WorkerCount:            outputOrUnknown(outputs, "worker_count"),
-		CredentialScopeVersion: outputOrUnknown(outputs, "credential_scope_version"),
-		ControllerSecurityMode: outputOrUnknown(outputs, "controller_security_mode"),
-		GenerationID:           outputOrUnknown(outputs, "generation_id"),
+		Tool:                     tool,
+		Cloud:                    kind.Canonical(),
+		RequestedComponent:       strings.TrimSpace(strings.ToLower(component)),
+		Components:               components,
+		WorkerRecycleRequired:    true,
+		WorkerCount:              outputOrUnknown(outputs, "worker_count"),
+		CredentialScopeVersion:   outputOrUnknown(outputs, "credential_scope_version"),
+		NATSCredentialGeneration: outputOrUnknown(outputs, "nats_credential_generation"),
+		ControllerSecurityMode:   outputOrUnknown(outputs, "controller_security_mode"),
+		GenerationID:             outputOrUnknown(outputs, "generation_id"),
 	}
 	for _, component := range components {
 		addCredentialComponentPlan(plan, component)
