@@ -79,6 +79,13 @@ variable "controller_ca_pem_override" {
   default     = ""
 }
 
+variable "controller_ca_key_pem_override" {
+  description = "Rotated controller CA private key PEM. Empty uses the controller module bootstrap CA key."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "controller_cert_pem_override" {
   description = "Rotated controller server certificate PEM. Empty uses the controller module bootstrap server certificate."
   type        = string

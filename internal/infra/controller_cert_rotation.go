@@ -28,6 +28,12 @@ type ControllerCertificateMaterial struct {
 	RotatedAt  string
 }
 
+type ControllerCAMaterial struct {
+	ControllerCertificateMaterial
+	CAKeyPEM            string
+	CAFingerprintSHA256 string
+}
+
 type ControllerCertificateUpdate struct {
 	Material ControllerCertificateMaterial
 	Services []string
@@ -38,10 +44,42 @@ func GenerateControllerCertificateMaterial(now time.Time, outputs map[string]str
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
+	generation, err := newCertificateGeneration("cert", now)
+	if err != nil {
+		return ControllerCertificateMaterial{}, err
+	}
 	caPEM := normalizeCertificatePEM(outputs["controller_ca_pem"])
 	if caPEM == "" {
 		return ControllerCertificateMaterial{}, fmt.Errorf("controller_ca_pem output is required for controller certificate rotation")
 	}
+	return generateControllerServerCertificateMaterial(now, outputs, caPEM, caPrivateKeyPEM, generation)
+}
+
+func GenerateControllerCAMaterial(now time.Time, outputs map[string]string) (ControllerCAMaterial, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	generation, err := newCertificateGeneration("ca", now)
+	if err != nil {
+		return ControllerCAMaterial{}, err
+	}
+	caPEM, caKeyPEM, err := generateControllerCA(now)
+	if err != nil {
+		return ControllerCAMaterial{}, err
+	}
+	certMaterial, err := generateControllerServerCertificateMaterial(now, outputs, caPEM, caKeyPEM, generation)
+	if err != nil {
+		return ControllerCAMaterial{}, err
+	}
+	return ControllerCAMaterial{
+		ControllerCertificateMaterial: certMaterial,
+		CAKeyPEM:                      caKeyPEM,
+		CAFingerprintSHA256:           sha256PEM(caPEM),
+	}, nil
+}
+
+func generateControllerServerCertificateMaterial(now time.Time, outputs map[string]string, caPEM, caPrivateKeyPEM, generation string) (ControllerCertificateMaterial, error) {
 	caCert, err := parseCertificatePEM(caPEM)
 	if err != nil {
 		return ControllerCertificateMaterial{}, fmt.Errorf("controller_ca_pem output is invalid: %w", err)
@@ -89,16 +127,12 @@ func GenerateControllerCertificateMaterial(now time.Time, outputs map[string]str
 	if err != nil {
 		return ControllerCertificateMaterial{}, fmt.Errorf("signing controller server certificate: %w", err)
 	}
-	suffix, err := randomHex(4)
-	if err != nil {
-		return ControllerCertificateMaterial{}, err
-	}
 	return ControllerCertificateMaterial{
 		CAPEM:      caPEM,
 		CertPEM:    string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})),
 		KeyPEM:     string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})),
 		NotAfter:   notAfter.Format(time.RFC3339),
-		Generation: fmt.Sprintf("cert-%s-%s", now.Format("20060102t150405z"), suffix),
+		Generation: generation,
 		RotatedAt:  now.Format(time.RFC3339),
 	}, nil
 }
@@ -112,6 +146,12 @@ func ControllerCertificateTerraformVars(material ControllerCertificateMaterial) 
 		"controller_cert_generation":         material.Generation,
 		"controller_cert_rotated_at":         material.RotatedAt,
 	}
+}
+
+func ControllerCATerraformVars(material ControllerCAMaterial) map[string]string {
+	vars := ControllerCertificateTerraformVars(material.ControllerCertificateMaterial)
+	vars["controller_ca_key_pem_override"] = material.CAKeyPEM
+	return vars
 }
 
 func UpdateControllerCertificate(ctx context.Context, runner RemoteCommandRunner, host string, update ControllerCertificateUpdate) error {
@@ -166,6 +206,36 @@ func validateControllerCACertificate(cert *x509.Certificate, now time.Time) erro
 		return fmt.Errorf("controller CA certificate expired at %s", cert.NotAfter.UTC().Format(time.RFC3339))
 	}
 	return nil
+}
+
+func generateControllerCA(now time.Time) (string, string, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return "", "", fmt.Errorf("generating controller CA key: %w", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return "", "", fmt.Errorf("encoding controller CA key: %w", err)
+	}
+	serial, err := randomCertificateSerial()
+	if err != nil {
+		return "", "", err
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "heph4estus controller CA", Organization: []string{"heph4estus"}},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(controllerCertValidity),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return "", "", fmt.Errorf("signing controller CA certificate: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})),
+		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})), nil
 }
 
 func controllerCertificateUpdateCommand(update ControllerCertificateUpdate) string {
@@ -289,6 +359,14 @@ func randomCertificateSerial() (*big.Int, error) {
 		return big.NewInt(1), nil
 	}
 	return serial, nil
+}
+
+func newCertificateGeneration(prefix string, now time.Time) (string, error) {
+	suffix, err := randomHex(4)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s-%s", prefix, now.Format("20060102t150405z"), suffix), nil
 }
 
 var _ crypto.Signer = (*ecdsa.PrivateKey)(nil)

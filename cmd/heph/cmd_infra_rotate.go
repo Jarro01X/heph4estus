@@ -42,6 +42,8 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 	sshUser := fs.String("ssh-user", "root", "SSH user for controller certificate updates")
 	sshKey := fs.String("ssh-key", "", "SSH private key for controller certificate updates (default: env or ~/.ssh)")
 	sshPort := fs.Int("ssh-port", 22, "SSH port for controller certificate updates")
+	trustDir := fs.String("trust-dir", "", "Directory for Heph's local controller CA trust cache during CA rotation")
+	dockerCertsDir := fs.String("docker-certs-dir", "", "Docker registry certs directory during CA rotation (default: /etc/docker/certs.d or HEPH_DOCKER_CERTS_DIR)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -55,8 +57,8 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	if !*dryRun && (len(components) != 1 || components[0] != infra.CertificateComponentController) {
-		return fmt.Errorf("certificate rotation mutation currently supports only --component controller; rerun other components with --dry-run")
+	if !*dryRun && (len(components) != 1 || !supportedCertificateMutationComponent(components[0])) {
+		return fmt.Errorf("certificate rotation mutation currently supports only --component controller or --component ca; rerun other components with --dry-run")
 	}
 
 	opCfg, _ := operator.LoadConfig()
@@ -81,16 +83,18 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 		if failures := failingProviderNativeOutputChecks(cloudKind, probe.Outputs); len(failures) > 0 {
 			return fmt.Errorf("certificate rotation preflight failed security posture checks: %s", strings.Join(failures, "; "))
 		}
-		return runControllerCertificateRotationMutation(rotationMutationOpts{
-			ToolConfig:  cfg,
-			Cloud:       cloudKind,
-			Probe:       probe,
-			AutoApprove: *autoApprove,
-			SSHUser:     *sshUser,
-			SSHKey:      *sshKey,
-			SSHPort:     *sshPort,
-			Log:         log,
-		})
+		return runCertificateRotationMutation(rotationMutationOpts{
+			ToolConfig:     cfg,
+			Cloud:          cloudKind,
+			Probe:          probe,
+			AutoApprove:    *autoApprove,
+			SSHUser:        *sshUser,
+			SSHKey:         *sshKey,
+			SSHPort:        *sshPort,
+			TrustDir:       *trustDir,
+			DockerCertsDir: *dockerCertsDir,
+			Log:            log,
+		}, components[0])
 	}
 	return outputCertificateRotationPlanText(os.Stdout, plan)
 }
@@ -169,14 +173,20 @@ func runInfraRotateCredentials(args []string, log logger.Logger) error {
 }
 
 type rotationMutationOpts struct {
-	ToolConfig  *infra.ToolConfig
-	Cloud       cloud.Kind
-	Probe       infra.ProbeResult
-	AutoApprove bool
-	SSHUser     string
-	SSHKey      string
-	SSHPort     int
-	Log         logger.Logger
+	ToolConfig     *infra.ToolConfig
+	Cloud          cloud.Kind
+	Probe          infra.ProbeResult
+	AutoApprove    bool
+	SSHUser        string
+	SSHKey         string
+	SSHPort        int
+	TrustDir       string
+	DockerCertsDir string
+	Log            logger.Logger
+}
+
+func supportedCertificateMutationComponent(component infra.CertificateRotationComponent) bool {
+	return component == infra.CertificateComponentController || component == infra.CertificateComponentCA
 }
 
 type preparedRotationMutation struct {
@@ -454,6 +464,17 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 	return nil
 }
 
+func runCertificateRotationMutation(opts rotationMutationOpts, component infra.CertificateRotationComponent) error {
+	switch component {
+	case infra.CertificateComponentController:
+		return runControllerCertificateRotationMutation(opts)
+	case infra.CertificateComponentCA:
+		return runControllerCARotationMutation(opts)
+	default:
+		return fmt.Errorf("unsupported certificate rotation component %q", component)
+	}
+}
+
 func runControllerCertificateRotationMutation(opts rotationMutationOpts) error {
 	if opts.ToolConfig == nil {
 		return fmt.Errorf("tool config is required")
@@ -470,12 +491,7 @@ func runControllerCertificateRotationMutation(opts rotationMutationOpts) error {
 		}
 	}
 
-	tf := infra.NewTerraformClient(opts.Log)
-	stateJSON, err := tf.ShowJSON(mainContext(), opts.ToolConfig.TerraformDir)
-	if err != nil {
-		return fmt.Errorf("reading Terraform state for controller CA key: %w", err)
-	}
-	caPrivateKeyPEM, err := infra.ControllerCAPrivateKeyFromTerraformShow(stateJSON)
+	caPrivateKeyPEM, err := controllerCAPrivateKeyForRotation(opts)
 	if err != nil {
 		return err
 	}
@@ -514,6 +530,135 @@ func runControllerCertificateRotationMutation(opts rotationMutationOpts) error {
 		return err
 	}
 	return nil
+}
+
+func runControllerCARotationMutation(opts rotationMutationOpts) error {
+	if opts.ToolConfig == nil {
+		return fmt.Errorf("tool config is required")
+	}
+	prepared, err := prepareRotationMutation(opts)
+	if err != nil {
+		return err
+	}
+	services := infra.CertificateTLSEnabledServices(prepared.Outputs)
+	if !opts.AutoApprove {
+		question := fmt.Sprintf("Rotate controller CA for %s/%s, restart %s, and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, certificateControllerServiceText(services), prepared.WorkerCount)
+		if !cliPrompt(question) {
+			return printStderrLine("Cancelled.")
+		}
+	}
+
+	material, err := infra.GenerateControllerCAMaterial(time.Now().UTC(), prepared.Outputs)
+	if err != nil {
+		return err
+	}
+	vars := infra.ControllerCATerraformVars(material)
+
+	if err := printStdout("Rotating controller CA for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {
+		return err
+	}
+	if err := printStdoutLine("Checking controller SSH access..."); err != nil {
+		return err
+	}
+	if err := prepared.Runner.Run(mainContext(), prepared.ControllerHost, "true"); err != nil {
+		return fmt.Errorf("checking controller SSH access: %w", err)
+	}
+
+	trustResult, err := installRotatedRegistryTrust(opts, prepared.Outputs, material)
+	if err != nil {
+		return err
+	}
+	if trustResult != nil && trustResult.Required {
+		if err := printStdout("Installed operator registry CA trust at %s\n", trustResult.DockerCAPath); err != nil {
+			return err
+		}
+	}
+
+	if err := printStdoutLine("Installing replacement CA and TLS material on controller..."); err != nil {
+		return err
+	}
+	update := infra.ControllerCertificateUpdate{
+		Material: material.ControllerCertificateMaterial,
+		Services: services,
+	}
+	if err := infra.UpdateControllerCertificate(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("updating controller CA: %w", err)
+	}
+
+	if _, err := infra.MergeRotationAutoVars(opts.ToolConfig.TerraformDir, vars); err != nil {
+		return fmt.Errorf("persisting rotated controller CA Terraform vars: %w", err)
+	}
+
+	if err := printStdout("Replacing %d workers with rotated controller CA trust...\n", prepared.WorkerCount); err != nil {
+		return err
+	}
+	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
+		return fmt.Errorf("replacing workers with rotated controller CA trust: %w", err)
+	}
+
+	tf := infra.NewTerraformClient(opts.Log)
+	rotatedOutputs, err := tf.ReadOutputs(mainContext(), opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
+	}
+	if _, err := infra.EnsureProviderRegistryTrust(opts.Cloud, rotatedOutputs); err != nil {
+		return fmt.Errorf("verifying rotated operator registry trust: %w", err)
+	}
+
+	if err := printStdoutLine("Verifying workers can heartbeat with rotated controller CA..."); err != nil {
+		return err
+	}
+	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
+		return fmt.Errorf("verifying rotated controller CA: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(os.Stdout, "Rotated controller CA. Generation: %s\n", material.Generation); err != nil {
+		return err
+	}
+	return nil
+}
+
+func controllerCAPrivateKeyForRotation(opts rotationMutationOpts) (string, error) {
+	vars, err := infra.ReadRotationAutoVars(opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return "", fmt.Errorf("reading rotation vars for controller CA key: %w", err)
+	}
+	if key := strings.TrimSpace(vars["controller_ca_key_pem_override"]); key != "" {
+		return key, nil
+	}
+	tf := infra.NewTerraformClient(opts.Log)
+	stateJSON, err := tf.ShowJSON(mainContext(), opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return "", fmt.Errorf("reading Terraform state for controller CA key: %w", err)
+	}
+	return infra.ControllerCAPrivateKeyFromTerraformShow(stateJSON)
+}
+
+func installRotatedRegistryTrust(opts rotationMutationOpts, outputs map[string]string, material infra.ControllerCAMaterial) (*infra.RegistryTrustResult, error) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(outputs["registry_url"])), "https://") {
+		return nil, nil
+	}
+	installCfg := infra.RegistryTrustInstallConfig{
+		RegistryTrustConfig: infra.RegistryTrustConfig{
+			RegistryURL:                   outputs["registry_url"],
+			ControllerCAPEM:               material.CAPEM,
+			ControllerCAFingerprintSHA256: material.CAFingerprintSHA256,
+			ControllerCertNotAfter:        material.NotAfter,
+			TrustDir:                      opts.TrustDir,
+			DockerCertsDir:                opts.DockerCertsDir,
+		},
+	}
+	if _, err := infra.InstallRegistryTrust(infra.RegistryTrustInstallConfig{
+		RegistryTrustConfig: installCfg.RegistryTrustConfig,
+		DryRun:              true,
+	}); err != nil {
+		return nil, fmt.Errorf("planning rotated operator registry trust: %w", err)
+	}
+	result, err := infra.InstallRegistryTrust(installCfg)
+	if err != nil {
+		return nil, fmt.Errorf("installing rotated operator registry trust: %w", err)
+	}
+	return result, nil
 }
 
 func printStdout(format string, args ...interface{}) error {
