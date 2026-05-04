@@ -94,8 +94,10 @@ func runInfraRotateCredentials(args []string, log logger.Logger) error {
 			return runNATSCredentialRotationMutation(opts)
 		case infra.CredentialComponentMinIO:
 			return runMinIOCredentialRotationMutation(opts)
+		case infra.CredentialComponentRegistry:
+			return runRegistryCredentialRotationMutation(opts)
 		default:
-			return fmt.Errorf("credential rotation mutation currently supports --component nats or minio; rerun other components with --dry-run")
+			return fmt.Errorf("unsupported credential rotation component %q", components[0])
 		}
 	}
 	return outputCredentialRotationPlanText(os.Stdout, plan)
@@ -287,6 +289,72 @@ func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
 	}
 
 	if _, err := fmt.Fprintf(os.Stdout, "Rotated MinIO credentials. Generation: %s\n", creds.Generation); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
+	if opts.ToolConfig == nil {
+		return fmt.Errorf("tool config is required")
+	}
+	prepared, err := prepareRotationMutation(opts)
+	if err != nil {
+		return err
+	}
+	if !opts.AutoApprove {
+		question := fmt.Sprintf("Rotate registry credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
+		if !cliPrompt(question) {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+	}
+
+	creds, err := infra.GenerateRegistryCredentials(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	update := infra.RegistryControllerAuthUpdate{
+		Credentials: creds,
+		TLSEnabled:  rotationOutputBool(prepared.Outputs["registry_tls_enabled"]),
+		RegistryURL: prepared.Outputs["registry_url"],
+	}
+
+	fmt.Fprintf(os.Stdout, "Rotating registry credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
+	fmt.Fprintln(os.Stdout, "Adding rotated registry users and verifying grace access...")
+	update.Mode = infra.RegistryAuthUpdateGrace
+	if err := infra.UpdateControllerRegistryAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("adding grace registry credentials on controller: %w", err)
+	}
+
+	vars := infra.RegistryTerraformVars(creds)
+	if _, err := infra.MergeRotationAutoVars(opts.ToolConfig.TerraformDir, vars); err != nil {
+		return fmt.Errorf("persisting rotated registry Terraform vars: %w", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated registry credentials...\n", prepared.WorkerCount)
+	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
+		return fmt.Errorf("replacing workers with rotated registry credentials: %w", err)
+	}
+
+	tf := infra.NewTerraformClient(opts.Log)
+	rotatedOutputs, err := tf.ReadOutputs(mainContext(), opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, "Verifying rotated workers can heartbeat...")
+	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
+		return fmt.Errorf("verifying rotated registry worker rollout: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, "Removing previous registry users from controller auth...")
+	update.Mode = infra.RegistryAuthUpdateFinal
+	if err := infra.UpdateControllerRegistryAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("finalizing registry credentials on controller: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(os.Stdout, "Rotated registry credentials. Generation: %s\n", creds.Generation); err != nil {
 		return err
 	}
 	return nil

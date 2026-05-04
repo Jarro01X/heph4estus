@@ -150,3 +150,41 @@ variable "minio_credential_rotated_at" {
   type        = string
   default     = ""
 }
+
+variable "registry_publisher_username_override" {
+  description = "Rotated Docker registry publisher username. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+}
+
+variable "registry_publisher_password_override" {
+  description = "Rotated Docker registry publisher password. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registry_worker_username_override" {
+  description = "Rotated Docker registry worker username. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+}
+
+variable "registry_worker_password_override" {
+  description = "Rotated Docker registry worker password. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registry_credential_generation" {
+  description = "Docker registry credential generation marker for operator-driven rotation."
+  type        = string
+  default     = "bootstrap"
+}
+
+variable "registry_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last Docker registry credential rotation."
+  type        = string
+  default     = ""
+}
