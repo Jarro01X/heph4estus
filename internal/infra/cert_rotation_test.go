@@ -67,6 +67,9 @@ func TestPlanCertificateRotationAll(t *testing.T) {
 	if plan.ControllerCAFingerprintSHA256 != "abc123" {
 		t.Fatalf("ControllerCAFingerprintSHA256 = %q", plan.ControllerCAFingerprintSHA256)
 	}
+	if plan.CertificateGeneration != "bootstrap" {
+		t.Fatalf("CertificateGeneration = %q, want bootstrap", plan.CertificateGeneration)
+	}
 	for _, action := range []string{
 		"generate a replacement controller server certificate signed by the current controller CA",
 		"replace or restart workers so the replacement CA is trusted",
@@ -115,6 +118,7 @@ func certificateReadyOutputs() map[string]string {
 	outputs := rotationReadyOutputs()
 	outputs["controller_ca_fingerprint_sha256"] = "abc123"
 	outputs["controller_cert_not_after"] = "2099-05-03T00:00:00Z"
+	outputs["controller_cert_generation"] = "bootstrap"
 	outputs["nats_tls_enabled"] = "true"
 	outputs["minio_tls_enabled"] = "true"
 	outputs["registry_tls_enabled"] = "true"

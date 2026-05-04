@@ -71,6 +71,16 @@ output "controller_cert_not_after" {
   value       = module.controller.controller_cert_not_after
 }
 
+output "controller_cert_generation" {
+  description = "Controller certificate generation marker."
+  value       = module.controller.controller_cert_generation
+}
+
+output "controller_cert_rotated_at" {
+  description = "RFC3339 timestamp for the last controller certificate rotation."
+  value       = module.controller.controller_cert_rotated_at
+}
+
 output "controller_host" {
   description = "Stable DNS name workers map to the controller private IP."
   value       = module.controller.controller_host

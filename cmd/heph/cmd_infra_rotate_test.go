@@ -97,6 +97,8 @@ func TestOutputCertificateRotationPlanText(t *testing.T) {
 		ControllerSecurityMode:        "tls",
 		GenerationID:                  "gen-1",
 		WorkerCount:                   "3",
+		CertificateGeneration:         "bootstrap",
+		CertificateRotatedAt:          "unknown",
 		ControllerCAFingerprintSHA256: "abc123",
 		ControllerCertNotAfter:        "2035-05-03T00:00:00Z",
 		TLSEnabledServices:            []string{"nats", "minio", "registry"},
@@ -115,6 +117,7 @@ func TestOutputCertificateRotationPlanText(t *testing.T) {
 	for _, want := range []string{
 		"Certificate rotation dry run",
 		"Components:  controller, ca",
+		"Cert gen:    bootstrap",
 		"CA sha256:   abc123",
 		"Controller services restarted: nats, minio, registry",
 		"Operator trust refresh: refresh operator-side controller CA trust",

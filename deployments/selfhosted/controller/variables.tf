@@ -31,6 +31,43 @@ variable "controller_cert_validity_hours" {
   default     = 8760
 }
 
+variable "controller_ca_pem_override" {
+  description = "Rotated controller CA PEM. Empty uses the controller module bootstrap CA."
+  type        = string
+  default     = ""
+}
+
+variable "controller_cert_pem_override" {
+  description = "Rotated controller server certificate PEM. Empty uses the controller module bootstrap server certificate."
+  type        = string
+  default     = ""
+}
+
+variable "controller_key_pem_override" {
+  description = "Rotated controller server private key PEM. Empty uses the controller module bootstrap server key."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "controller_cert_not_after_override" {
+  description = "RFC3339 expiration timestamp for the rotated controller server certificate. Empty uses the bootstrap certificate expiry."
+  type        = string
+  default     = ""
+}
+
+variable "controller_cert_generation" {
+  description = "Controller certificate generation marker for operator-driven rotation."
+  type        = string
+  default     = "bootstrap"
+}
+
+variable "controller_cert_rotated_at" {
+  description = "RFC3339 timestamp for the last controller certificate rotation."
+  type        = string
+  default     = ""
+}
+
 variable "nats_port" {
   description = "NATS client port."
   type        = number

@@ -142,6 +142,13 @@ locals {
   nats_scheme              = local.nats_tls_enabled ? "tls" : "nats"
   minio_scheme             = local.minio_tls_enabled ? "https" : "http"
   registry_scheme          = local.registry_tls_enabled ? "https" : "http"
+  controller_ca_pem        = var.controller_ca_pem_override != "" ? var.controller_ca_pem_override : tls_self_signed_cert.controller_ca.cert_pem
+  controller_cert_pem      = var.controller_cert_pem_override != "" ? var.controller_cert_pem_override : tls_locally_signed_cert.controller_server.cert_pem
+  controller_key_pem       = var.controller_key_pem_override != "" ? var.controller_key_pem_override : tls_private_key.controller_server.private_key_pem
+  controller_cert_not_after = (
+    var.controller_cert_not_after_override != "" ? var.controller_cert_not_after_override : tls_locally_signed_cert.controller_server.validity_end_time
+  )
+  controller_ca_fingerprint_sha256 = sha256(local.controller_ca_pem)
 
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml", {
     minio_root_access_key       = random_id.minio_access_key.hex
@@ -168,8 +175,8 @@ locals {
     tls_enabled                 = local.nats_tls_enabled
     nats_scheme                 = local.nats_scheme
     minio_scheme                = local.minio_scheme
-    controller_ca_pem_b64       = base64encode(tls_self_signed_cert.controller_ca.cert_pem)
-    controller_cert_pem_b64     = base64encode(tls_locally_signed_cert.controller_server.cert_pem)
-    controller_key_pem_b64      = base64encode(tls_private_key.controller_server.private_key_pem)
+    controller_ca_pem_b64       = base64encode(local.controller_ca_pem)
+    controller_cert_pem_b64     = base64encode(local.controller_cert_pem)
+    controller_key_pem_b64      = base64encode(local.controller_key_pem)
   })
 }
