@@ -329,17 +329,21 @@ func TestRequiredOutputKeysForCloud_Hetzner(t *testing.T) {
 		t.Fatalf("Hetzner keys length = %d, want %d", len(keys), len(HetznerRequiredOutputKeys))
 	}
 	want := map[string]bool{
-		"controller_security_mode": true,
-		"nats_url":                 true,
-		"nats_tls_enabled":         true,
-		"nats_auth_enabled":        true,
-		"minio_tls_enabled":        true,
-		"minio_auth_enabled":       true,
-		"registry_tls_enabled":     true,
-		"registry_auth_enabled":    true,
-		"controller_ip":            true,
-		"generation_id":            true,
-		"worker_hosts":             true,
+		"controller_security_mode":         true,
+		"nats_url":                         true,
+		"nats_tls_enabled":                 true,
+		"nats_auth_enabled":                true,
+		"minio_tls_enabled":                true,
+		"minio_auth_enabled":               true,
+		"registry_tls_enabled":             true,
+		"registry_auth_enabled":            true,
+		"controller_ca_pem":                true,
+		"controller_ca_fingerprint_sha256": true,
+		"controller_cert_not_after":        true,
+		"controller_host":                  true,
+		"controller_ip":                    true,
+		"generation_id":                    true,
+		"worker_hosts":                     true,
 	}
 	for _, k := range keys {
 		delete(want, k)
@@ -355,17 +359,21 @@ func TestRequiredOutputKeysForCloud_Linode(t *testing.T) {
 		t.Fatalf("Linode keys length = %d, want %d", len(keys), len(LinodeRequiredOutputKeys))
 	}
 	want := map[string]bool{
-		"controller_security_mode": true,
-		"nats_url":                 true,
-		"nats_tls_enabled":         true,
-		"nats_auth_enabled":        true,
-		"minio_tls_enabled":        true,
-		"minio_auth_enabled":       true,
-		"registry_tls_enabled":     true,
-		"registry_auth_enabled":    true,
-		"controller_ip":            true,
-		"generation_id":            true,
-		"worker_hosts":             true,
+		"controller_security_mode":         true,
+		"nats_url":                         true,
+		"nats_tls_enabled":                 true,
+		"nats_auth_enabled":                true,
+		"minio_tls_enabled":                true,
+		"minio_auth_enabled":               true,
+		"registry_tls_enabled":             true,
+		"registry_auth_enabled":            true,
+		"controller_ca_pem":                true,
+		"controller_ca_fingerprint_sha256": true,
+		"controller_cert_not_after":        true,
+		"controller_host":                  true,
+		"controller_ip":                    true,
+		"generation_id":                    true,
+		"worker_hosts":                     true,
 	}
 	for _, k := range keys {
 		delete(want, k)
@@ -432,6 +440,10 @@ func hetznerOutputs(tool string) string {
 		"registry_url":{"value":"10.0.1.2:5000"},
 		"registry_tls_enabled":{"value":"false"},
 		"registry_auth_enabled":{"value":"false"},
+		"controller_ca_pem":{"value":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"},
+		"controller_ca_fingerprint_sha256":{"value":"abc123"},
+		"controller_cert_not_after":{"value":"2027-05-03T00:00:00Z"},
+		"controller_host":{"value":"heph-controller"},
 		"docker_image":{"value":"scanner-nmap:latest"},
 		"sqs_queue_url":{"value":"nmap"},
 		"controller_ip":{"value":"1.2.3.4"},

@@ -10,9 +10,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"heph4estus/internal/logger"
+	"heph4estus/internal/tlsutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -32,10 +34,13 @@ type S3API interface {
 // operator misconfiguration surfaces as a clear error rather than an
 // accidental AWS call.
 type StorageConfig struct {
-	Endpoint  string
-	Region    string
-	AccessKey string
-	Secret    string
+	Endpoint   string
+	Region     string
+	AccessKey  string
+	Secret     string
+	RootCAPEM  string
+	RootCAFile string
+	ServerName string
 	// PathStyle forces path-style addressing. MinIO and most other
 	// S3-compatible endpoints require this because they do not support the
 	// virtual-host request shape AWS uses.
@@ -74,11 +79,32 @@ func NewStorage(cfg StorageConfig, log logger.Logger) (*Storage, error) {
 		Region:      region,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.Secret, ""),
 	}
+	if client, err := httpClientForCA(cfg.RootCAPEM, cfg.RootCAFile, cfg.ServerName); err != nil {
+		return nil, err
+	} else if client != nil {
+		awsCfg.HTTPClient = client
+	}
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = pathStyle
 	})
 	return &Storage{client: client, logger: log}, nil
+}
+
+func httpClientForCA(caPEM, caFile, serverName string) (*http.Client, error) {
+	tlsConfig, err := tlsutil.ClientConfigWithServerName(caPEM, caFile, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("selfhosted: S3 TLS trust: %w", err)
+	}
+	if tlsConfig == nil {
+		return nil, nil
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   tlsConfig,
+			ForceAttemptHTTP2: true,
+		},
+	}, nil
 }
 
 // NewStorageWithClient wraps an injected S3 client. It exists so tests can

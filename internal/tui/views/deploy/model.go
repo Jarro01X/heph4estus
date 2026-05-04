@@ -462,6 +462,8 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				ControllerIP:          outputs["controller_ip"],
 				GenerationID:          outputs["generation_id"],
 				NATSUrl:               outputs["nats_url"],
+				ControllerCAPEM:       outputs["controller_ca_pem"],
+				ControllerHost:        outputs["controller_host"],
 				ExpectedWorkerVersion: outputs["docker_image"],
 			},
 		}

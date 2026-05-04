@@ -85,6 +85,8 @@ func loadProviderFleetContext(ctx context.Context, tool string, kind cloud.Kind,
 		ExpectedVersion: expectedVersion,
 		Reputation:      reputation,
 		Rollout:         rollout,
+		RootCAPEM:       outputs["controller_ca_pem"],
+		ServerName:      outputs["controller_host"],
 	}, log)
 	if err != nil {
 		return nil, err
@@ -171,6 +173,8 @@ func waitForFleetSnapshot(ctx context.Context, kind cloud.Kind, outputs map[stri
 		ExpectedVersion: expectedVersion,
 		Reputation:      reputation,
 		Rollout:         rollout,
+		RootCAPEM:       outputs["controller_ca_pem"],
+		ServerName:      outputs["controller_host"],
 	}, log)
 	if err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"heph4estus/internal/cloud"
 )
@@ -53,7 +54,7 @@ func (p *ECRPublisher) Publish(ctx context.Context, localTag string, stream io.W
 // (typically the controller-hosted registry for selfhosted deployments).
 type RegistryPublisher struct {
 	Docker      *DockerClient
-	RegistryURL string // e.g. "10.0.1.5:5000"
+	RegistryURL string // e.g. "10.0.1.5:5000" or "https://10.0.1.5:5000"
 	Username    string // optional — empty means no auth
 	Password    string // optional
 }
@@ -63,14 +64,14 @@ func (p *RegistryPublisher) Authenticate(ctx context.Context) error {
 		// No credentials — assume insecure registry or pre-authenticated.
 		return nil
 	}
-	return p.Docker.Login(ctx, p.RegistryURL, p.Username, p.Password)
+	return p.Docker.Login(ctx, dockerRegistryHost(p.RegistryURL), p.Username, p.Password)
 }
 
 func (p *RegistryPublisher) Publish(ctx context.Context, localTag string, stream io.Writer) (string, error) {
 	if p.RegistryURL == "" {
 		return "", fmt.Errorf("registry_url is required for selfhosted image publish")
 	}
-	remoteTag := p.RegistryURL + "/" + localTag
+	remoteTag := dockerRegistryHost(p.RegistryURL) + "/" + localTag
 	if err := p.Docker.Tag(ctx, localTag, remoteTag); err != nil {
 		return "", err
 	}
@@ -98,4 +99,8 @@ func NewPublisher(kind cloud.Kind, docker *DockerClient, ecr *ECRClient, outputs
 		Region:  region,
 		RepoURL: outputs["ecr_repo_url"],
 	}
+}
+
+func dockerRegistryHost(registryURL string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(registryURL, "https://"), "http://")
 }

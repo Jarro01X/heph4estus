@@ -125,6 +125,25 @@ func TestRegistryPublisher_Publish(t *testing.T) {
 	assertContains(t, cap.calls[1], "push")
 }
 
+func TestRegistryPublisher_PublishStripsSchemeForDocker(t *testing.T) {
+	cap, exec := newCapturingExecutor("")
+	docker := &DockerClient{runCmd: exec, logger: nopLogger{}}
+	pub := &RegistryPublisher{
+		Docker:      docker,
+		RegistryURL: "https://10.0.1.5:5000",
+	}
+
+	ref, err := pub.Publish(context.Background(), "heph-nmap-worker:latest", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "10.0.1.5:5000/heph-nmap-worker:latest"
+	if ref != expected {
+		t.Fatalf("expected ref %q, got %q", expected, ref)
+	}
+	assertContains(t, cap.calls[0], expected)
+}
+
 func TestRegistryPublisher_Publish_MissingRegistryURL(t *testing.T) {
 	pub := &RegistryPublisher{
 		Docker: &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}},

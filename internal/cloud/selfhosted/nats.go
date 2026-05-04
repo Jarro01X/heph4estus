@@ -8,6 +8,7 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/tlsutil"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -20,6 +21,9 @@ type QueueConfig struct {
 	DurablePrefix  string
 	AckWaitSeconds int
 	MaxDeliver     int
+	RootCAPEM      string
+	RootCAFile     string
+	ServerName     string
 }
 
 func (c QueueConfig) ackWait() time.Duration {
@@ -69,7 +73,11 @@ func NewQueue(cfg QueueConfig, log logger.Logger) (*Queue, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("selfhosted: NATS URL is required")
 	}
-	nc, err := nats.Connect(cfg.URL)
+	opts, err := natsOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("selfhosted: nats connect: %w", err)
 	}
@@ -85,6 +93,17 @@ func NewQueue(cfg QueueConfig, log logger.Logger) (*Queue, error) {
 		logger:   log,
 		inflight: make(map[string]jetstream.Msg),
 	}, nil
+}
+
+func natsOptions(cfg QueueConfig) ([]nats.Option, error) {
+	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.RootCAPEM, cfg.RootCAFile, cfg.ServerName)
+	if err != nil {
+		return nil, fmt.Errorf("selfhosted: NATS TLS trust: %w", err)
+	}
+	if tlsConfig == nil {
+		return nil, nil
+	}
+	return []nats.Option{nats.Secure(tlsConfig)}, nil
 }
 
 // NewQueueFromConn wraps an existing NATS connection. Used by tests that

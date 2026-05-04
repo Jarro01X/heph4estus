@@ -163,6 +163,8 @@ func RunProviderNativeOutputChecks(kind cloud.Kind, outputs map[string]string) [
 		checkOutputNATSTLS(outputs),
 		checkOutputMinIOTLS(outputs),
 		checkOutputRegistryTLS(outputs),
+		checkOutputControllerCA(outputs),
+		checkOutputControllerCertExpiry(outputs),
 		checkOutputRegistryAuth(outputs),
 	}
 }
@@ -688,6 +690,78 @@ func checkOutputRegistryAuth(outputs map[string]string) CheckResult {
 		Status:  StatusWarn,
 		Summary: "Registry authentication is disabled",
 		Fix:     "Keep the registry private-network-only and enable registry auth in the credential-scoping hardening slice.",
+	}
+}
+
+func checkOutputControllerCA(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	fingerprint := strings.TrimSpace(outputs["controller_ca_fingerprint_sha256"])
+	caPEM := strings.TrimSpace(outputs["controller_ca_pem"])
+	if fingerprint != "" && caPEM != "" {
+		return CheckResult{
+			Name:    "controller_ca_posture",
+			Status:  StatusPass,
+			Summary: fmt.Sprintf("Controller CA is available (sha256:%s)", fingerprint),
+		}
+	}
+	status := StatusWarn
+	if mode == "tls" || mode == "mtls" {
+		status = StatusFail
+	}
+	return CheckResult{
+		Name:    "controller_ca_posture",
+		Status:  status,
+		Summary: "Controller CA metadata is missing from provider outputs",
+		Fix:     "Redeploy the provider-native fleet so PR 6.10 TLS trust outputs are available.",
+	}
+}
+
+func checkOutputControllerCertExpiry(outputs map[string]string) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	raw := strings.TrimSpace(outputs["controller_cert_not_after"])
+	if raw == "" {
+		status := StatusWarn
+		if mode == "tls" || mode == "mtls" {
+			status = StatusFail
+		}
+		return CheckResult{
+			Name:    "controller_cert_expiry",
+			Status:  status,
+			Summary: "Controller certificate expiry output is missing",
+			Fix:     "Redeploy the provider-native fleet so controller certificate metadata is available.",
+		}
+	}
+	expiresAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return CheckResult{
+			Name:    "controller_cert_expiry",
+			Status:  StatusFail,
+			Summary: fmt.Sprintf("Controller certificate expiry %q is not RFC3339", raw),
+			Fix:     "Redeploy the provider-native fleet with a valid controller_cert_not_after output.",
+		}
+	}
+	now := time.Now().UTC()
+	switch {
+	case !expiresAt.After(now):
+		return CheckResult{
+			Name:    "controller_cert_expiry",
+			Status:  StatusFail,
+			Summary: fmt.Sprintf("Controller certificate expired at %s", expiresAt.Format(time.RFC3339)),
+			Fix:     "Rotate or redeploy controller certificates before using this fleet.",
+		}
+	case expiresAt.Before(now.Add(30 * 24 * time.Hour)):
+		return CheckResult{
+			Name:    "controller_cert_expiry",
+			Status:  StatusWarn,
+			Summary: fmt.Sprintf("Controller certificate expires soon at %s", expiresAt.Format(time.RFC3339)),
+			Fix:     "Plan certificate rotation or redeploy before expiry.",
+		}
+	default:
+		return CheckResult{
+			Name:    "controller_cert_expiry",
+			Status:  StatusPass,
+			Summary: fmt.Sprintf("Controller certificate expires at %s", expiresAt.Format(time.RFC3339)),
+		}
 	}
 }
 

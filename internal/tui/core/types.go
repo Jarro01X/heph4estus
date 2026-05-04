@@ -168,6 +168,8 @@ type InfraOutputs struct {
 	ControllerIP          string // Controller VM public IP
 	GenerationID          string // Fleet generation marker
 	NATSUrl               string // NATS URL for fleet manager
+	ControllerCAPEM       string // Controller CA PEM for TLS trust
+	ControllerHost        string // Stable controller DNS SAN for TLS verification
 	ExpectedWorkerVersion string
 }
 

@@ -11,6 +11,7 @@ var sensitivePatterns = []string{
 	"credential",
 	"access_key",
 	"nats_url", // contains embedded auth credentials
+	"controller_ca_pem",
 }
 
 const redactedPlaceholder = "***"

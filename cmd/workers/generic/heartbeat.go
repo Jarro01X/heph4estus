@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"time"
 
 	appconfig "heph4estus/internal/config"
 	"heph4estus/internal/fleet"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/tlsutil"
 
 	"github.com/nats-io/nats.go"
 )
@@ -21,10 +23,16 @@ func startHeartbeat(ctx context.Context, cfg *appconfig.WorkerConfig, log logger
 		return func() {}
 	}
 
-	conn, err := nats.Connect(cfg.NATSURL,
+	opts, err := heartbeatNATSOptions(cfg)
+	if err != nil {
+		log.Error("Fleet heartbeat: invalid NATS TLS trust: %v", err)
+		return func() {}
+	}
+	opts = append(opts,
 		nats.Name("heph-worker-heartbeat-"+cfg.WorkerID),
 		nats.MaxReconnects(-1),
 	)
+	conn, err := nats.Connect(cfg.NATSURL, opts...)
 	if err != nil {
 		log.Error("Fleet heartbeat: failed to connect to NATS: %v", err)
 		return func() {}
@@ -55,6 +63,17 @@ func startHeartbeat(ctx context.Context, cfg *appconfig.WorkerConfig, log logger
 	}()
 
 	return hbCancel
+}
+
+func heartbeatNATSOptions(cfg *appconfig.WorkerConfig) ([]nats.Option, error) {
+	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.ControllerCAPEM, cfg.ControllerCAFile, cfg.ControllerServerName)
+	if err != nil {
+		return nil, fmt.Errorf("controller CA: %w", err)
+	}
+	if tlsConfig == nil {
+		return nil, nil
+	}
+	return []nats.Option{nats.Secure(tlsConfig)}, nil
 }
 
 func publishHeartbeat(conn *nats.Conn, cfg *appconfig.WorkerConfig, ipv4, ipv6 string, ipv6Ready bool, log logger.Logger) {

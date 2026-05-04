@@ -238,6 +238,8 @@ func runScan(args []string, log logger.Logger) error {
 		NATSUrl:               outputs["nats_url"],
 		ControllerIP:          outputs["controller_ip"],
 		GenerationID:          outputs["generation_id"],
+		ControllerCAPEM:       outputs["controller_ca_pem"],
+		ControllerHost:        outputs["controller_host"],
 	})
 
 	var (
