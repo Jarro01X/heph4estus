@@ -167,6 +167,165 @@ func TestEnsureRegistryTrustRejectsInvalidCAPEM(t *testing.T) {
 	}
 }
 
+func TestInstallRegistryTrustDryRunDoesNotWriteFiles(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	trustDir := t.TempDir()
+	dockerCertsDir := t.TempDir()
+
+	result, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://10.0.1.5:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: sha256PEM(caPEM),
+			ControllerCertNotAfter:        time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+			TrustDir:                      trustDir,
+			DockerCertsDir:                dockerCertsDir,
+		},
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Required || result.Installed || result.Trusted {
+		t.Fatalf("unexpected dry-run result: %+v", result)
+	}
+	if result.FingerprintSHA256 != sha256PEM(caPEM) {
+		t.Fatalf("fingerprint = %q, want %q", result.FingerprintSHA256, sha256PEM(caPEM))
+	}
+	if _, err := os.Stat(result.LocalCAPath); !os.IsNotExist(err) {
+		t.Fatalf("dry run should not write local CA, stat err=%v", err)
+	}
+	if _, err := os.Stat(result.DockerCAPath); !os.IsNotExist(err) {
+		t.Fatalf("dry run should not write Docker CA, stat err=%v", err)
+	}
+}
+
+func TestInstallRegistryTrustWritesCacheAndDockerCA(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	trustDir := t.TempDir()
+	dockerCertsDir := t.TempDir()
+
+	result, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://heph-controller:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: "sha256:" + sha256PEM(caPEM),
+			ControllerCertNotAfter:        time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+			TrustDir:                      trustDir,
+			DockerCertsDir:                dockerCertsDir,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Required || !result.Installed || !result.Trusted {
+		t.Fatalf("expected installed and trusted result, got %+v", result)
+	}
+	localCA, err := os.ReadFile(result.LocalCAPath)
+	if err != nil {
+		t.Fatalf("read local CA: %v", err)
+	}
+	if string(localCA) != caPEM {
+		t.Fatal("local CA does not match controller CA")
+	}
+	dockerCA, err := os.ReadFile(result.DockerCAPath)
+	if err != nil {
+		t.Fatalf("read Docker CA: %v", err)
+	}
+	if string(dockerCA) != caPEM {
+		t.Fatal("Docker CA does not match controller CA")
+	}
+}
+
+func TestInstallRegistryTrustExistingMatchIsTrusted(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	trustDir := t.TempDir()
+	dockerCertsDir := t.TempDir()
+	dockerCAPath := filepath.Join(dockerCertsDir, "10.0.1.5:5000", "ca.crt")
+	if err := os.MkdirAll(filepath.Dir(dockerCAPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerCAPath, []byte(caPEM), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://10.0.1.5:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: sha256PEM(caPEM),
+			ControllerCertNotAfter:        time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+			TrustDir:                      trustDir,
+			DockerCertsDir:                dockerCertsDir,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Trusted || result.Installed {
+		t.Fatalf("expected already trusted without reinstall, got %+v", result)
+	}
+}
+
+func TestInstallRegistryTrustRejectsFingerprintMismatch(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	_, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://10.0.1.5:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: strings.Repeat("0", 64),
+			ControllerCertNotAfter:        time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+			TrustDir:                      t.TempDir(),
+			DockerCertsDir:                t.TempDir(),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected fingerprint mismatch error")
+	}
+	if !strings.Contains(err.Error(), "controller CA fingerprint mismatch") {
+		t.Fatalf("expected fingerprint mismatch error, got %q", err.Error())
+	}
+}
+
+func TestInstallRegistryTrustRequiresCertExpiry(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	_, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://10.0.1.5:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: sha256PEM(caPEM),
+			TrustDir:                      t.TempDir(),
+			DockerCertsDir:                t.TempDir(),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing expiry error")
+	}
+	if !strings.Contains(err.Error(), "controller_cert_not_after output is required") {
+		t.Fatalf("expected missing expiry error, got %q", err.Error())
+	}
+}
+
+func TestInstallRegistryTrustRejectsExpiredCert(t *testing.T) {
+	caPEM := testCAPEM(t, "controller")
+	_, err := InstallRegistryTrust(RegistryTrustInstallConfig{
+		RegistryTrustConfig: RegistryTrustConfig{
+			RegistryURL:                   "https://10.0.1.5:5000",
+			ControllerCAPEM:               caPEM,
+			ControllerCAFingerprintSHA256: sha256PEM(caPEM),
+			ControllerCertNotAfter:        time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+			TrustDir:                      t.TempDir(),
+			DockerCertsDir:                t.TempDir(),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected expired certificate error")
+	}
+	if !strings.Contains(err.Error(), "controller certificate expired") {
+		t.Fatalf("expected expired certificate error, got %q", err.Error())
+	}
+}
+
 func testCAPEM(t *testing.T, commonName string) string {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
