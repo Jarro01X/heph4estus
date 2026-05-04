@@ -111,8 +111,8 @@ resource "tls_cert_request" "controller_server" {
 
 resource "tls_locally_signed_cert" "controller_server" {
   cert_request_pem      = tls_cert_request.controller_server.cert_request_pem
-  ca_private_key_pem    = tls_private_key.controller_ca.private_key_pem
-  ca_cert_pem           = tls_self_signed_cert.controller_ca.cert_pem
+  ca_private_key_pem    = local.controller_ca_key_pem
+  ca_cert_pem           = local.controller_ca_pem
   validity_period_hours = var.controller_cert_validity_hours
 
   allowed_uses = [
@@ -143,6 +143,7 @@ locals {
   minio_scheme             = local.minio_tls_enabled ? "https" : "http"
   registry_scheme          = local.registry_tls_enabled ? "https" : "http"
   controller_ca_pem        = var.controller_ca_pem_override != "" ? var.controller_ca_pem_override : tls_self_signed_cert.controller_ca.cert_pem
+  controller_ca_key_pem    = var.controller_ca_key_pem_override != "" ? var.controller_ca_key_pem_override : tls_private_key.controller_ca.private_key_pem
   controller_cert_pem      = var.controller_cert_pem_override != "" ? var.controller_cert_pem_override : tls_locally_signed_cert.controller_server.cert_pem
   controller_key_pem       = var.controller_key_pem_override != "" ? var.controller_key_pem_override : tls_private_key.controller_server.private_key_pem
   controller_cert_not_after = (

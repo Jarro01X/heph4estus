@@ -95,6 +95,7 @@ module "controller" {
 
   controller_security_mode           = var.controller_security_mode
   controller_ca_pem_override         = var.controller_ca_pem_override
+  controller_ca_key_pem_override     = var.controller_ca_key_pem_override
   controller_cert_pem_override       = var.controller_cert_pem_override
   controller_key_pem_override        = var.controller_key_pem_override
   controller_cert_not_after_override = var.controller_cert_not_after_override

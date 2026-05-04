@@ -79,6 +79,35 @@ func TestRunInfraRotateCertsRejectsInvalidComponentBeforeTerraform(t *testing.T)
 	}
 }
 
+func TestSupportedCertificateMutationComponent(t *testing.T) {
+	if !supportedCertificateMutationComponent(infra.CertificateComponentController) {
+		t.Fatal("controller certificate mutation should be supported")
+	}
+	if !supportedCertificateMutationComponent(infra.CertificateComponentCA) {
+		t.Fatal("CA certificate mutation should be supported")
+	}
+	if supportedCertificateMutationComponent(infra.CertificateComponentWorker) {
+		t.Fatal("worker-only certificate mutation should not be supported yet")
+	}
+}
+
+func TestControllerCAPrivateKeyForRotationUsesRotationVars(t *testing.T) {
+	dir := t.TempDir()
+	if err := infra.WriteRotationAutoVars(dir, map[string]string{"controller_ca_key_pem_override": "ca-key"}); err != nil {
+		t.Fatalf("WriteRotationAutoVars: %v", err)
+	}
+	key, err := controllerCAPrivateKeyForRotation(rotationMutationOpts{
+		ToolConfig: &infra.ToolConfig{TerraformDir: dir},
+		Log:        testLogger(),
+	})
+	if err != nil {
+		t.Fatalf("controllerCAPrivateKeyForRotation: %v", err)
+	}
+	if key != "ca-key" {
+		t.Fatalf("key = %q, want ca-key", key)
+	}
+}
+
 func TestParseRotationWorkerCount(t *testing.T) {
 	got, err := parseRotationWorkerCount(map[string]string{"worker_count": "3"})
 	if err != nil {

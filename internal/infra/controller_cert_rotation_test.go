@@ -57,6 +57,31 @@ func TestGenerateControllerCertificateMaterial(t *testing.T) {
 	}
 }
 
+func TestGenerateControllerCAMaterial(t *testing.T) {
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	material, err := GenerateControllerCAMaterial(now, map[string]string{"controller_ip": "203.0.113.10"})
+	if err != nil {
+		t.Fatalf("GenerateControllerCAMaterial: %v", err)
+	}
+	if !strings.HasPrefix(material.Generation, "ca-20260504t120000z-") {
+		t.Fatalf("Generation = %q", material.Generation)
+	}
+	if material.CAFingerprintSHA256 != sha256PEM(material.CAPEM) {
+		t.Fatalf("fingerprint = %q, want %q", material.CAFingerprintSHA256, sha256PEM(material.CAPEM))
+	}
+	if _, err := parseSignerPrivateKeyPEM(material.CAKeyPEM); err != nil {
+		t.Fatalf("CA private key invalid: %v", err)
+	}
+	caCert := mustParseCert(t, material.CAPEM)
+	if !caCert.IsCA {
+		t.Fatal("generated CA is not marked as a CA")
+	}
+	serverCert := mustParseCert(t, material.CertPEM)
+	if err := serverCert.CheckSignatureFrom(caCert); err != nil {
+		t.Fatalf("server cert was not signed by rotated CA: %v", err)
+	}
+}
+
 func TestGenerateControllerCertificateMaterialRejectsMismatchedCAKey(t *testing.T) {
 	caPEM, _ := testCAKeyPairPEM(t)
 	_, wrongKeyPEM := testCAKeyPairPEM(t)
@@ -90,6 +115,26 @@ func TestControllerCertificateTerraformVars(t *testing.T) {
 		if strings.TrimSpace(vars[key]) == "" {
 			t.Fatalf("expected var %q in %v", key, vars)
 		}
+	}
+}
+
+func TestControllerCATerraformVarsIncludesCAKey(t *testing.T) {
+	vars := ControllerCATerraformVars(ControllerCAMaterial{
+		ControllerCertificateMaterial: ControllerCertificateMaterial{
+			CAPEM:      "ca",
+			CertPEM:    "cert",
+			KeyPEM:     "key",
+			NotAfter:   "2027-05-04T12:00:00Z",
+			Generation: "ca-gen",
+			RotatedAt:  "2026-05-04T12:00:00Z",
+		},
+		CAKeyPEM: "ca-key",
+	})
+	if vars["controller_ca_key_pem_override"] != "ca-key" {
+		t.Fatalf("controller_ca_key_pem_override = %q", vars["controller_ca_key_pem_override"])
+	}
+	if vars["controller_ca_pem_override"] != "ca" || vars["controller_cert_pem_override"] != "cert" {
+		t.Fatalf("missing certificate vars: %v", vars)
 	}
 }
 
