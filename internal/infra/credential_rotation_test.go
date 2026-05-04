@@ -67,6 +67,9 @@ func TestPlanCredentialRotationAll(t *testing.T) {
 	if plan.WorkerCount != "3" {
 		t.Fatalf("WorkerCount = %q, want 3", plan.WorkerCount)
 	}
+	if plan.MinIOCredentialGeneration != "bootstrap" || plan.RegistryCredentialGeneration != "bootstrap" {
+		t.Fatalf("credential generations = %q/%q, want bootstrap/bootstrap", plan.MinIOCredentialGeneration, plan.RegistryCredentialGeneration)
+	}
 	for _, key := range []string{"nats_password", "s3_operator_secret_key", "registry_publisher_password"} {
 		if !containsString(plan.OperatorOutputKeys, key) {
 			t.Fatalf("expected operator output key %q in %v", key, plan.OperatorOutputKeys)
@@ -99,26 +102,28 @@ func TestPlanCredentialRotationRejectsAWS(t *testing.T) {
 
 func rotationReadyOutputs() map[string]string {
 	return map[string]string{
-		"tool_name":                   "nmap",
-		"cloud":                       "hetzner",
-		"credential_scope_version":    "nats-minio-registry-role-v1",
-		"nats_credential_generation":  "bootstrap",
-		"controller_security_mode":    "tls",
-		"generation_id":               "gen-1",
-		"worker_count":                "3",
-		"nats_url":                    "tls://operator:secret@1.2.3.4:4222",
-		"nats_user":                   "heph-operator",
-		"nats_password":               "secret",
-		"nats_operator_user":          "heph-operator",
-		"nats_operator_password":      "secret",
-		"s3_access_key":               "operator",
-		"s3_secret_key":               "operator-secret",
-		"s3_operator_access_key":      "operator",
-		"s3_operator_secret_key":      "operator-secret",
-		"registry_username":           "publisher",
-		"registry_password":           "publisher-secret",
-		"registry_publisher_username": "publisher",
-		"registry_publisher_password": "publisher-secret",
+		"tool_name":                      "nmap",
+		"cloud":                          "hetzner",
+		"credential_scope_version":       "nats-minio-registry-role-v1",
+		"nats_credential_generation":     "bootstrap",
+		"minio_credential_generation":    "bootstrap",
+		"registry_credential_generation": "bootstrap",
+		"controller_security_mode":       "tls",
+		"generation_id":                  "gen-1",
+		"worker_count":                   "3",
+		"nats_url":                       "tls://operator:secret@1.2.3.4:4222",
+		"nats_user":                      "heph-operator",
+		"nats_password":                  "secret",
+		"nats_operator_user":             "heph-operator",
+		"nats_operator_password":         "secret",
+		"s3_access_key":                  "operator",
+		"s3_secret_key":                  "operator-secret",
+		"s3_operator_access_key":         "operator",
+		"s3_operator_secret_key":         "operator-secret",
+		"registry_username":              "publisher",
+		"registry_password":              "publisher-secret",
+		"registry_publisher_username":    "publisher",
+		"registry_publisher_password":    "publisher-secret",
 	}
 }
 

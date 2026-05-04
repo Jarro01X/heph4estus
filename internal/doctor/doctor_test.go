@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/operator"
@@ -574,12 +575,46 @@ func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
 	assertContains(t, names, "controller_ca_posture")
 	assertContains(t, names, "controller_cert_expiry")
 	assertContains(t, names, "registry_auth_posture")
+	assertContains(t, names, "nats_credential_rotation_age")
+	assertContains(t, names, "minio_credential_rotation_age")
+	assertContains(t, names, "registry_credential_rotation_age")
 
 	if results[0].Status != StatusWarn {
 		t.Fatalf("private-auth mode should warn, got %s", results[0].Status)
 	}
 	if HasFailures(results) {
 		t.Fatalf("private-auth compatibility outputs should warn but not fail: %+v", results)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_CredentialRotationAge(t *testing.T) {
+	now := time.Date(2026, 5, 3, 22, 0, 0, 0, time.UTC)
+	outputs := providerNativeHealthyOutputs()
+	outputs["nats_credential_generation"] = "nats-current"
+	outputs["nats_credential_rotated_at"] = now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+	outputs["minio_credential_generation"] = "minio-stale"
+	outputs["minio_credential_rotated_at"] = now.Add(-91 * 24 * time.Hour).Format(time.RFC3339)
+	outputs["registry_credential_generation"] = "registry-invalid"
+	outputs["registry_credential_rotated_at"] = "not-a-time"
+
+	results := runProviderNativeOutputChecksAt(cloud.KindHetzner, outputs, now)
+	if got := findCheck(results, "nats_credential_rotation_age"); got.Status != StatusPass {
+		t.Fatalf("nats age status = %s: %s", got.Status, got.Summary)
+	}
+	if got := findCheck(results, "minio_credential_rotation_age"); got.Status != StatusWarn {
+		t.Fatalf("minio age status = %s: %s", got.Status, got.Summary)
+	}
+	if got := findCheck(results, "registry_credential_rotation_age"); got.Status != StatusWarn {
+		t.Fatalf("registry age status = %s: %s", got.Status, got.Summary)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_CredentialRotationMissingTimestampWarns(t *testing.T) {
+	results := runProviderNativeOutputChecksAt(cloud.KindHetzner, providerNativeHealthyOutputs(), time.Date(2026, 5, 3, 22, 0, 0, 0, time.UTC))
+	for _, name := range []string{"nats_credential_rotation_age", "minio_credential_rotation_age", "registry_credential_rotation_age"} {
+		if got := findCheck(results, name); got.Status != StatusWarn {
+			t.Fatalf("%s status = %s: %s", name, got.Status, got.Summary)
+		}
 	}
 }
 
@@ -634,5 +669,33 @@ func assertNotContains(t *testing.T, names []string, want string) {
 			t.Errorf("did not expect %q in check names", want)
 			return
 		}
+	}
+}
+
+func findCheck(results []CheckResult, name string) CheckResult {
+	for _, result := range results {
+		if result.Name == name {
+			return result
+		}
+	}
+	return CheckResult{Name: name, Status: StatusFail, Summary: "missing check"}
+}
+
+func providerNativeHealthyOutputs() map[string]string {
+	return map[string]string{
+		"controller_security_mode":         "tls",
+		"nats_url":                         "tls://heph:secret@10.0.1.2:4222",
+		"nats_user":                        "heph",
+		"nats_password":                    "secret",
+		"nats_tls_enabled":                 "true",
+		"nats_auth_enabled":                "true",
+		"s3_endpoint":                      "https://10.0.1.2:9000",
+		"minio_tls_enabled":                "true",
+		"registry_url":                     "https://10.0.1.2:5000",
+		"registry_tls_enabled":             "true",
+		"registry_auth_enabled":            "true",
+		"controller_ca_pem":                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+		"controller_ca_fingerprint_sha256": "abc123",
+		"controller_cert_not_after":        "2035-05-03T00:00:00Z",
 	}
 }

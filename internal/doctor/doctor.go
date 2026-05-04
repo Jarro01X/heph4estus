@@ -154,10 +154,14 @@ func RunForCloud(ctx context.Context, deps Deps, kind cloud.Kind) []CheckResult 
 // RunProviderNativeOutputChecks validates the security posture surfaced by
 // Terraform outputs for provider-native controller fleets.
 func RunProviderNativeOutputChecks(kind cloud.Kind, outputs map[string]string) []CheckResult {
+	return runProviderNativeOutputChecksAt(kind, outputs, time.Now().UTC())
+}
+
+func runProviderNativeOutputChecksAt(kind cloud.Kind, outputs map[string]string, now time.Time) []CheckResult {
 	if !kind.IsProviderNative() {
 		return nil
 	}
-	return []CheckResult{
+	results := []CheckResult{
 		checkControllerSecurityMode(outputs),
 		checkOutputNATSAuth(outputs),
 		checkOutputNATSTLS(outputs),
@@ -167,6 +171,10 @@ func RunProviderNativeOutputChecks(kind cloud.Kind, outputs map[string]string) [
 		checkOutputControllerCertExpiry(outputs),
 		checkOutputRegistryAuth(outputs),
 	}
+	for _, meta := range providerCredentialRotationMetadata {
+		results = append(results, checkOutputCredentialRotationAge(outputs, meta, now))
+	}
+	return results
 }
 
 // HasFailures returns true if any check has StatusFail.
@@ -691,6 +699,114 @@ func checkOutputRegistryAuth(outputs map[string]string) CheckResult {
 		Summary: "Registry authentication is disabled",
 		Fix:     "Keep the registry private-network-only and enable registry auth in the credential-scoping hardening slice.",
 	}
+}
+
+const credentialRotationStaleAfter = 90 * 24 * time.Hour
+
+type credentialRotationOutputMetadata struct {
+	Component     string
+	Label         string
+	GenerationKey string
+	RotatedAtKey  string
+}
+
+var providerCredentialRotationMetadata = []credentialRotationOutputMetadata{
+	{
+		Component:     "nats",
+		Label:         "NATS",
+		GenerationKey: "nats_credential_generation",
+		RotatedAtKey:  "nats_credential_rotated_at",
+	},
+	{
+		Component:     "minio",
+		Label:         "MinIO",
+		GenerationKey: "minio_credential_generation",
+		RotatedAtKey:  "minio_credential_rotated_at",
+	},
+	{
+		Component:     "registry",
+		Label:         "Registry",
+		GenerationKey: "registry_credential_generation",
+		RotatedAtKey:  "registry_credential_rotated_at",
+	},
+}
+
+func checkOutputCredentialRotationAge(outputs map[string]string, meta credentialRotationOutputMetadata, now time.Time) CheckResult {
+	generation := strings.TrimSpace(outputs[meta.GenerationKey])
+	rotatedRaw := strings.TrimSpace(outputs[meta.RotatedAtKey])
+	name := meta.Component + "_credential_rotation_age"
+	if rotatedRaw == "" {
+		summary := fmt.Sprintf("%s credentials have not been rotated after bootstrap", meta.Label)
+		if generation != "" && generation != "bootstrap" {
+			summary = fmt.Sprintf("%s credential rotation timestamp is missing for generation %s", meta.Label, generation)
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  StatusWarn,
+			Summary: summary,
+			Fix:     fmt.Sprintf("Run 'heph infra rotate credentials --component %s' after the fleet is healthy.", meta.Component),
+		}
+	}
+	rotatedAt, err := time.Parse(time.RFC3339, rotatedRaw)
+	if err != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  StatusWarn,
+			Summary: fmt.Sprintf("%s credential rotation timestamp %q is not RFC3339", meta.Label, rotatedRaw),
+			Fix:     fmt.Sprintf("Run 'heph infra rotate credentials --component %s' to write fresh rotation metadata.", meta.Component),
+		}
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	rotatedAt = rotatedAt.UTC()
+	if rotatedAt.After(now.Add(5 * time.Minute)) {
+		return CheckResult{
+			Name:    name,
+			Status:  StatusWarn,
+			Summary: fmt.Sprintf("%s credential rotation timestamp is in the future: %s", meta.Label, rotatedAt.Format(time.RFC3339)),
+			Fix:     "Check local clock skew and Terraform output metadata.",
+		}
+	}
+	age := now.Sub(rotatedAt)
+	ageText := credentialRotationAgeText(age)
+	if age > credentialRotationStaleAfter {
+		return CheckResult{
+			Name:    name,
+			Status:  StatusWarn,
+			Summary: fmt.Sprintf("%s credentials were last rotated at %s (%s)", meta.Label, rotatedAt.Format(time.RFC3339), ageText),
+			Fix:     fmt.Sprintf("Run 'heph infra rotate credentials --component %s' during the next maintenance window.", meta.Component),
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  StatusPass,
+		Summary: fmt.Sprintf("%s credentials were last rotated at %s (%s)", meta.Label, rotatedAt.Format(time.RFC3339), ageText),
+	}
+}
+
+func credentialRotationAgeText(age time.Duration) string {
+	if age < time.Hour {
+		minutes := int(age.Minutes())
+		if minutes < 1 {
+			minutes = 0
+		}
+		return fmt.Sprintf("%d %s ago", minutes, pluralize(minutes, "minute"))
+	}
+	days := int(age.Hours() / 24)
+	if days < 1 {
+		hours := int(age.Hours())
+		return fmt.Sprintf("%d %s ago", hours, pluralize(hours, "hour"))
+	}
+	return fmt.Sprintf("%d %s ago", days, pluralize(days, "day"))
+}
+
+func pluralize(count int, singular string) string {
+	if count == 1 {
+		return singular
+	}
+	return singular + "s"
 }
 
 func checkOutputControllerCA(outputs map[string]string) CheckResult {
