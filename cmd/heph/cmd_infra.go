@@ -26,7 +26,7 @@ func resolveToolConfig(tool, backend string, kind ...cloud.Kind) (*infra.ToolCon
 
 func runInfra(args []string, log logger.Logger) error {
 	if len(args) == 0 {
-		return fmt.Errorf("infra requires a subcommand: deploy, destroy, backup, recover, trust")
+		return fmt.Errorf("infra requires a subcommand: deploy, destroy, backup, recover, trust, rotate")
 	}
 
 	sub := args[0]
@@ -41,8 +41,10 @@ func runInfra(args []string, log logger.Logger) error {
 		return runInfraRecover(args[1:], log)
 	case "trust":
 		return runInfraTrust(args[1:], log)
+	case "rotate":
+		return runInfraRotate(args[1:], log)
 	default:
-		return fmt.Errorf("infra: unknown subcommand %q (expected deploy, destroy, backup, recover, or trust)", sub)
+		return fmt.Errorf("infra: unknown subcommand %q (expected deploy, destroy, backup, recover, trust, or rotate)", sub)
 	}
 }
 
