@@ -330,7 +330,10 @@ func TestRequiredOutputKeysForCloud_Hetzner(t *testing.T) {
 	}
 	want := map[string]bool{
 		"controller_security_mode":         true,
+		"credential_scope_version":         true,
 		"nats_url":                         true,
+		"nats_operator_user":               true,
+		"nats_operator_password":           true,
 		"nats_tls_enabled":                 true,
 		"nats_auth_enabled":                true,
 		"minio_tls_enabled":                true,
@@ -360,7 +363,10 @@ func TestRequiredOutputKeysForCloud_Linode(t *testing.T) {
 	}
 	want := map[string]bool{
 		"controller_security_mode":         true,
+		"credential_scope_version":         true,
 		"nats_url":                         true,
+		"nats_operator_user":               true,
+		"nats_operator_password":           true,
 		"nats_tls_enabled":                 true,
 		"nats_auth_enabled":                true,
 		"minio_tls_enabled":                true,
@@ -425,10 +431,13 @@ func hetznerOutputs(tool string) string {
 		"tool_name":{"value":"%s"},
 		"cloud":{"value":"hetzner"},
 		"controller_security_mode":{"value":"private-auth"},
+		"credential_scope_version":{"value":"nats-role-v1"},
 		"nats_url":{"value":"nats://heph:secret@10.0.1.2:4222"},
 		"nats_stream":{"value":"heph"},
 		"nats_user":{"value":"heph"},
 		"nats_password":{"value":"secret"},
+		"nats_operator_user":{"value":"heph"},
+		"nats_operator_password":{"value":"secret"},
 		"nats_tls_enabled":{"value":"false"},
 		"nats_auth_enabled":{"value":"true"},
 		"s3_endpoint":{"value":"http://10.0.1.2:9000"},

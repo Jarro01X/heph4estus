@@ -20,6 +20,11 @@ output "controller_security_mode" {
   value       = local.controller_security_mode
 }
 
+output "credential_scope_version" {
+  description = "Credential scoping contract version for controller-generated credentials."
+  value       = local.credential_scope_version
+}
+
 output "nats_tls_enabled" {
   description = "Whether the NATS client listener is configured for TLS."
   value       = local.nats_tls_enabled
@@ -113,13 +118,35 @@ output "registry_url" {
 }
 
 output "nats_user" {
-  description = "NATS authentication username."
-  value       = local.nats_user
+  description = "Backward-compatible NATS operator authentication username."
+  value       = local.nats_operator_user
 }
 
 output "nats_password" {
-  description = "NATS authentication password."
+  description = "Backward-compatible NATS operator authentication password."
   value       = random_password.nats_password.result
+  sensitive   = true
+}
+
+output "nats_operator_user" {
+  description = "NATS operator authentication username."
+  value       = local.nats_operator_user
+}
+
+output "nats_operator_password" {
+  description = "NATS operator authentication password."
+  value       = random_password.nats_password.result
+  sensitive   = true
+}
+
+output "nats_worker_user" {
+  description = "NATS worker authentication username."
+  value       = local.nats_worker_user
+}
+
+output "nats_worker_password" {
+  description = "NATS worker authentication password, intended for worker cloud-init only."
+  value       = random_password.nats_worker_password.result
   sensitive   = true
 }
 

@@ -21,6 +21,11 @@ output "controller_security_mode" {
   value       = module.controller.controller_security_mode
 }
 
+output "credential_scope_version" {
+  description = "Credential scoping contract version for controller-generated credentials."
+  value       = module.controller.credential_scope_version
+}
+
 output "nats_tls_enabled" {
   description = "Whether the NATS client listener is configured for TLS."
   value       = module.controller.nats_tls_enabled
@@ -72,19 +77,30 @@ output "controller_host" {
 }
 
 output "nats_url" {
-  description = "NATS client URL for workers and the operator CLI (includes auth credentials)."
-  value       = "${module.controller.nats_tls_enabled ? "tls" : "nats"}://${module.controller.nats_user}:${module.controller.nats_password}@${linode_instance.controller.ip_address}:4222"
+  description = "NATS client URL for the operator CLI (includes operator auth credentials)."
+  value       = "${module.controller.nats_tls_enabled ? "tls" : "nats"}://${module.controller.nats_operator_user}:${module.controller.nats_operator_password}@${linode_instance.controller.ip_address}:4222"
   sensitive   = true
 }
 
 output "nats_user" {
-  description = "NATS authentication username."
-  value       = module.controller.nats_user
+  description = "Backward-compatible NATS operator authentication username."
+  value       = module.controller.nats_operator_user
 }
 
 output "nats_password" {
-  description = "NATS authentication password."
-  value       = module.controller.nats_password
+  description = "Backward-compatible NATS operator authentication password."
+  value       = module.controller.nats_operator_password
+  sensitive   = true
+}
+
+output "nats_operator_user" {
+  description = "NATS operator authentication username."
+  value       = module.controller.nats_operator_user
+}
+
+output "nats_operator_password" {
+  description = "NATS operator authentication password."
+  value       = module.controller.nats_operator_password
   sensitive   = true
 }
 

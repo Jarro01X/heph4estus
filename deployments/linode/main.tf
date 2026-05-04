@@ -160,8 +160,8 @@ locals {
       nats_port             = 4222
       nats_scheme           = module.controller.nats_tls_enabled ? "tls" : "nats"
       nats_subject          = module.controller.nats_stream
-      nats_user             = module.controller.nats_user
-      nats_password         = module.controller.nats_password
+      nats_user             = module.controller.nats_worker_user
+      nats_password         = module.controller.nats_worker_password
       minio_port            = 9000
       minio_scheme          = module.controller.minio_tls_enabled ? "https" : "http"
       minio_access_key      = module.controller.s3_access_key
