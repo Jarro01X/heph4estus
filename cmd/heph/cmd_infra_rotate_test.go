@@ -49,6 +49,36 @@ func TestRunInfraRotateCredentialsRejectsInvalidComponentBeforeTerraform(t *test
 	}
 }
 
+func TestRunInfraRotateCertsRequiresDryRunBeforeTerraform(t *testing.T) {
+	err := runInfraRotateCerts([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "controller"}, testLogger())
+	if err == nil {
+		t.Fatal("expected dry-run only error")
+	}
+	if !strings.Contains(err.Error(), "--dry-run only") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunInfraRotateCertsRequiresComponent(t *testing.T) {
+	err := runInfraRotateCerts([]string{"--tool", "nmap", "--cloud", "hetzner", "--dry-run"}, testLogger())
+	if err == nil {
+		t.Fatal("expected component error")
+	}
+	if !strings.Contains(err.Error(), "--component flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunInfraRotateCertsRejectsInvalidComponentBeforeTerraform(t *testing.T) {
+	err := runInfraRotateCerts([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "registry", "--dry-run"}, testLogger())
+	if err == nil {
+		t.Fatal("expected component error")
+	}
+	if !strings.Contains(err.Error(), "--component must be") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseRotationWorkerCount(t *testing.T) {
 	got, err := parseRotationWorkerCount(map[string]string{"worker_count": "3"})
 	if err != nil {
@@ -56,6 +86,43 @@ func TestParseRotationWorkerCount(t *testing.T) {
 	}
 	if got != 3 {
 		t.Fatalf("worker count = %d, want 3", got)
+	}
+}
+
+func TestOutputCertificateRotationPlanText(t *testing.T) {
+	plan := &infra.CertificateRotationPlan{
+		Tool:                          "nmap",
+		Cloud:                         cloud.KindHetzner,
+		Components:                    []infra.CertificateRotationComponent{infra.CertificateComponentController, infra.CertificateComponentCA},
+		ControllerSecurityMode:        "tls",
+		GenerationID:                  "gen-1",
+		WorkerCount:                   "3",
+		ControllerCAFingerprintSHA256: "abc123",
+		ControllerCertNotAfter:        "2035-05-03T00:00:00Z",
+		TLSEnabledServices:            []string{"nats", "minio", "registry"},
+		ControllerServices:            []string{"nats", "minio", "registry"},
+		WorkerRecycleRequired:         true,
+		OperatorTrustRefreshRequired:  true,
+		Actions:                       []string{"generate a replacement controller CA and controller server certificate chain"},
+		Verification:                  []string{"verify operator clients trust the replacement controller CA"},
+		Warnings:                      []string{"controller certificate expires soon"},
+	}
+	var buf bytes.Buffer
+	if err := outputCertificateRotationPlanText(&buf, plan); err != nil {
+		t.Fatalf("outputCertificateRotationPlanText: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"Certificate rotation dry run",
+		"Components:  controller, ca",
+		"CA sha256:   abc123",
+		"Controller services restarted: nats, minio, registry",
+		"Operator trust refresh: refresh operator-side controller CA trust",
+		"Dry run: no Terraform apply",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
 	}
 }
 
