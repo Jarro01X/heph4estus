@@ -30,6 +30,8 @@ type CertificateRotationPlan struct {
 	ControllerSecurityMode        string
 	GenerationID                  string
 	WorkerCount                   string
+	CertificateGeneration         string
+	CertificateRotatedAt          string
 	ControllerCAFingerprintSHA256 string
 	ControllerCertNotAfter        string
 	TLSEnabledServices            []string
@@ -81,6 +83,8 @@ func PlanCertificateRotation(kind cloud.Kind, tool, component string, probe Prob
 		ControllerSecurityMode:        outputOrUnknown(outputs, "controller_security_mode"),
 		GenerationID:                  outputOrUnknown(outputs, "generation_id"),
 		WorkerCount:                   outputOrUnknown(outputs, "worker_count"),
+		CertificateGeneration:         outputOrUnknown(outputs, "controller_cert_generation"),
+		CertificateRotatedAt:          outputOrUnknown(outputs, "controller_cert_rotated_at"),
 		ControllerCAFingerprintSHA256: outputOrUnknown(outputs, "controller_ca_fingerprint_sha256"),
 		ControllerCertNotAfter:        outputOrUnknown(outputs, "controller_cert_not_after"),
 		TLSEnabledServices:            certificateTLSEnabledServices(outputs),

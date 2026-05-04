@@ -57,17 +57,27 @@ output "registry_auth_enabled" {
 
 output "controller_ca_pem" {
   description = "PEM-encoded controller CA certificate used to trust TLS endpoints."
-  value       = tls_self_signed_cert.controller_ca.cert_pem
+  value       = local.controller_ca_pem
 }
 
 output "controller_ca_fingerprint_sha256" {
   description = "SHA-256 fingerprint of the controller CA PEM."
-  value       = sha256(tls_self_signed_cert.controller_ca.cert_pem)
+  value       = local.controller_ca_fingerprint_sha256
 }
 
 output "controller_cert_not_after" {
   description = "RFC3339 expiration timestamp for the controller server certificate."
-  value       = tls_locally_signed_cert.controller_server.validity_end_time
+  value       = local.controller_cert_not_after
+}
+
+output "controller_cert_generation" {
+  description = "Controller certificate generation marker."
+  value       = var.controller_cert_generation
+}
+
+output "controller_cert_rotated_at" {
+  description = "RFC3339 timestamp for the last controller certificate rotation."
+  value       = var.controller_cert_rotated_at
 }
 
 output "controller_host" {
@@ -210,4 +220,5 @@ output "nats_worker_password" {
 output "cloud_init" {
   description = "Rendered cloud-init content for the controller VM. Pass this as user_data to the provider-specific VM resource."
   value       = local.cloud_init
+  sensitive   = true
 }

@@ -592,6 +592,9 @@ func outputCertificateRotationPlanText(w io.Writer, plan *infra.CertificateRotat
 	if _, err := fmt.Fprintf(w, "Generation:  %s\n", plan.GenerationID); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "Cert gen:    %s (rotated: %s)\n", plan.CertificateGeneration, plan.CertificateRotatedAt); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(w, "Mode:        %s\n", plan.ControllerSecurityMode); err != nil {
 		return err
 	}
