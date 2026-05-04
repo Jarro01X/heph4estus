@@ -12,7 +12,7 @@ output "tool_name" {
 
 output "nats_url" {
   description = "NATS client URL for workers and the operator CLI."
-  value       = "nats://${var.controller_ip}:${var.nats_port}"
+  value       = "${local.nats_scheme}://${var.controller_ip}:${var.nats_port}"
 }
 
 output "controller_security_mode" {
@@ -50,6 +50,26 @@ output "registry_auth_enabled" {
   value       = local.registry_auth_enabled
 }
 
+output "controller_ca_pem" {
+  description = "PEM-encoded controller CA certificate used to trust TLS endpoints."
+  value       = tls_self_signed_cert.controller_ca.cert_pem
+}
+
+output "controller_ca_fingerprint_sha256" {
+  description = "SHA-256 fingerprint of the controller CA PEM."
+  value       = sha256(tls_self_signed_cert.controller_ca.cert_pem)
+}
+
+output "controller_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the controller server certificate."
+  value       = tls_locally_signed_cert.controller_server.validity_end_time
+}
+
+output "controller_host" {
+  description = "Stable DNS name workers map to the controller private IP."
+  value       = local.controller_host
+}
+
 output "nats_stream" {
   description = "NATS JetStream stream name."
   value       = var.nats_stream_name
@@ -57,7 +77,7 @@ output "nats_stream" {
 
 output "s3_endpoint" {
   description = "MinIO S3-compatible endpoint URL."
-  value       = "http://${var.controller_ip}:${var.minio_port}"
+  value       = "${local.minio_scheme}://${var.controller_ip}:${var.minio_port}"
 }
 
 output "s3_region" {
@@ -89,7 +109,7 @@ output "s3_bucket_name" {
 
 output "registry_url" {
   description = "Docker registry URL for worker image distribution."
-  value       = "${var.controller_ip}:${var.registry_port}"
+  value       = "${local.registry_scheme}://${var.controller_ip}:${var.registry_port}"
 }
 
 output "nats_user" {

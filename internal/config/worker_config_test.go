@@ -131,6 +131,25 @@ func TestNewWorkerConfig_FleetMetadata(t *testing.T) {
 	}
 }
 
+func TestNewWorkerConfig_ControllerTLSMetadata(t *testing.T) {
+	t.Setenv("QUEUE_URL", "heph-tasks")
+	t.Setenv("S3_BUCKET", "heph-results")
+	t.Setenv("TOOL_NAME", "nmap")
+	t.Setenv("HEPH_CONTROLLER_CA_FILE", "/etc/heph/controller-ca.crt")
+	t.Setenv("HEPH_CONTROLLER_SERVER_NAME", "heph-controller")
+
+	cfg, err := NewWorkerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ControllerCAFile != "/etc/heph/controller-ca.crt" {
+		t.Fatalf("ControllerCAFile = %q", cfg.ControllerCAFile)
+	}
+	if cfg.ControllerServerName != "heph-controller" {
+		t.Fatalf("ControllerServerName = %q", cfg.ControllerServerName)
+	}
+}
+
 func TestNewWorkerConfig_MissingRequired(t *testing.T) {
 	tests := []struct {
 		name    string

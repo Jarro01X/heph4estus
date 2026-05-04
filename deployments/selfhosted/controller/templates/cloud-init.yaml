@@ -12,10 +12,34 @@ packages:
   - jq
 
 write_files:
+  # --- Controller TLS material ---
+  - path: /data/tls/ca.crt
+    permissions: '0644'
+    encoding: b64
+    content: ${controller_ca_pem_b64}
+
+  - path: /data/tls/public.crt
+    permissions: '0644'
+    encoding: b64
+    content: ${controller_cert_pem_b64}
+
+  - path: /data/tls/private.key
+    permissions: '0600'
+    encoding: b64
+    content: ${controller_key_pem_b64}
+
   # --- NATS auth configuration ---
   - path: /data/nats/auth.conf
     permissions: '0600'
     content: |
+%{ if tls_enabled }
+      tls {
+        cert_file: "/tls/public.crt"
+        key_file: "/tls/private.key"
+        ca_file: "/tls/ca.crt"
+      }
+
+%{ endif }
       authorization {
         users = [
           { user: "${nats_user}", password: "${nats_password}" }
@@ -38,6 +62,7 @@ write_files:
         -p ${nats_port}:4222 \
         -p ${nats_monitor_port}:8222 \
         -v /data/nats:/data \
+        -v /data/tls:/tls:ro \
         nats:latest -js -sd /data -c /data/auth.conf
       ExecStop=/usr/bin/docker stop nats
 
@@ -60,9 +85,12 @@ write_files:
         -p ${minio_port}:9000 \
         -p ${minio_console_port}:9001 \
         -v /data/minio:/data \
+%{ if tls_enabled }
+        -v /data/tls:/root/.minio/certs:ro \
+%{ endif }
         -e MINIO_ROOT_USER=${minio_access_key} \
         -e MINIO_ROOT_PASSWORD=${minio_secret_key} \
-        minio/minio server /data --console-address :9001
+        minio/minio server /data --address :9000 --console-address :9001
       ExecStop=/usr/bin/docker stop minio
 
       [Install]
@@ -83,6 +111,11 @@ write_files:
       ExecStart=/usr/bin/docker run --name registry \
         -p ${registry_port}:5000 \
         -v /data/registry:/var/lib/registry \
+%{ if tls_enabled }
+        -v /data/tls:/certs:ro \
+        -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/public.crt \
+        -e REGISTRY_HTTP_TLS_KEY=/certs/private.key \
+%{ endif }
         registry:2
       ExecStop=/usr/bin/docker stop registry
 
@@ -90,7 +123,7 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  - mkdir -p /data/nats /data/minio /data/registry
+  - mkdir -p /data/nats /data/minio /data/registry /data/tls
   - systemctl daemon-reload
   - systemctl enable --now docker
   - systemctl enable --now nats
@@ -100,8 +133,8 @@ runcmd:
   # Bootstrap MinIO bucket — retry until MinIO is healthy.
   - |
     for i in $(seq 1 30); do
-      docker run --rm --entrypoint sh minio/mc -c "
-        mc alias set local http://localhost:${minio_port} ${minio_access_key} ${minio_secret_key} &&
+      docker run --rm --network host %{ if tls_enabled }-v /data/tls/ca.crt:/root/.mc/certs/CAs/heph-controller-ca.crt:ro %{ endif }--entrypoint sh minio/mc -c "
+        mc alias set local ${minio_scheme}://localhost:${minio_port} ${minio_access_key} ${minio_secret_key} &&
         mc mb --ignore-existing local/${minio_bucket}
       " && break
       sleep 2
@@ -113,7 +146,7 @@ runcmd:
   # ack-wait=5m matches SQS visibility timeout for long-running scans.
   - |
     for i in $(seq 1 30); do
-      docker run --rm natsio/nats-box nats -s nats://${nats_user}:${nats_password}@host.docker.internal:${nats_port} \
+      docker run --rm --network host %{ if tls_enabled }-v /data/tls/ca.crt:/ca.crt:ro %{ endif }natsio/nats-box nats %{ if tls_enabled }--tlsca=/ca.crt %{ endif }-s ${nats_scheme}://${nats_user}:${nats_password}@localhost:${nats_port} \
         stream add ${nats_stream_name} \
         --subjects="${nats_stream_name}.*" \
         --retention=work \

@@ -9,6 +9,7 @@ import (
 
 	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/tlsutil"
 
 	"github.com/nats-io/nats.go"
 )
@@ -29,6 +30,9 @@ type NATSFleetManagerConfig struct {
 	CooldownWindow  time.Duration // 0 means default
 	Reputation      []fleetstate.ReputationRecord
 	Rollout         *fleetstate.RolloutRecord
+	RootCAPEM       string
+	RootCAFile      string
+	ServerName      string
 }
 
 // NATSFleetManager implements Manager by subscribing to NATS heartbeats.
@@ -81,7 +85,11 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 		cooldown = defaultCooldownWindow
 	}
 
-	nc, err := nats.Connect(cfg.NATSURL)
+	opts, err := managerNATSOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	nc, err := nats.Connect(cfg.NATSURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: nats connect: %w", err)
 	}
@@ -114,6 +122,17 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 
 	log.Info("Fleet manager subscribed to %s on %s", HeartbeatSubject, cfg.NATSURL)
 	return m, nil
+}
+
+func managerNATSOptions(cfg NATSFleetManagerConfig) ([]nats.Option, error) {
+	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.RootCAPEM, cfg.RootCAFile, cfg.ServerName)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: NATS TLS trust: %w", err)
+	}
+	if tlsConfig == nil {
+		return nil, nil
+	}
+	return []nats.Option{nats.Secure(tlsConfig)}, nil
 }
 
 // NewNATSFleetManagerFromConn wraps an existing NATS connection. Used by

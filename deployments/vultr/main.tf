@@ -27,7 +27,8 @@ resource "random_id" "generation" {
 }
 
 locals {
-  generation_id = var.generation_id != "" ? var.generation_id : random_id.generation.hex
+  generation_id   = var.generation_id != "" ? var.generation_id : random_id.generation.hex
+  controller_host = module.controller.controller_host
 }
 
 # --- OS lookup ---
@@ -151,15 +152,21 @@ locals {
   worker_cloud_init = [
     for i in range(var.worker_count) : templatefile("${path.module}/templates/worker-cloud-init.yaml", {
       controller_private_ip = vultr_instance.controller.internal_ip
+      controller_host       = local.controller_host
       nats_port             = 4222
+      nats_scheme           = module.controller.nats_tls_enabled ? "tls" : "nats"
       nats_subject          = module.controller.nats_stream
       nats_user             = module.controller.nats_user
       nats_password         = module.controller.nats_password
       minio_port            = 9000
+      minio_scheme          = module.controller.minio_tls_enabled ? "https" : "http"
       minio_access_key      = module.controller.s3_access_key
       minio_secret_key      = module.controller.s3_secret_key
       minio_bucket          = var.minio_bucket
       registry_port         = 5000
+      registry_scheme       = module.controller.registry_tls_enabled ? "https" : "http"
+      registry_tls_enabled  = module.controller.registry_tls_enabled
+      controller_ca_pem_b64 = base64encode(module.controller.controller_ca_pem)
       tool_name             = var.tool_name
       docker_image          = var.docker_image
       generation_id         = local.generation_id

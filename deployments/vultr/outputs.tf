@@ -51,9 +51,29 @@ output "registry_auth_enabled" {
   value       = module.controller.registry_auth_enabled
 }
 
+output "controller_ca_pem" {
+  description = "PEM-encoded controller CA certificate used to trust TLS endpoints."
+  value       = module.controller.controller_ca_pem
+}
+
+output "controller_ca_fingerprint_sha256" {
+  description = "SHA-256 fingerprint of the controller CA PEM."
+  value       = module.controller.controller_ca_fingerprint_sha256
+}
+
+output "controller_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the controller server certificate."
+  value       = module.controller.controller_cert_not_after
+}
+
+output "controller_host" {
+  description = "Stable DNS name workers map to the controller private IP."
+  value       = module.controller.controller_host
+}
+
 output "nats_url" {
   description = "NATS client URL for workers and the operator CLI (includes auth credentials)."
-  value       = "nats://${module.controller.nats_user}:${module.controller.nats_password}@${vultr_instance.controller.main_ip}:4222"
+  value       = "${module.controller.nats_tls_enabled ? "tls" : "nats"}://${module.controller.nats_user}:${module.controller.nats_password}@${vultr_instance.controller.main_ip}:4222"
   sensitive   = true
 }
 
@@ -75,7 +95,7 @@ output "nats_stream" {
 
 output "s3_endpoint" {
   description = "MinIO S3-compatible endpoint URL."
-  value       = "http://${vultr_instance.controller.main_ip}:9000"
+  value       = "${module.controller.minio_tls_enabled ? "https" : "http"}://${vultr_instance.controller.main_ip}:9000"
 }
 
 output "s3_region" {
@@ -107,7 +127,7 @@ output "s3_bucket_name" {
 
 output "registry_url" {
   description = "Docker registry URL for worker image distribution."
-  value       = "${vultr_instance.controller.main_ip}:5000"
+  value       = "${module.controller.registry_tls_enabled ? "https" : "http"}://${vultr_instance.controller.main_ip}:5000"
 }
 
 output "docker_image" {

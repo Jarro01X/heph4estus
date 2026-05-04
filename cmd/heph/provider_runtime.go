@@ -43,6 +43,8 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 		Cloud:           string(kind.Canonical()),
 		Placement:       policy,
 		ExpectedVersion: outputs["docker_image"],
+		RootCAPEM:       outputs["controller_ca_pem"],
+		ServerName:      outputs["controller_host"],
 	}, logger.NewSimpleLogger())
 	if err != nil {
 		return 0, fmt.Errorf("starting provider-native fleet manager: %w", err)

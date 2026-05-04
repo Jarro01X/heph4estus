@@ -151,6 +151,8 @@ func runStatus(args []string, log logger.Logger) error {
 				ExpectedVersion: rec.ExpectedWorkerVersion,
 				Reputation:      reputation,
 				Rollout:         rollout,
+				RootCAPEM:       rec.ControllerCAPEM,
+				ServerName:      rec.ControllerHost,
 			}, log)
 			if err != nil {
 				log.Error("Warning: could not query fleet state: %v", err)

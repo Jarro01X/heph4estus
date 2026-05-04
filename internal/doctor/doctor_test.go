@@ -549,17 +549,20 @@ func TestCheckRegistryExposure_Unset(t *testing.T) {
 
 func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
 	results := RunProviderNativeOutputChecks(cloud.KindHetzner, map[string]string{
-		"controller_security_mode": "private-auth",
-		"nats_url":                 "nats://heph:secret@10.0.1.2:4222",
-		"nats_user":                "heph",
-		"nats_password":            "secret",
-		"nats_tls_enabled":         "false",
-		"nats_auth_enabled":        "true",
-		"s3_endpoint":              "http://10.0.1.2:9000",
-		"minio_tls_enabled":        "false",
-		"registry_url":             "10.0.1.2:5000",
-		"registry_tls_enabled":     "false",
-		"registry_auth_enabled":    "false",
+		"controller_security_mode":         "private-auth",
+		"nats_url":                         "nats://heph:secret@10.0.1.2:4222",
+		"nats_user":                        "heph",
+		"nats_password":                    "secret",
+		"nats_tls_enabled":                 "false",
+		"nats_auth_enabled":                "true",
+		"s3_endpoint":                      "http://10.0.1.2:9000",
+		"minio_tls_enabled":                "false",
+		"registry_url":                     "10.0.1.2:5000",
+		"registry_tls_enabled":             "false",
+		"registry_auth_enabled":            "false",
+		"controller_ca_pem":                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+		"controller_ca_fingerprint_sha256": "abc123",
+		"controller_cert_not_after":        "2027-05-03T00:00:00Z",
 	})
 
 	names := checkNames(results)
@@ -568,6 +571,8 @@ func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
 	assertContains(t, names, "nats_tls_posture")
 	assertContains(t, names, "minio_tls_posture")
 	assertContains(t, names, "registry_tls_posture")
+	assertContains(t, names, "controller_ca_posture")
+	assertContains(t, names, "controller_cert_expiry")
 	assertContains(t, names, "registry_auth_posture")
 
 	if results[0].Status != StatusWarn {

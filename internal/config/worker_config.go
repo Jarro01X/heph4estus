@@ -15,12 +15,15 @@ type WorkerConfig struct {
 	JitterMaxSeconds int // JITTER_MAX_SECONDS; 0 = disabled
 
 	// Fleet heartbeat settings (selfhosted/Hetzner workers).
-	FleetHeartbeat bool   // FLEET_HEARTBEAT; enables heartbeat publishing
-	WorkerID       string // WORKER_ID; unique worker identifier
-	WorkerHost     string // WORKER_HOST; private IP or hostname
-	NATSURL        string // NATS_URL; NATS server for heartbeats
-	WorkerVersion  string // WORKER_VERSION; image tag/version for fleet reporting
-	GenerationID   string // FLEET_GENERATION_ID; provider-native fleet generation marker
+	FleetHeartbeat       bool   // FLEET_HEARTBEAT; enables heartbeat publishing
+	WorkerID             string // WORKER_ID; unique worker identifier
+	WorkerHost           string // WORKER_HOST; private IP or hostname
+	NATSURL              string // NATS_URL; NATS server for heartbeats
+	WorkerVersion        string // WORKER_VERSION; image tag/version for fleet reporting
+	GenerationID         string // FLEET_GENERATION_ID; provider-native fleet generation marker
+	ControllerCAPEM      string // HEPH_CONTROLLER_CA_PEM; optional controller CA PEM
+	ControllerCAFile     string // HEPH_CONTROLLER_CA_FILE; optional controller CA file
+	ControllerServerName string // HEPH_CONTROLLER_SERVER_NAME; optional TLS server name
 }
 
 // NewWorkerConfig creates a new generic worker configuration from environment variables.
@@ -60,16 +63,19 @@ func NewWorkerConfig() (*WorkerConfig, error) {
 	}
 
 	return &WorkerConfig{
-		Cloud:            cloudVal,
-		QueueID:          queueID,
-		Bucket:           bucket,
-		ToolName:         toolName,
-		JitterMaxSeconds: jitterMax,
-		FleetHeartbeat:   fleetHeartbeat,
-		WorkerID:         workerID,
-		WorkerHost:       os.Getenv("WORKER_HOST"),
-		NATSURL:          os.Getenv("NATS_URL"),
-		WorkerVersion:    os.Getenv("WORKER_VERSION"),
-		GenerationID:     os.Getenv("FLEET_GENERATION_ID"),
+		Cloud:                cloudVal,
+		QueueID:              queueID,
+		Bucket:               bucket,
+		ToolName:             toolName,
+		JitterMaxSeconds:     jitterMax,
+		FleetHeartbeat:       fleetHeartbeat,
+		WorkerID:             workerID,
+		WorkerHost:           os.Getenv("WORKER_HOST"),
+		NATSURL:              os.Getenv("NATS_URL"),
+		WorkerVersion:        os.Getenv("WORKER_VERSION"),
+		GenerationID:         os.Getenv("FLEET_GENERATION_ID"),
+		ControllerCAPEM:      os.Getenv("HEPH_CONTROLLER_CA_PEM"),
+		ControllerCAFile:     os.Getenv("HEPH_CONTROLLER_CA_FILE"),
+		ControllerServerName: os.Getenv("HEPH_CONTROLLER_SERVER_NAME"),
 	}, nil
 }

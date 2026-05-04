@@ -46,6 +46,9 @@ type SelfhostedConfig struct {
 	MinIOAuthEnabled       bool
 	RegistryTLSEnabled     bool
 	RegistryAuthEnabled    bool
+	ControllerCAPEM        string
+	ControllerCAFile       string
+	ControllerServerName   string
 
 	// S3-compatible object store settings.
 	S3Endpoint  string
@@ -96,11 +99,14 @@ func Build(cfg Config) (cloud.Provider, error) {
 		}
 		pcfg := selfhosted.ProviderConfig{
 			Storage: selfhosted.StorageConfig{
-				Endpoint:  cfg.Selfhosted.S3Endpoint,
-				Region:    cfg.Selfhosted.S3Region,
-				AccessKey: cfg.Selfhosted.S3AccessKey,
-				Secret:    cfg.Selfhosted.S3Secret,
-				PathStyle: cfg.Selfhosted.S3PathStyle,
+				Endpoint:   cfg.Selfhosted.S3Endpoint,
+				Region:     cfg.Selfhosted.S3Region,
+				AccessKey:  cfg.Selfhosted.S3AccessKey,
+				Secret:     cfg.Selfhosted.S3Secret,
+				RootCAPEM:  cfg.Selfhosted.ControllerCAPEM,
+				RootCAFile: cfg.Selfhosted.ControllerCAFile,
+				ServerName: cfg.Selfhosted.ControllerServerName,
+				PathStyle:  cfg.Selfhosted.S3PathStyle,
 			},
 		}
 		if cfg.Selfhosted.NATSURL != "" {
@@ -110,6 +116,9 @@ func Build(cfg Config) (cloud.Provider, error) {
 				DurablePrefix:  cfg.Selfhosted.DurablePrefix,
 				AckWaitSeconds: cfg.Selfhosted.AckWaitSeconds,
 				MaxDeliver:     cfg.Selfhosted.MaxDeliver,
+				RootCAPEM:      cfg.Selfhosted.ControllerCAPEM,
+				RootCAFile:     cfg.Selfhosted.ControllerCAFile,
+				ServerName:     cfg.Selfhosted.ControllerServerName,
 			}
 		}
 		if len(cfg.Selfhosted.WorkerHosts) > 0 {
@@ -130,11 +139,14 @@ func Build(cfg Config) (cloud.Provider, error) {
 		}
 		pcfg := selfhosted.ProviderConfig{
 			Storage: selfhosted.StorageConfig{
-				Endpoint:  cfg.Selfhosted.S3Endpoint,
-				Region:    cfg.Selfhosted.S3Region,
-				AccessKey: cfg.Selfhosted.S3AccessKey,
-				Secret:    cfg.Selfhosted.S3Secret,
-				PathStyle: cfg.Selfhosted.S3PathStyle,
+				Endpoint:   cfg.Selfhosted.S3Endpoint,
+				Region:     cfg.Selfhosted.S3Region,
+				AccessKey:  cfg.Selfhosted.S3AccessKey,
+				Secret:     cfg.Selfhosted.S3Secret,
+				RootCAPEM:  cfg.Selfhosted.ControllerCAPEM,
+				RootCAFile: cfg.Selfhosted.ControllerCAFile,
+				ServerName: cfg.Selfhosted.ControllerServerName,
+				PathStyle:  cfg.Selfhosted.S3PathStyle,
 			},
 		}
 		if cfg.Selfhosted.NATSURL != "" {
@@ -144,6 +156,9 @@ func Build(cfg Config) (cloud.Provider, error) {
 				DurablePrefix:  cfg.Selfhosted.DurablePrefix,
 				AckWaitSeconds: cfg.Selfhosted.AckWaitSeconds,
 				MaxDeliver:     cfg.Selfhosted.MaxDeliver,
+				RootCAPEM:      cfg.Selfhosted.ControllerCAPEM,
+				RootCAFile:     cfg.Selfhosted.ControllerCAFile,
+				ServerName:     cfg.Selfhosted.ControllerServerName,
 			}
 		}
 		return selfhosted.NewProvider(pcfg, cfg.Logger)
@@ -157,13 +172,16 @@ func Build(cfg Config) (cloud.Provider, error) {
 // configuration is centralised in one place.
 func SelfhostedConfigFromEnv() *SelfhostedConfig {
 	cfg := &SelfhostedConfig{
-		NATSURL:     os.Getenv("NATS_URL"),
-		StreamName:  os.Getenv("NATS_STREAM"),
-		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
-		S3Region:    envOr("S3_REGION", "us-east-1"),
-		S3AccessKey: os.Getenv("S3_ACCESS_KEY"),
-		S3Secret:    os.Getenv("S3_SECRET_KEY"),
-		S3PathStyle: os.Getenv("S3_PATH_STYLE") == "true",
+		NATSURL:              os.Getenv("NATS_URL"),
+		StreamName:           os.Getenv("NATS_STREAM"),
+		S3Endpoint:           os.Getenv("S3_ENDPOINT"),
+		S3Region:             envOr("S3_REGION", "us-east-1"),
+		S3AccessKey:          os.Getenv("S3_ACCESS_KEY"),
+		S3Secret:             os.Getenv("S3_SECRET_KEY"),
+		S3PathStyle:          os.Getenv("S3_PATH_STYLE") == "true",
+		ControllerCAPEM:      os.Getenv("HEPH_CONTROLLER_CA_PEM"),
+		ControllerCAFile:     os.Getenv("HEPH_CONTROLLER_CA_FILE"),
+		ControllerServerName: os.Getenv("HEPH_CONTROLLER_SERVER_NAME"),
 
 		// Scan runtime settings.
 		QueueID: os.Getenv("SELFHOSTED_QUEUE_ID"),
@@ -227,7 +245,7 @@ func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
 		S3PathStyle: outputs["s3_path_style"] == "true",
 		QueueID:     outputs["sqs_queue_url"],
 		Bucket:      outputs["s3_bucket_name"],
-		DockerImage: outputs["registry_url"] + "/" + outputs["docker_image"],
+		DockerImage: registryHost(outputs["registry_url"]) + "/" + outputs["docker_image"],
 
 		ControllerSecurityMode: outputs["controller_security_mode"],
 		NATSTLSEnabled:         parseOutputBool(outputs["nats_tls_enabled"]),
@@ -236,11 +254,17 @@ func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
 		MinIOAuthEnabled:       parseOutputBool(outputs["minio_auth_enabled"]),
 		RegistryTLSEnabled:     parseOutputBool(outputs["registry_tls_enabled"]),
 		RegistryAuthEnabled:    parseOutputBool(outputs["registry_auth_enabled"]),
+		ControllerCAPEM:        outputs["controller_ca_pem"],
+		ControllerServerName:   outputs["controller_host"],
 	}
 	if hosts := outputs["worker_hosts"]; hosts != "" {
 		cfg.WorkerHosts = splitCommaList(hosts)
 	}
 	return cfg
+}
+
+func registryHost(registryURL string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(registryURL, "https://"), "http://")
 }
 
 func parseOutputBool(value string) bool {

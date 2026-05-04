@@ -114,6 +114,8 @@ func runBenchFleet(args []string, log logger.Logger) error {
 			ExpectedVersion: ensureResult.Outputs["docker_image"],
 			Reputation:      reputation,
 			Rollout:         rollout,
+			RootCAPEM:       ensureResult.Outputs["controller_ca_pem"],
+			ServerName:      ensureResult.Outputs["controller_host"],
 		}, log)
 		if err != nil {
 			return err

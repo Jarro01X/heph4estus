@@ -25,6 +25,12 @@ variable "controller_security_mode" {
   }
 }
 
+variable "controller_cert_validity_hours" {
+  description = "Validity period for generated controller CA and server certificates."
+  type        = number
+  default     = 8760
+}
+
 variable "nats_port" {
   description = "NATS client port."
   type        = number

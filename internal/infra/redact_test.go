@@ -15,6 +15,7 @@ func TestIsSensitiveOutput(t *testing.T) {
 		{"auth_token", true},
 		{"api_credential", true},
 		{"S3_SECRET_KEY", true}, // case insensitive
+		{"controller_ca_pem", true},
 
 		// Should NOT be sensitive.
 		{"tool_name", false},
@@ -63,11 +64,11 @@ func TestRedactOutputValue_SelfhostedOutputs(t *testing.T) {
 
 	// Non-sensitive selfhosted outputs should pass through.
 	safeKeys := map[string]string{
-		"s3_endpoint":      "http://10.0.1.5:9000",
-		"registry_url":     "10.0.1.5:5000",
-		"s3_region":        "us-east-1",
-		"s3_path_style":    "true",
-		"controller_ip":    "10.0.1.5",
+		"s3_endpoint":   "http://10.0.1.5:9000",
+		"registry_url":  "10.0.1.5:5000",
+		"s3_region":     "us-east-1",
+		"s3_path_style": "true",
+		"controller_ip": "10.0.1.5",
 	}
 	for key, val := range safeKeys {
 		got := RedactOutputValue(key, val)
