@@ -19,12 +19,12 @@ func TestRunInfraRotateRequiresSubcommand(t *testing.T) {
 	}
 }
 
-func TestRunInfraRotateCredentialsRejectsNonNATSMutationBeforeTerraform(t *testing.T) {
-	err := runInfraRotateCredentials([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "registry"}, testLogger())
+func TestRunInfraRotateCredentialsRejectsAllMutationBeforeTerraform(t *testing.T) {
+	err := runInfraRotateCredentials([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "all"}, testLogger())
 	if err == nil {
 		t.Fatal("expected unsupported mutation error")
 	}
-	if !strings.Contains(err.Error(), "currently supports only --component nats") {
+	if !strings.Contains(err.Error(), "one component at a time") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

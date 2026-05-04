@@ -98,3 +98,49 @@ variable "nats_credential_generation" {
   type        = string
   default     = "bootstrap"
 }
+
+variable "nats_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last NATS credential rotation."
+  type        = string
+  default     = ""
+}
+
+variable "minio_operator_access_key_override" {
+  description = "Rotated MinIO operator access key. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "minio_operator_secret_key_override" {
+  description = "Rotated MinIO operator secret key. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "minio_worker_access_key_override" {
+  description = "Rotated MinIO worker access key. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "minio_worker_secret_key_override" {
+  description = "Rotated MinIO worker secret key. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "minio_credential_generation" {
+  description = "MinIO credential generation marker for operator-driven rotation."
+  type        = string
+  default     = "bootstrap"
+}
+
+variable "minio_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last MinIO credential rotation."
+  type        = string
+  default     = ""
+}

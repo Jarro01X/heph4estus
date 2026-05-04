@@ -109,6 +109,11 @@ output "nats_credential_generation" {
   value       = var.nats_credential_generation
 }
 
+output "nats_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last NATS credential rotation."
+  value       = var.nats_credential_rotated_at
+}
+
 output "nats_stream" {
   description = "NATS JetStream stream name."
   value       = module.controller.nats_stream
@@ -126,26 +131,36 @@ output "s3_region" {
 
 output "s3_access_key" {
   description = "Backward-compatible MinIO operator access key."
-  value       = module.controller.s3_operator_access_key
+  value       = local.minio_operator_access_key
   sensitive   = true
 }
 
 output "s3_secret_key" {
   description = "Backward-compatible MinIO operator secret key."
-  value       = module.controller.s3_operator_secret_key
+  value       = local.minio_operator_secret_key
   sensitive   = true
 }
 
 output "s3_operator_access_key" {
   description = "MinIO operator access key."
-  value       = module.controller.s3_operator_access_key
+  value       = local.minio_operator_access_key
   sensitive   = true
 }
 
 output "s3_operator_secret_key" {
   description = "MinIO operator secret key."
-  value       = module.controller.s3_operator_secret_key
+  value       = local.minio_operator_secret_key
   sensitive   = true
+}
+
+output "minio_credential_generation" {
+  description = "MinIO credential generation marker."
+  value       = var.minio_credential_generation
+}
+
+output "minio_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last MinIO credential rotation."
+  value       = var.minio_credential_rotated_at
 }
 
 output "s3_path_style" {

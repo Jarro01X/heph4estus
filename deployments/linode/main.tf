@@ -41,6 +41,18 @@ locals {
   nats_operator_password = var.nats_operator_password_override != "" ? var.nats_operator_password_override : module.controller.nats_operator_password
   nats_worker_user       = var.nats_worker_user_override != "" ? var.nats_worker_user_override : module.controller.nats_worker_user
   nats_worker_password   = var.nats_worker_password_override != "" ? var.nats_worker_password_override : module.controller.nats_worker_password
+  minio_operator_access_key = (
+    var.minio_operator_access_key_override != "" ? var.minio_operator_access_key_override : module.controller.s3_operator_access_key
+  )
+  minio_operator_secret_key = (
+    var.minio_operator_secret_key_override != "" ? var.minio_operator_secret_key_override : module.controller.s3_operator_secret_key
+  )
+  minio_worker_access_key = (
+    var.minio_worker_access_key_override != "" ? var.minio_worker_access_key_override : module.controller.s3_worker_access_key
+  )
+  minio_worker_secret_key = (
+    var.minio_worker_secret_key_override != "" ? var.minio_worker_secret_key_override : module.controller.s3_worker_secret_key
+  )
 }
 
 # --- Networking (VPC + subnet) ---
@@ -168,8 +180,8 @@ locals {
       nats_password         = local.nats_worker_password
       minio_port            = 9000
       minio_scheme          = module.controller.minio_tls_enabled ? "https" : "http"
-      minio_access_key      = module.controller.s3_worker_access_key
-      minio_secret_key      = module.controller.s3_worker_secret_key
+      minio_access_key      = local.minio_worker_access_key
+      minio_secret_key      = local.minio_worker_secret_key
       minio_bucket          = var.minio_bucket
       registry_port         = 5000
       registry_scheme       = module.controller.registry_tls_enabled ? "https" : "http"

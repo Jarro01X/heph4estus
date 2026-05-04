@@ -35,6 +35,9 @@ func TestGenerateNATSCredentials(t *testing.T) {
 	if !strings.HasPrefix(creds.Generation, "nats-20260503t220000z-") {
 		t.Fatalf("Generation = %q", creds.Generation)
 	}
+	if creds.RotatedAt != "2026-05-03T22:00:00Z" {
+		t.Fatalf("RotatedAt = %q", creds.RotatedAt)
+	}
 	if len(creds.OperatorPassword) != 32 || len(creds.WorkerPassword) != 32 {
 		t.Fatalf("password lengths = %d/%d, want 32/32", len(creds.OperatorPassword), len(creds.WorkerPassword))
 	}
@@ -49,6 +52,7 @@ func TestNATSTerraformVars(t *testing.T) {
 		"nats_worker_user_override":       creds.WorkerUser,
 		"nats_worker_password_override":   creds.WorkerPassword,
 		"nats_credential_generation":      creds.Generation,
+		"nats_credential_rotated_at":      creds.RotatedAt,
 	}
 	for key, value := range want {
 		if vars[key] != value {
@@ -155,5 +159,6 @@ func testNATSCredentials() NATSCredentials {
 		WorkerUser:       "heph-worker-new",
 		WorkerPassword:   "worker-secret",
 		Generation:       "nats-test-generation",
+		RotatedAt:        "2026-05-03T22:00:00Z",
 	}
 }

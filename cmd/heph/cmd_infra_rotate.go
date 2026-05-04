@@ -53,8 +53,8 @@ func runInfraRotateCredentials(args []string, log logger.Logger) error {
 	if err != nil {
 		return err
 	}
-	if !*dryRun && (len(components) != 1 || components[0] != infra.CredentialComponentNATS) {
-		return fmt.Errorf("credential rotation mutation currently supports only --component nats; rerun other components with --dry-run")
+	if !*dryRun && len(components) != 1 {
+		return fmt.Errorf("credential rotation mutation currently supports one component at a time; rerun --component all with --dry-run")
 	}
 
 	opCfg, _ := operator.LoadConfig()
@@ -79,7 +79,7 @@ func runInfraRotateCredentials(args []string, log logger.Logger) error {
 		return fmt.Errorf("credential rotation preflight failed security posture checks: %s", strings.Join(failures, "; "))
 	}
 	if !*dryRun {
-		return runNATSCredentialRotationMutation(rotationMutationOpts{
+		opts := rotationMutationOpts{
 			ToolConfig:  cfg,
 			Cloud:       cloudKind,
 			Probe:       probe,
@@ -88,7 +88,15 @@ func runInfraRotateCredentials(args []string, log logger.Logger) error {
 			SSHKey:      *sshKey,
 			SSHPort:     *sshPort,
 			Log:         log,
-		})
+		}
+		switch components[0] {
+		case infra.CredentialComponentNATS:
+			return runNATSCredentialRotationMutation(opts)
+		case infra.CredentialComponentMinIO:
+			return runMinIOCredentialRotationMutation(opts)
+		default:
+			return fmt.Errorf("credential rotation mutation currently supports --component nats or minio; rerun other components with --dry-run")
+		}
 	}
 	return outputCredentialRotationPlanText(os.Stdout, plan)
 }
@@ -104,28 +112,53 @@ type rotationMutationOpts struct {
 	Log         logger.Logger
 }
 
-func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
-	if opts.ToolConfig == nil {
-		return fmt.Errorf("tool config is required")
-	}
+type preparedRotationMutation struct {
+	Outputs        map[string]string
+	WorkerCount    int
+	ControllerHost string
+	Runner         infra.SSHRemoteRunner
+}
+
+func prepareRotationMutation(opts rotationMutationOpts) (*preparedRotationMutation, error) {
 	outputs := opts.Probe.Outputs
 	workerCount, err := parseRotationWorkerCount(outputs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	controllerHost := strings.TrimSpace(outputs["controller_ip"])
 	if controllerHost == "" {
-		return fmt.Errorf("credential rotation requires controller_ip output")
+		return nil, fmt.Errorf("credential rotation requires controller_ip output")
 	}
 	sshKey := strings.TrimSpace(opts.SSHKey)
 	if sshKey == "" {
 		sshKey = infra.DefaultSSHPrivateKeyPath()
 	}
 	if sshKey == "" {
-		return fmt.Errorf("credential rotation requires an SSH private key; set --ssh-key, HEPH_SSH_PRIVATE_KEY_PATH, SSH_PRIVATE_KEY_PATH, or SELFHOSTED_SSH_KEY_PATH")
+		return nil, fmt.Errorf("credential rotation requires an SSH private key; set --ssh-key, HEPH_SSH_PRIVATE_KEY_PATH, SSH_PRIVATE_KEY_PATH, or SELFHOSTED_SSH_KEY_PATH")
+	}
+	runner := infra.SSHRemoteRunner{
+		User:    strings.TrimSpace(opts.SSHUser),
+		KeyPath: sshKey,
+		Port:    opts.SSHPort,
+	}
+	return &preparedRotationMutation{
+		Outputs:        outputs,
+		WorkerCount:    workerCount,
+		ControllerHost: controllerHost,
+		Runner:         runner,
+	}, nil
+}
+
+func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
+	if opts.ToolConfig == nil {
+		return fmt.Errorf("tool config is required")
+	}
+	prepared, err := prepareRotationMutation(opts)
+	if err != nil {
+		return err
 	}
 	if !opts.AutoApprove {
-		question := fmt.Sprintf("Rotate NATS credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, workerCount)
+		question := fmt.Sprintf("Rotate NATS credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
 		if !cliPrompt(question) {
 			fmt.Fprintln(os.Stderr, "Cancelled.")
 			return nil
@@ -136,25 +169,25 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 	if err != nil {
 		return err
 	}
-	runner := infra.SSHRemoteRunner{
-		User:    strings.TrimSpace(opts.SSHUser),
-		KeyPath: sshKey,
-		Port:    opts.SSHPort,
-	}
 	update := infra.NATSControllerAuthUpdate{
 		Credentials: creds,
-		TLSEnabled:  rotationOutputBool(outputs["nats_tls_enabled"]),
+		TLSEnabled:  rotationOutputBool(prepared.Outputs["nats_tls_enabled"]),
 	}
 
 	fmt.Fprintf(os.Stdout, "Rotating NATS credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
 	fmt.Fprintln(os.Stdout, "Updating controller NATS auth with grace credentials...")
 	update.Mode = infra.NATSAuthUpdateGrace
-	if err := infra.UpdateControllerNATSAuth(mainContext(), runner, controllerHost, update); err != nil {
+	if err := infra.UpdateControllerNATSAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("adding grace NATS credentials on controller: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated NATS credentials...\n", workerCount)
-	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(workerCount), infra.NATSTerraformVars(creds), opts.Log); err != nil {
+	vars := infra.NATSTerraformVars(creds)
+	if _, err := infra.MergeRotationAutoVars(opts.ToolConfig.TerraformDir, vars); err != nil {
+		return fmt.Errorf("persisting rotated NATS Terraform vars: %w", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated NATS credentials...\n", prepared.WorkerCount)
+	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
 		return fmt.Errorf("replacing workers with rotated NATS credentials: %w", err)
 	}
 
@@ -171,7 +204,7 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 
 	fmt.Fprintln(os.Stdout, "Removing previous NATS users from controller auth...")
 	update.Mode = infra.NATSAuthUpdateFinal
-	if err := infra.UpdateControllerNATSAuth(mainContext(), runner, controllerHost, update); err != nil {
+	if err := infra.UpdateControllerNATSAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("finalizing NATS credentials on controller: %w", err)
 	}
 
@@ -181,6 +214,79 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 	}
 
 	if _, err := fmt.Fprintf(os.Stdout, "Rotated NATS credentials. Generation: %s\n", creds.Generation); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
+	if opts.ToolConfig == nil {
+		return fmt.Errorf("tool config is required")
+	}
+	prepared, err := prepareRotationMutation(opts)
+	if err != nil {
+		return err
+	}
+	if !opts.AutoApprove {
+		question := fmt.Sprintf("Rotate MinIO credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
+		if !cliPrompt(question) {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+	}
+
+	priorVars, err := infra.ReadRotationAutoVars(opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return fmt.Errorf("reading previous rotation vars: %w", err)
+	}
+	creds, err := infra.GenerateMinIOCredentials(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	update := infra.MinIOControllerAuthUpdate{
+		Credentials:       creds,
+		TLSEnabled:        rotationOutputBool(prepared.Outputs["minio_tls_enabled"]),
+		Bucket:            prepared.Outputs["s3_bucket_name"],
+		Endpoint:          prepared.Outputs["s3_endpoint"],
+		OldOperatorKey:    prepared.Outputs["s3_operator_access_key"],
+		PreviousWorkerKey: priorVars["minio_worker_access_key_override"],
+	}
+
+	fmt.Fprintf(os.Stdout, "Rotating MinIO credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
+	fmt.Fprintln(os.Stdout, "Adding rotated MinIO users and verifying grace access...")
+	update.Mode = infra.MinIOAuthUpdateGrace
+	if err := infra.UpdateControllerMinIOAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("adding grace MinIO credentials on controller: %w", err)
+	}
+
+	vars := infra.MinIOTerraformVars(creds)
+	if _, err := infra.MergeRotationAutoVars(opts.ToolConfig.TerraformDir, vars); err != nil {
+		return fmt.Errorf("persisting rotated MinIO Terraform vars: %w", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated MinIO credentials...\n", prepared.WorkerCount)
+	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
+		return fmt.Errorf("replacing workers with rotated MinIO credentials: %w", err)
+	}
+
+	tf := infra.NewTerraformClient(opts.Log)
+	rotatedOutputs, err := tf.ReadOutputs(mainContext(), opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, "Verifying rotated workers can heartbeat...")
+	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
+		return fmt.Errorf("verifying rotated MinIO worker rollout: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, "Removing previous rotated MinIO users from controller auth...")
+	update.Mode = infra.MinIOAuthUpdateFinal
+	if err := infra.UpdateControllerMinIOAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("finalizing MinIO credentials on controller: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(os.Stdout, "Rotated MinIO credentials. Generation: %s\n", creds.Generation); err != nil {
 		return err
 	}
 	return nil
