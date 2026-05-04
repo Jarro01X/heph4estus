@@ -162,8 +162,7 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 	if !opts.AutoApprove {
 		question := fmt.Sprintf("Rotate NATS credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
 		if !cliPrompt(question) {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
+			return printStderrLine("Cancelled.")
 		}
 	}
 
@@ -176,8 +175,12 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 		TLSEnabled:  rotationOutputBool(prepared.Outputs["nats_tls_enabled"]),
 	}
 
-	fmt.Fprintf(os.Stdout, "Rotating NATS credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
-	fmt.Fprintln(os.Stdout, "Updating controller NATS auth with grace credentials...")
+	if err := printStdout("Rotating NATS credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {
+		return err
+	}
+	if err := printStdoutLine("Updating controller NATS auth with grace credentials..."); err != nil {
+		return err
+	}
 	update.Mode = infra.NATSAuthUpdateGrace
 	if err := infra.UpdateControllerNATSAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("adding grace NATS credentials on controller: %w", err)
@@ -188,7 +191,9 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("persisting rotated NATS Terraform vars: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated NATS credentials...\n", prepared.WorkerCount)
+	if err := printStdout("Replacing %d workers with rotated NATS credentials...\n", prepared.WorkerCount); err != nil {
+		return err
+	}
 	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
 		return fmt.Errorf("replacing workers with rotated NATS credentials: %w", err)
 	}
@@ -199,18 +204,24 @@ func runNATSCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Verifying rotated workers can heartbeat...")
+	if err := printStdoutLine("Verifying rotated workers can heartbeat..."); err != nil {
+		return err
+	}
 	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
 		return fmt.Errorf("verifying rotated NATS credentials: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Removing previous NATS users from controller auth...")
+	if err := printStdoutLine("Removing previous NATS users from controller auth..."); err != nil {
+		return err
+	}
 	update.Mode = infra.NATSAuthUpdateFinal
 	if err := infra.UpdateControllerNATSAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("finalizing NATS credentials on controller: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Verifying final NATS auth after cleanup...")
+	if err := printStdoutLine("Verifying final NATS auth after cleanup..."); err != nil {
+		return err
+	}
 	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
 		return fmt.Errorf("verifying finalized NATS credentials: %w", err)
 	}
@@ -232,8 +243,7 @@ func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
 	if !opts.AutoApprove {
 		question := fmt.Sprintf("Rotate MinIO credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
 		if !cliPrompt(question) {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
+			return printStderrLine("Cancelled.")
 		}
 	}
 
@@ -254,8 +264,12 @@ func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
 		PreviousWorkerKey: priorVars["minio_worker_access_key_override"],
 	}
 
-	fmt.Fprintf(os.Stdout, "Rotating MinIO credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
-	fmt.Fprintln(os.Stdout, "Adding rotated MinIO users and verifying grace access...")
+	if err := printStdout("Rotating MinIO credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {
+		return err
+	}
+	if err := printStdoutLine("Adding rotated MinIO users and verifying grace access..."); err != nil {
+		return err
+	}
 	update.Mode = infra.MinIOAuthUpdateGrace
 	if err := infra.UpdateControllerMinIOAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("adding grace MinIO credentials on controller: %w", err)
@@ -266,7 +280,9 @@ func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("persisting rotated MinIO Terraform vars: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated MinIO credentials...\n", prepared.WorkerCount)
+	if err := printStdout("Replacing %d workers with rotated MinIO credentials...\n", prepared.WorkerCount); err != nil {
+		return err
+	}
 	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
 		return fmt.Errorf("replacing workers with rotated MinIO credentials: %w", err)
 	}
@@ -277,12 +293,16 @@ func runMinIOCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Verifying rotated workers can heartbeat...")
+	if err := printStdoutLine("Verifying rotated workers can heartbeat..."); err != nil {
+		return err
+	}
 	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
 		return fmt.Errorf("verifying rotated MinIO worker rollout: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Removing previous rotated MinIO users from controller auth...")
+	if err := printStdoutLine("Removing previous rotated MinIO users from controller auth..."); err != nil {
+		return err
+	}
 	update.Mode = infra.MinIOAuthUpdateFinal
 	if err := infra.UpdateControllerMinIOAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("finalizing MinIO credentials on controller: %w", err)
@@ -305,8 +325,7 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 	if !opts.AutoApprove {
 		question := fmt.Sprintf("Rotate registry credentials for %s/%s and replace %d workers?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, prepared.WorkerCount)
 		if !cliPrompt(question) {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
-			return nil
+			return printStderrLine("Cancelled.")
 		}
 	}
 
@@ -320,8 +339,12 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 		RegistryURL: prepared.Outputs["registry_url"],
 	}
 
-	fmt.Fprintf(os.Stdout, "Rotating registry credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName)
-	fmt.Fprintln(os.Stdout, "Adding rotated registry users and verifying grace access...")
+	if err := printStdout("Rotating registry credentials for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {
+		return err
+	}
+	if err := printStdoutLine("Adding rotated registry users and verifying grace access..."); err != nil {
+		return err
+	}
 	update.Mode = infra.RegistryAuthUpdateGrace
 	if err := infra.UpdateControllerRegistryAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("adding grace registry credentials on controller: %w", err)
@@ -332,7 +355,9 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("persisting rotated registry Terraform vars: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Replacing %d workers with rotated registry credentials...\n", prepared.WorkerCount)
+	if err := printStdout("Replacing %d workers with rotated registry credentials...\n", prepared.WorkerCount); err != nil {
+		return err
+	}
 	if err := replaceWorkerIndexes(mainContext(), opts.ToolConfig, opts.Cloud, allWorkerIndexes(prepared.WorkerCount), vars, opts.Log); err != nil {
 		return fmt.Errorf("replacing workers with rotated registry credentials: %w", err)
 	}
@@ -343,12 +368,16 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 		return fmt.Errorf("reading rotated Terraform outputs: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Verifying rotated workers can heartbeat...")
+	if err := printStdoutLine("Verifying rotated workers can heartbeat..."); err != nil {
+		return err
+	}
 	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, rotatedOutputs, fleet.PlacementPolicy{}); err != nil {
 		return fmt.Errorf("verifying rotated registry worker rollout: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout, "Removing previous registry users from controller auth...")
+	if err := printStdoutLine("Removing previous registry users from controller auth..."); err != nil {
+		return err
+	}
 	update.Mode = infra.RegistryAuthUpdateFinal
 	if err := infra.UpdateControllerRegistryAuth(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
 		return fmt.Errorf("finalizing registry credentials on controller: %w", err)
@@ -358,6 +387,21 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 		return err
 	}
 	return nil
+}
+
+func printStdout(format string, args ...interface{}) error {
+	_, err := fmt.Fprintf(os.Stdout, format, args...)
+	return err
+}
+
+func printStdoutLine(line string) error {
+	_, err := fmt.Fprintln(os.Stdout, line)
+	return err
+}
+
+func printStderrLine(line string) error {
+	_, err := fmt.Fprintln(os.Stderr, line)
+	return err
 }
 
 func parseRotationWorkerCount(outputs map[string]string) (int, error) {
