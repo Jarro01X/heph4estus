@@ -216,9 +216,12 @@ Cost and teardown posture:
 - Use `--out <dir>` or a saved output directory before destroy if you need local result copies. Results in MinIO disappear when the controller VM is destroyed.
 
 Security posture:
-- New provider-native Terraform outputs include `controller_security_mode` plus NATS, MinIO, and registry TLS/auth posture flags.
-- The current compatibility mode is `private-auth`: provider firewalls keep controller services private and NATS/MinIO require credentials, but NATS, MinIO, and the controller registry are not yet using TLS.
-- After deploy, run `./bin/heph doctor --cloud <provider> --tool <tool>` to read Terraform outputs and report controller security posture. TLS and credential rotation are tracked as Phase 6 security hardening work.
+- Provider-native Terraform outputs include `controller_security_mode`, service TLS/auth posture, credential generation metadata, controller certificate expiry, and NATS mTLS client certificate expiry.
+- `private-auth` remains compatibility mode. `tls` encrypts NATS, MinIO, and the controller registry while keeping role-scoped credentials. `mtls` additionally requires NATS client certificates for worker/operator NATS connections.
+- After deploy, run `./bin/heph doctor --cloud <provider> --tool <tool>` to report controller posture, missing TLS/auth, certificate expiry, stale credentials, and mTLS output health.
+- Rotate role-scoped credentials with `./bin/heph infra rotate credentials --tool <tool> --cloud <provider> --component nats|minio|registry|all`.
+- Rotate controller certificates with `./bin/heph infra rotate certs --tool <tool> --cloud <provider> --component controller|ca`.
+- Phase 6 production-readiness baseline is TLS plus role-scoped rotatable credentials. MinIO and registry client-certificate mTLS are intentionally deferred unless live validation shows they are needed.
 
 Useful provider-native fleet operations:
 
@@ -257,6 +260,7 @@ What is not yet supported:
 - `scaleway` provider-native deploy UX; use `manual` for operator-managed Scaleway environments today
 - `manual` becoming a zero-config mainstream path; it remains expert mode
 - Automatic controller-output consumption for `manual`; the manual path still uses the env-driven contract above
+- MinIO or registry client-certificate mTLS; NATS mTLS strict mode is available through `controller_security_mode=mtls`
 - Live provider validation coverage in this repo; real Hetzner/Linode/Vultr smoke tests still need to be run against throwaway accounts before calling Phase 6 fully production-ready
 
 ### 6. Explicit Infrastructure Management
