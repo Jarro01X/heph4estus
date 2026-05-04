@@ -410,9 +410,11 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 
 func TestDeployModel_PropagatesProviderNativeCloudAndFleetSize(t *testing.T) {
 	outputs := map[string]string{
-		"sqs_queue_url":  "heph-tasks",
-		"s3_bucket_name": "heph-results",
-		"worker_count":   "3",
+		"sqs_queue_url":                 "heph-tasks",
+		"s3_bucket_name":                "heph-results",
+		"worker_count":                  "3",
+		"nats_operator_client_cert_pem": "operator-cert",
+		"nats_operator_client_key_pem":  "operator-key",
 	}
 	cfg := core.DeployConfig{
 		Cloud:          cloud.KindHetzner,
@@ -439,6 +441,9 @@ func TestDeployModel_PropagatesProviderNativeCloudAndFleetSize(t *testing.T) {
 	}
 	if infraOut.FleetWorkerCount != 3 {
 		t.Fatalf("FleetWorkerCount = %d, want 3", infraOut.FleetWorkerCount)
+	}
+	if infraOut.NATSClientCertPEM != "operator-cert" || infraOut.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS client identity = %q/%q", infraOut.NATSClientCertPEM, infraOut.NATSClientKeyPEM)
 	}
 }
 

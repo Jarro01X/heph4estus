@@ -26,6 +26,19 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: ${controller_ca_pem_b64}
+
+%{ if nats_mtls_enabled }
+  - path: /etc/heph/nats-client.crt
+    permissions: '0644'
+    encoding: b64
+    content: ${nats_client_cert_b64}
+
+  - path: /etc/heph/nats-client.key
+    permissions: '0600'
+    encoding: b64
+    content: ${nats_client_key_b64}
+
+%{ endif }
 %{ else }
   # Configure Docker to trust the controller's insecure registry
   - path: /etc/docker/daemon.json
@@ -65,6 +78,12 @@ write_files:
         -e HEPH_CONTROLLER_CA_FILE=/etc/heph/controller-ca.crt \
         -e HEPH_CONTROLLER_SERVER_NAME=${controller_host} \
         -v /etc/heph/controller-ca.crt:/etc/heph/controller-ca.crt:ro \
+%{ endif }
+%{ if nats_mtls_enabled }
+        -e HEPH_NATS_CLIENT_CERT_FILE=/etc/heph/nats-client.crt \
+        -e HEPH_NATS_CLIENT_KEY_FILE=/etc/heph/nats-client.key \
+        -v /etc/heph/nats-client.crt:/etc/heph/nats-client.crt:ro \
+        -v /etc/heph/nats-client.key:/etc/heph/nats-client.key:ro \
 %{ endif }
         -e FLEET_HEARTBEAT=true \
         -e FLEET_GENERATION_ID=${generation_id} \

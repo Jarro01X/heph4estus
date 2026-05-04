@@ -137,6 +137,8 @@ func TestNewWorkerConfig_ControllerTLSMetadata(t *testing.T) {
 	t.Setenv("TOOL_NAME", "nmap")
 	t.Setenv("HEPH_CONTROLLER_CA_FILE", "/etc/heph/controller-ca.crt")
 	t.Setenv("HEPH_CONTROLLER_SERVER_NAME", "heph-controller")
+	t.Setenv("HEPH_NATS_CLIENT_CERT_FILE", "/etc/heph/nats-client.crt")
+	t.Setenv("HEPH_NATS_CLIENT_KEY_FILE", "/etc/heph/nats-client.key")
 
 	cfg, err := NewWorkerConfig()
 	if err != nil {
@@ -147,6 +149,12 @@ func TestNewWorkerConfig_ControllerTLSMetadata(t *testing.T) {
 	}
 	if cfg.ControllerServerName != "heph-controller" {
 		t.Fatalf("ControllerServerName = %q", cfg.ControllerServerName)
+	}
+	if cfg.NATSClientCertFile != "/etc/heph/nats-client.crt" {
+		t.Fatalf("NATSClientCertFile = %q", cfg.NATSClientCertFile)
+	}
+	if cfg.NATSClientKeyFile != "/etc/heph/nats-client.key" {
+		t.Fatalf("NATSClientKeyFile = %q", cfg.NATSClientKeyFile)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
@@ -69,6 +70,28 @@ func TestStatusModel_Init(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected init command")
+	}
+}
+
+func TestStatusModel_TrackCreatePersistsNATSClientIdentity(t *testing.T) {
+	infra := testInfra()
+	infra.NATSUrl = "tls://controller:4222"
+	infra.ControllerCAPEM = "ca-pem"
+	infra.ControllerHost = "heph-controller"
+	infra.NATSClientCertPEM = "operator-cert"
+	infra.NATSClientKeyPEM = "operator-key"
+
+	store := operator.NewJobStoreAt(t.TempDir())
+	tracker := operator.NewTracker(store)
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, tracker)
+	_ = m.Init()
+
+	rec, err := store.Load(infra.JobID)
+	if err != nil {
+		t.Fatalf("load job record: %v", err)
+	}
+	if rec.NATSClientCertPEM != "operator-cert" || rec.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS client identity = %q/%q", rec.NATSClientCertPEM, rec.NATSClientKeyPEM)
 	}
 }
 

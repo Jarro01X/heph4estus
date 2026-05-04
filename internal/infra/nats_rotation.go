@@ -32,6 +32,7 @@ const (
 type NATSControllerAuthUpdate struct {
 	Credentials NATSCredentials
 	TLSEnabled  bool
+	MTLSEnabled bool
 	Mode        NATSAuthUpdateMode
 }
 
@@ -134,7 +135,7 @@ func UpdateControllerNATSAuth(ctx context.Context, runner RemoteCommandRunner, h
 	case NATSAuthUpdateGrace:
 		cmd = natsGraceAuthCommand(update.Credentials)
 	case NATSAuthUpdateFinal:
-		cmd = natsFinalAuthCommand(update.Credentials, update.TLSEnabled)
+		cmd = natsFinalAuthCommandWithMTLS(update.Credentials, update.TLSEnabled, update.MTLSEnabled)
 	default:
 		return fmt.Errorf("unsupported NATS auth update mode %q", update.Mode)
 	}
@@ -160,13 +161,19 @@ func DefaultSSHPrivateKeyPath() string {
 	return ""
 }
 
-func NATSAuthConfig(creds NATSCredentials, tlsEnabled bool) string {
+func NATSAuthConfig(creds NATSCredentials, tlsEnabled, mtlsEnabled bool) string {
 	var b strings.Builder
 	if tlsEnabled {
 		b.WriteString(`tls {
   cert_file: "/tls/public.crt"
   key_file: "/tls/private.key"
   ca_file: "/tls/ca.crt"
+`)
+		if mtlsEnabled {
+			b.WriteString(`  verify: true
+`)
+		}
+		b.WriteString(`
 }
 
 `)
@@ -199,6 +206,10 @@ func natsGraceAuthCommand(creds NATSCredentials) string {
 }
 
 func natsFinalAuthCommand(creds NATSCredentials, tlsEnabled bool) string {
+	return natsFinalAuthCommandWithMTLS(creds, tlsEnabled, false)
+}
+
+func natsFinalAuthCommandWithMTLS(creds NATSCredentials, tlsEnabled, mtlsEnabled bool) string {
 	return strings.Join([]string{
 		"set -eu",
 		"auth=/data/nats/auth.conf",
@@ -206,7 +217,7 @@ func natsFinalAuthCommand(creds NATSCredentials, tlsEnabled bool) string {
 		`tmp=$(mktemp)`,
 		`cp "$auth" "$backup"`,
 		`cat > "$tmp" <<'HEPH_NATS_AUTH'`,
-		NATSAuthConfig(creds, tlsEnabled),
+		NATSAuthConfig(creds, tlsEnabled, mtlsEnabled),
 		"HEPH_NATS_AUTH",
 		`install -m 0600 "$tmp" "$auth"`,
 		`rm -f "$tmp"`,

@@ -116,6 +116,8 @@ func runBenchFleet(args []string, log logger.Logger) error {
 			Rollout:         rollout,
 			RootCAPEM:       ensureResult.Outputs["controller_ca_pem"],
 			ServerName:      ensureResult.Outputs["controller_host"],
+			ClientCertPEM:   ensureResult.Outputs["nats_operator_client_cert_pem"],
+			ClientKeyPEM:    ensureResult.Outputs["nats_operator_client_key_pem"],
 		}, log)
 		if err != nil {
 			return err

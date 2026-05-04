@@ -170,6 +170,8 @@ type InfraOutputs struct {
 	NATSUrl               string // NATS URL for fleet manager
 	ControllerCAPEM       string // Controller CA PEM for TLS trust
 	ControllerHost        string // Stable controller DNS SAN for TLS verification
+	NATSClientCertPEM     string // Operator NATS mTLS client certificate
+	NATSClientKeyPEM      string // Operator NATS mTLS client private key
 	ExpectedWorkerVersion string
 }
 

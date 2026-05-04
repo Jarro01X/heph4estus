@@ -47,11 +47,13 @@ type JobRecord struct {
 	ExpectedWorkerVersion string                `json:"expected_worker_version,omitempty"`
 
 	// Fleet metadata for provider-native status reattachment.
-	NATSUrl         string `json:"nats_url,omitempty"`
-	ControllerIP    string `json:"controller_ip,omitempty"`
-	GenerationID    string `json:"generation_id,omitempty"`
-	ControllerCAPEM string `json:"controller_ca_pem,omitempty"`
-	ControllerHost  string `json:"controller_host,omitempty"`
+	NATSUrl           string `json:"nats_url,omitempty"`
+	ControllerIP      string `json:"controller_ip,omitempty"`
+	GenerationID      string `json:"generation_id,omitempty"`
+	ControllerCAPEM   string `json:"controller_ca_pem,omitempty"`
+	ControllerHost    string `json:"controller_host,omitempty"`
+	NATSClientCertPEM string `json:"nats_client_cert_pem,omitempty"`
+	NATSClientKeyPEM  string `json:"nats_client_key_pem,omitempty"`
 }
 
 // JobStore provides CRUD operations for job records backed by the filesystem.

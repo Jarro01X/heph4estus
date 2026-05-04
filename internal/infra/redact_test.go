@@ -16,6 +16,8 @@ func TestIsSensitiveOutput(t *testing.T) {
 		{"api_credential", true},
 		{"S3_SECRET_KEY", true}, // case insensitive
 		{"controller_ca_pem", true},
+		{"nats_operator_client_cert_pem", true},
+		{"nats_operator_client_key_pem", true},
 
 		// Should NOT be sensitive.
 		{"tool_name", false},

@@ -8,6 +8,7 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/jobs"
+	"heph4estus/internal/operator"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 
@@ -112,6 +113,29 @@ func TestGenericStatusInit(t *testing.T) {
 	}
 	if task.Options != "-silent" {
 		t.Errorf("task.Options = %q, want -silent", task.Options)
+	}
+}
+
+func TestGenericStatusTrackCreatePersistsNATSClientIdentity(t *testing.T) {
+	infra := testInfra()
+	infra.JobID = "httpx-job"
+	infra.NATSUrl = "tls://controller:4222"
+	infra.ControllerCAPEM = "ca-pem"
+	infra.ControllerHost = "heph-controller"
+	infra.NATSClientCertPEM = "operator-cert"
+	infra.NATSClientKeyPEM = "operator-key"
+
+	store := operator.NewJobStoreAt(t.TempDir())
+	tracker := operator.NewTracker(store)
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, &mockUploader{}, tracker)
+	_ = m.Init()
+
+	rec, err := store.Load(infra.JobID)
+	if err != nil {
+		t.Fatalf("load job record: %v", err)
+	}
+	if rec.NATSClientCertPEM != "operator-cert" || rec.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS client identity = %q/%q", rec.NATSClientCertPEM, rec.NATSClientKeyPEM)
 	}
 }
 

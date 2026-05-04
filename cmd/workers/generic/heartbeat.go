@@ -66,7 +66,15 @@ func startHeartbeat(ctx context.Context, cfg *appconfig.WorkerConfig, log logger
 }
 
 func heartbeatNATSOptions(cfg *appconfig.WorkerConfig) ([]nats.Option, error) {
-	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.ControllerCAPEM, cfg.ControllerCAFile, cfg.ControllerServerName)
+	tlsConfig, err := tlsutil.ClientConfigWithIdentity(
+		cfg.ControllerCAPEM,
+		cfg.ControllerCAFile,
+		cfg.ControllerServerName,
+		cfg.NATSClientCertPEM,
+		cfg.NATSClientKeyPEM,
+		cfg.NATSClientCertFile,
+		cfg.NATSClientKeyFile,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("controller CA: %w", err)
 	}

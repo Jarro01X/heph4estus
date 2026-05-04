@@ -87,6 +87,8 @@ func loadProviderFleetContext(ctx context.Context, tool string, kind cloud.Kind,
 		Rollout:         rollout,
 		RootCAPEM:       outputs["controller_ca_pem"],
 		ServerName:      outputs["controller_host"],
+		ClientCertPEM:   outputs["nats_operator_client_cert_pem"],
+		ClientKeyPEM:    outputs["nats_operator_client_key_pem"],
 	}, log)
 	if err != nil {
 		return nil, err
@@ -175,6 +177,8 @@ func waitForFleetSnapshot(ctx context.Context, kind cloud.Kind, outputs map[stri
 		Rollout:         rollout,
 		RootCAPEM:       outputs["controller_ca_pem"],
 		ServerName:      outputs["controller_host"],
+		ClientCertPEM:   outputs["nats_operator_client_cert_pem"],
+		ClientKeyPEM:    outputs["nats_operator_client_key_pem"],
 	}, log)
 	if err != nil {
 		return nil, err

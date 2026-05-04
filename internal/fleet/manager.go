@@ -33,6 +33,10 @@ type NATSFleetManagerConfig struct {
 	RootCAPEM       string
 	RootCAFile      string
 	ServerName      string
+	ClientCertPEM   string
+	ClientKeyPEM    string
+	ClientCertFile  string
+	ClientKeyFile   string
 }
 
 // NATSFleetManager implements Manager by subscribing to NATS heartbeats.
@@ -125,7 +129,15 @@ func NewNATSFleetManager(cfg NATSFleetManagerConfig, log logger.Logger) (*NATSFl
 }
 
 func managerNATSOptions(cfg NATSFleetManagerConfig) ([]nats.Option, error) {
-	tlsConfig, err := tlsutil.ClientConfigWithServerName(cfg.RootCAPEM, cfg.RootCAFile, cfg.ServerName)
+	tlsConfig, err := tlsutil.ClientConfigWithIdentity(
+		cfg.RootCAPEM,
+		cfg.RootCAFile,
+		cfg.ServerName,
+		cfg.ClientCertPEM,
+		cfg.ClientKeyPEM,
+		cfg.ClientCertFile,
+		cfg.ClientKeyFile,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: NATS TLS trust: %w", err)
 	}

@@ -24,6 +24,10 @@ type WorkerConfig struct {
 	ControllerCAPEM      string // HEPH_CONTROLLER_CA_PEM; optional controller CA PEM
 	ControllerCAFile     string // HEPH_CONTROLLER_CA_FILE; optional controller CA file
 	ControllerServerName string // HEPH_CONTROLLER_SERVER_NAME; optional TLS server name
+	NATSClientCertPEM    string // HEPH_NATS_CLIENT_CERT_PEM; optional NATS mTLS client certificate
+	NATSClientKeyPEM     string // HEPH_NATS_CLIENT_KEY_PEM; optional NATS mTLS client key
+	NATSClientCertFile   string // HEPH_NATS_CLIENT_CERT_FILE; optional NATS mTLS client certificate file
+	NATSClientKeyFile    string // HEPH_NATS_CLIENT_KEY_FILE; optional NATS mTLS client key file
 }
 
 // NewWorkerConfig creates a new generic worker configuration from environment variables.
@@ -77,5 +81,9 @@ func NewWorkerConfig() (*WorkerConfig, error) {
 		ControllerCAPEM:      os.Getenv("HEPH_CONTROLLER_CA_PEM"),
 		ControllerCAFile:     os.Getenv("HEPH_CONTROLLER_CA_FILE"),
 		ControllerServerName: os.Getenv("HEPH_CONTROLLER_SERVER_NAME"),
+		NATSClientCertPEM:    os.Getenv("HEPH_NATS_CLIENT_CERT_PEM"),
+		NATSClientKeyPEM:     os.Getenv("HEPH_NATS_CLIENT_KEY_PEM"),
+		NATSClientCertFile:   os.Getenv("HEPH_NATS_CLIENT_CERT_FILE"),
+		NATSClientKeyFile:    os.Getenv("HEPH_NATS_CLIENT_KEY_FILE"),
 	}, nil
 }
