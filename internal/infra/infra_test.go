@@ -186,6 +186,30 @@ func TestTerraformApply_Error(t *testing.T) {
 	}
 }
 
+func TestTerraformShowJSON(t *testing.T) {
+	cap, exec := newCapturingExecutor(`{"values":{}}`)
+	tc := &TerraformClient{runCmd: exec, logger: nopLogger{}}
+
+	data, err := tc.ShowJSON(context.Background(), "/work")
+	if err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+	if string(data) != `{"values":{}}` {
+		t.Fatalf("ShowJSON returned %q", string(data))
+	}
+	assertArgs(t, cap.calls[0], "terraform", "show", "-json")
+}
+
+func TestTerraformShowJSONError(t *testing.T) {
+	tc := &TerraformClient{
+		runCmd: newMockExecutor("", "err", 1, errors.New("exit 1")),
+		logger: nopLogger{},
+	}
+	if _, err := tc.ShowJSON(context.Background(), "/work"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestTerraformDestroy(t *testing.T) {
 	cap, exec := newCapturingExecutor("")
 	tc := &TerraformClient{runCmd: exec, logger: nopLogger{}}
