@@ -169,7 +169,8 @@ func runProviderNativeOutputChecksAt(kind cloud.Kind, outputs map[string]string,
 		checkOutputMinIOTLS(outputs),
 		checkOutputRegistryTLS(outputs),
 		checkOutputControllerCA(outputs),
-		checkOutputControllerCertExpiry(outputs),
+		checkOutputControllerCertExpiry(outputs, now),
+		checkOutputNATSClientCertExpiry(outputs, now),
 		checkOutputRegistryAuth(outputs),
 	}
 	for _, meta := range providerCredentialRotationMetadata {
@@ -861,7 +862,7 @@ func checkOutputControllerCA(outputs map[string]string) CheckResult {
 	}
 }
 
-func checkOutputControllerCertExpiry(outputs map[string]string) CheckResult {
+func checkOutputControllerCertExpiry(outputs map[string]string, now time.Time) CheckResult {
 	mode := strings.TrimSpace(outputs["controller_security_mode"])
 	raw := strings.TrimSpace(outputs["controller_cert_not_after"])
 	if raw == "" {
@@ -885,7 +886,6 @@ func checkOutputControllerCertExpiry(outputs map[string]string) CheckResult {
 			Fix:     "Redeploy the provider-native fleet with a valid controller_cert_not_after output.",
 		}
 	}
-	now := time.Now().UTC()
 	switch {
 	case !expiresAt.After(now):
 		return CheckResult{
@@ -906,6 +906,76 @@ func checkOutputControllerCertExpiry(outputs map[string]string) CheckResult {
 			Name:    "controller_cert_expiry",
 			Status:  StatusPass,
 			Summary: fmt.Sprintf("Controller certificate expires at %s", expiresAt.Format(time.RFC3339)),
+		}
+	}
+}
+
+func checkOutputNATSClientCertExpiry(outputs map[string]string, now time.Time) CheckResult {
+	mode := strings.TrimSpace(outputs["controller_security_mode"])
+	required := mode == "mtls" || outputBool(outputs["nats_mtls_enabled"])
+	if !required {
+		return CheckResult{
+			Name:    "nats_client_cert_expiry",
+			Status:  StatusPass,
+			Summary: "NATS client certificate expiry is not required outside mtls mode",
+		}
+	}
+
+	certs := []struct {
+		role string
+		key  string
+	}{
+		{role: "operator", key: "nats_operator_client_cert_not_after"},
+		{role: "worker", key: "nats_worker_client_cert_not_after"},
+	}
+
+	var earliestRole string
+	var earliest time.Time
+	for _, cert := range certs {
+		raw := strings.TrimSpace(outputs[cert.key])
+		if raw == "" {
+			return CheckResult{
+				Name:    "nats_client_cert_expiry",
+				Status:  StatusFail,
+				Summary: fmt.Sprintf("NATS %s client certificate expiry output is missing", cert.role),
+				Fix:     "Redeploy the provider-native fleet so NATS mTLS client certificate metadata is available.",
+			}
+		}
+		expiresAt, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return CheckResult{
+				Name:    "nats_client_cert_expiry",
+				Status:  StatusFail,
+				Summary: fmt.Sprintf("NATS %s client certificate expiry %q is not RFC3339", cert.role, raw),
+				Fix:     "Redeploy the provider-native fleet with valid NATS client certificate expiry outputs.",
+			}
+		}
+		if earliest.IsZero() || expiresAt.Before(earliest) {
+			earliest = expiresAt
+			earliestRole = cert.role
+		}
+	}
+
+	switch {
+	case !earliest.After(now):
+		return CheckResult{
+			Name:    "nats_client_cert_expiry",
+			Status:  StatusFail,
+			Summary: fmt.Sprintf("NATS %s client certificate expired at %s", earliestRole, earliest.Format(time.RFC3339)),
+			Fix:     "Rotate or redeploy NATS mTLS client certificates before using this fleet.",
+		}
+	case earliest.Before(now.Add(30 * 24 * time.Hour)):
+		return CheckResult{
+			Name:    "nats_client_cert_expiry",
+			Status:  StatusWarn,
+			Summary: fmt.Sprintf("NATS %s client certificate expires soon at %s", earliestRole, earliest.Format(time.RFC3339)),
+			Fix:     "Plan certificate rotation or redeploy before expiry.",
+		}
+	default:
+		return CheckResult{
+			Name:    "nats_client_cert_expiry",
+			Status:  StatusPass,
+			Summary: fmt.Sprintf("NATS client certificates expire at or after %s", earliest.Format(time.RFC3339)),
 		}
 	}
 }

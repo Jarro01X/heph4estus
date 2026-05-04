@@ -575,6 +575,7 @@ func TestRunProviderNativeOutputChecks_PrivateAuth(t *testing.T) {
 	assertContains(t, names, "registry_tls_posture")
 	assertContains(t, names, "controller_ca_posture")
 	assertContains(t, names, "controller_cert_expiry")
+	assertContains(t, names, "nats_client_cert_expiry")
 	assertContains(t, names, "registry_auth_posture")
 	assertContains(t, names, "nats_credential_rotation_age")
 	assertContains(t, names, "minio_credential_rotation_age")
@@ -647,9 +648,33 @@ func TestRunProviderNativeOutputChecks_MTLSModeRequiresClientOutputs(t *testing.
 	outputs["nats_mtls_enabled"] = "true"
 	outputs["nats_operator_client_cert_pem"] = "cert"
 	outputs["nats_operator_client_key_pem"] = "key"
+	outputs["nats_operator_client_cert_not_after"] = "2035-05-03T00:00:00Z"
+	outputs["nats_worker_client_cert_not_after"] = "2035-05-03T00:00:00Z"
 	results = RunProviderNativeOutputChecks(cloud.KindHetzner, outputs)
 	if got := findCheck(results, "nats_mtls_posture"); got.Status != StatusPass {
 		t.Fatalf("complete mTLS outputs should pass, got %s: %s", got.Status, got.Summary)
+	}
+}
+
+func TestRunProviderNativeOutputChecks_MTLSClientCertificateExpiry(t *testing.T) {
+	now := time.Date(2026, 5, 3, 22, 0, 0, 0, time.UTC)
+	outputs := providerNativeHealthyOutputs()
+	outputs["controller_security_mode"] = "mtls"
+	outputs["nats_mtls_enabled"] = "true"
+	outputs["nats_operator_client_cert_pem"] = "cert"
+	outputs["nats_operator_client_key_pem"] = "key"
+	outputs["nats_operator_client_cert_not_after"] = now.Add(90 * 24 * time.Hour).Format(time.RFC3339)
+	outputs["nats_worker_client_cert_not_after"] = now.Add(20 * 24 * time.Hour).Format(time.RFC3339)
+
+	results := runProviderNativeOutputChecksAt(cloud.KindHetzner, outputs, now)
+	if got := findCheck(results, "nats_client_cert_expiry"); got.Status != StatusWarn {
+		t.Fatalf("soon-expiring NATS client cert should warn, got %s: %s", got.Status, got.Summary)
+	}
+
+	outputs["nats_worker_client_cert_not_after"] = now.Add(-time.Hour).Format(time.RFC3339)
+	results = runProviderNativeOutputChecksAt(cloud.KindHetzner, outputs, now)
+	if got := findCheck(results, "nats_client_cert_expiry"); got.Status != StatusFail {
+		t.Fatalf("expired NATS client cert should fail, got %s: %s", got.Status, got.Summary)
 	}
 }
 
@@ -716,5 +741,6 @@ func providerNativeHealthyOutputs() map[string]string {
 		"controller_ca_pem":                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
 		"controller_ca_fingerprint_sha256": "abc123",
 		"controller_cert_not_after":        "2035-05-03T00:00:00Z",
+		"nats_mtls_enabled":                "false",
 	}
 }

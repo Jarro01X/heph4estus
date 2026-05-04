@@ -101,6 +101,11 @@ output "nats_operator_client_cert_pem" {
   sensitive   = true
 }
 
+output "nats_operator_client_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the NATS operator mTLS client certificate."
+  value       = tls_locally_signed_cert.nats_operator_client.validity_end_time
+}
+
 output "nats_operator_client_key_pem" {
   description = "PEM-encoded NATS mTLS client private key for operator connections."
   value       = tls_private_key.nats_operator_client.private_key_pem
@@ -111,6 +116,11 @@ output "nats_worker_client_cert_pem" {
   description = "PEM-encoded NATS mTLS client certificate for worker connections."
   value       = tls_locally_signed_cert.nats_worker_client.cert_pem
   sensitive   = true
+}
+
+output "nats_worker_client_cert_not_after" {
+  description = "RFC3339 expiration timestamp for the NATS worker mTLS client certificate."
+  value       = tls_locally_signed_cert.nats_worker_client.validity_end_time
 }
 
 output "nats_worker_client_key_pem" {
