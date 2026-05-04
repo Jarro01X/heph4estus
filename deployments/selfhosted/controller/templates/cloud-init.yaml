@@ -28,6 +28,40 @@ write_files:
     encoding: b64
     content: ${controller_key_pem_b64}
 
+  # --- MinIO role policies ---
+  - path: /tmp/heph-minio-operator-policy.json
+    permissions: '0600'
+    content: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": ["arn:aws:s3:::${minio_bucket}"]
+          },
+          {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject"],
+            "Resource": ["arn:aws:s3:::${minio_bucket}/*"]
+          }
+        ]
+      }
+
+  - path: /tmp/heph-minio-worker-policy.json
+    permissions: '0600'
+    content: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject"],
+            "Resource": ["arn:aws:s3:::${minio_bucket}/*"]
+          }
+        ]
+      }
+
   # --- NATS auth configuration ---
   - path: /data/nats/auth.conf
     permissions: '0600'
@@ -89,8 +123,8 @@ write_files:
 %{ if tls_enabled }
         -v /data/tls:/root/.minio/certs:ro \
 %{ endif }
-        -e MINIO_ROOT_USER=${minio_access_key} \
-        -e MINIO_ROOT_PASSWORD=${minio_secret_key} \
+        -e MINIO_ROOT_USER=${minio_root_access_key} \
+        -e MINIO_ROOT_PASSWORD=${minio_root_secret_key} \
         minio/minio server /data --address :9000 --console-address :9001
       ExecStop=/usr/bin/docker stop minio
 
@@ -134,9 +168,19 @@ runcmd:
   # Bootstrap MinIO bucket — retry until MinIO is healthy.
   - |
     for i in $(seq 1 30); do
-      docker run --rm --network host %{ if tls_enabled }-v /data/tls/ca.crt:/root/.mc/certs/CAs/heph-controller-ca.crt:ro %{ endif }--entrypoint sh minio/mc -c "
-        mc alias set local ${minio_scheme}://localhost:${minio_port} ${minio_access_key} ${minio_secret_key} &&
-        mc mb --ignore-existing local/${minio_bucket}
+      docker run --rm --network host \
+        %{ if tls_enabled }-v /data/tls/ca.crt:/root/.mc/certs/CAs/heph-controller-ca.crt:ro \
+        %{ endif }-v /tmp/heph-minio-operator-policy.json:/operator-policy.json:ro \
+        -v /tmp/heph-minio-worker-policy.json:/worker-policy.json:ro \
+        --entrypoint sh minio/mc -c "
+        mc alias set local ${minio_scheme}://localhost:${minio_port} ${minio_root_access_key} ${minio_root_secret_key} &&
+        mc mb --ignore-existing local/${minio_bucket} &&
+        (mc admin policy create local heph-operator /operator-policy.json || mc admin policy info local heph-operator >/dev/null) &&
+        (mc admin policy create local heph-worker /worker-policy.json || mc admin policy info local heph-worker >/dev/null) &&
+        (mc admin user info local ${minio_operator_access_key} >/dev/null 2>&1 || mc admin user add local ${minio_operator_access_key} ${minio_operator_secret_key}) &&
+        (mc admin user info local ${minio_worker_access_key} >/dev/null 2>&1 || mc admin user add local ${minio_worker_access_key} ${minio_worker_secret_key}) &&
+        mc admin policy attach local heph-operator --user ${minio_operator_access_key} &&
+        mc admin policy attach local heph-worker --user ${minio_worker_access_key}
       " && break
       sleep 2
     done

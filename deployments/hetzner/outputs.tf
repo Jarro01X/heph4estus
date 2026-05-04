@@ -120,14 +120,26 @@ output "s3_region" {
 }
 
 output "s3_access_key" {
-  description = "MinIO root access key."
-  value       = module.controller.s3_access_key
+  description = "Backward-compatible MinIO operator access key."
+  value       = module.controller.s3_operator_access_key
   sensitive   = true
 }
 
 output "s3_secret_key" {
-  description = "MinIO root secret key."
-  value       = module.controller.s3_secret_key
+  description = "Backward-compatible MinIO operator secret key."
+  value       = module.controller.s3_operator_secret_key
+  sensitive   = true
+}
+
+output "s3_operator_access_key" {
+  description = "MinIO operator access key."
+  value       = module.controller.s3_operator_access_key
+  sensitive   = true
+}
+
+output "s3_operator_secret_key" {
+  description = "MinIO operator secret key."
+  value       = module.controller.s3_operator_secret_key
   sensitive   = true
 }
 
