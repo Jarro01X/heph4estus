@@ -87,6 +87,20 @@ func RunDeploy(ctx context.Context, opts DeployOpts, log logger.Logger) (*Deploy
 			return nil, err
 		}
 	}
+	trust, err := EnsureProviderRegistryTrust(opts.Cloud, outputs)
+	if err != nil {
+		return nil, err
+	}
+	if trust.Required {
+		if err := writef(opts.Stream, "    controller registry CA saved to %s\n", trust.LocalCAPath); err != nil {
+			return nil, err
+		}
+		if trust.Trusted {
+			if err := writef(opts.Stream, "    Docker registry trust verified at %s\n", trust.DockerCAPath); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// 6. Docker build
 	if err := writeLine(opts.Stream, "==> Docker build"); err != nil {
