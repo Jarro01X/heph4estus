@@ -180,24 +180,34 @@ output "registry_url" {
 
 output "registry_username" {
   description = "Backward-compatible Docker registry publisher username."
-  value       = module.controller.registry_publisher_username
+  value       = local.registry_publisher_username
 }
 
 output "registry_password" {
   description = "Backward-compatible Docker registry publisher password."
-  value       = module.controller.registry_publisher_password
+  value       = local.registry_publisher_password
   sensitive   = true
 }
 
 output "registry_publisher_username" {
   description = "Docker registry publisher username."
-  value       = module.controller.registry_publisher_username
+  value       = local.registry_publisher_username
 }
 
 output "registry_publisher_password" {
   description = "Docker registry publisher password."
-  value       = module.controller.registry_publisher_password
+  value       = local.registry_publisher_password
   sensitive   = true
+}
+
+output "registry_credential_generation" {
+  description = "Docker registry credential generation marker."
+  value       = var.registry_credential_generation
+}
+
+output "registry_credential_rotated_at" {
+  description = "RFC3339 timestamp for the last Docker registry credential rotation."
+  value       = var.registry_credential_rotated_at
 }
 
 output "docker_image" {
