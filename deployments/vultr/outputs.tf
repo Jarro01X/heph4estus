@@ -78,30 +78,35 @@ output "controller_host" {
 
 output "nats_url" {
   description = "NATS client URL for the operator CLI (includes operator auth credentials)."
-  value       = "${module.controller.nats_tls_enabled ? "tls" : "nats"}://${module.controller.nats_operator_user}:${module.controller.nats_operator_password}@${vultr_instance.controller.main_ip}:4222"
+  value       = "${module.controller.nats_tls_enabled ? "tls" : "nats"}://${local.nats_operator_user}:${local.nats_operator_password}@${vultr_instance.controller.main_ip}:4222"
   sensitive   = true
 }
 
 output "nats_user" {
   description = "Backward-compatible NATS operator authentication username."
-  value       = module.controller.nats_operator_user
+  value       = local.nats_operator_user
 }
 
 output "nats_password" {
   description = "Backward-compatible NATS operator authentication password."
-  value       = module.controller.nats_operator_password
+  value       = local.nats_operator_password
   sensitive   = true
 }
 
 output "nats_operator_user" {
   description = "NATS operator authentication username."
-  value       = module.controller.nats_operator_user
+  value       = local.nats_operator_user
 }
 
 output "nats_operator_password" {
   description = "NATS operator authentication password."
-  value       = module.controller.nats_operator_password
+  value       = local.nats_operator_password
   sensitive   = true
+}
+
+output "nats_credential_generation" {
+  description = "NATS credential generation marker."
+  value       = var.nats_credential_generation
 }
 
 output "nats_stream" {

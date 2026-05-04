@@ -102,6 +102,7 @@ func rotationReadyOutputs() map[string]string {
 		"tool_name":                   "nmap",
 		"cloud":                       "hetzner",
 		"credential_scope_version":    "nats-minio-registry-role-v1",
+		"nats_credential_generation":  "bootstrap",
 		"controller_security_mode":    "tls",
 		"generation_id":               "gen-1",
 		"worker_count":                "3",

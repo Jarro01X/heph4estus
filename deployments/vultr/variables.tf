@@ -72,3 +72,35 @@ variable "generation_id" {
   type        = string
   default     = ""
 }
+
+variable "nats_operator_user_override" {
+  description = "Rotated NATS operator username. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+}
+
+variable "nats_operator_password_override" {
+  description = "Rotated NATS operator password. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "nats_worker_user_override" {
+  description = "Rotated NATS worker username. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+}
+
+variable "nats_worker_password_override" {
+  description = "Rotated NATS worker password. Empty uses the controller module bootstrap credential."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "nats_credential_generation" {
+  description = "NATS credential generation marker for operator-driven rotation."
+  type        = string
+  default     = "bootstrap"
+}

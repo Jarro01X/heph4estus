@@ -27,8 +27,12 @@ resource "random_id" "generation" {
 }
 
 locals {
-  generation_id   = var.generation_id != "" ? var.generation_id : random_id.generation.hex
-  controller_host = module.controller.controller_host
+  generation_id          = var.generation_id != "" ? var.generation_id : random_id.generation.hex
+  controller_host        = module.controller.controller_host
+  nats_operator_user     = var.nats_operator_user_override != "" ? var.nats_operator_user_override : module.controller.nats_operator_user
+  nats_operator_password = var.nats_operator_password_override != "" ? var.nats_operator_password_override : module.controller.nats_operator_password
+  nats_worker_user       = var.nats_worker_user_override != "" ? var.nats_worker_user_override : module.controller.nats_worker_user
+  nats_worker_password   = var.nats_worker_password_override != "" ? var.nats_worker_password_override : module.controller.nats_worker_password
 }
 
 # --- OS lookup ---
@@ -156,8 +160,8 @@ locals {
       nats_port             = 4222
       nats_scheme           = module.controller.nats_tls_enabled ? "tls" : "nats"
       nats_subject          = module.controller.nats_stream
-      nats_user             = module.controller.nats_worker_user
-      nats_password         = module.controller.nats_worker_password
+      nats_user             = local.nats_worker_user
+      nats_password         = local.nats_worker_password
       minio_port            = 9000
       minio_scheme          = module.controller.minio_tls_enabled ? "https" : "http"
       minio_access_key      = module.controller.s3_worker_access_key
