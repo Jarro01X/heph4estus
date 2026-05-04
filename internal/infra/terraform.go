@@ -85,6 +85,17 @@ func (t *TerraformClient) ApplyReplace(ctx context.Context, workDir string, vars
 	return nil
 }
 
+// ShowJSON runs terraform show -json and returns the raw state document.
+func (t *TerraformClient) ShowJSON(ctx context.Context, workDir string) ([]byte, error) {
+	t.logger.Info("Reading terraform state JSON in %s", workDir)
+	result, err := t.runCmd(ctx, workDir, nil, "terraform", "show", "-json")
+	if err != nil {
+		t.logger.Error("terraform show -json failed: %s", string(result.Stderr))
+		return nil, fmt.Errorf("terraform show -json: %w", err)
+	}
+	return result.Stdout, nil
+}
+
 // Destroy runs terraform destroy with auto-approve and streams output.
 func (t *TerraformClient) Destroy(ctx context.Context, workDir string, stream io.Writer) error {
 	t.logger.Info("Running terraform destroy in %s", workDir)

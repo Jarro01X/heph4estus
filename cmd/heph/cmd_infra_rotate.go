@@ -38,6 +38,10 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
 	component := fs.String("component", "", "Certificate component: controller, worker, ca, or all")
 	dryRun := fs.Bool("dry-run", false, "Show certificate rotation preflight and blast radius without changing anything")
+	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
+	sshUser := fs.String("ssh-user", "root", "SSH user for controller certificate updates")
+	sshKey := fs.String("ssh-key", "", "SSH private key for controller certificate updates (default: env or ~/.ssh)")
+	sshPort := fs.Int("ssh-port", 22, "SSH port for controller certificate updates")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -47,11 +51,12 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 	if strings.TrimSpace(*component) == "" {
 		return fmt.Errorf("--component flag is required (controller, worker, ca, or all)")
 	}
-	if _, err := infra.ParseCertificateRotationComponents(*component); err != nil {
+	components, err := infra.ParseCertificateRotationComponents(*component)
+	if err != nil {
 		return err
 	}
-	if !*dryRun {
-		return fmt.Errorf("certificate rotation mutation currently supports --dry-run only")
+	if !*dryRun && (len(components) != 1 || components[0] != infra.CertificateComponentController) {
+		return fmt.Errorf("certificate rotation mutation currently supports only --component controller; rerun other components with --dry-run")
 	}
 
 	opCfg, _ := operator.LoadConfig()
@@ -71,6 +76,21 @@ func runInfraRotateCerts(args []string, log logger.Logger) error {
 	plan, err := infra.PlanCertificateRotation(cloudKind, *tool, *component, probe)
 	if err != nil {
 		return err
+	}
+	if !*dryRun {
+		if failures := failingProviderNativeOutputChecks(cloudKind, probe.Outputs); len(failures) > 0 {
+			return fmt.Errorf("certificate rotation preflight failed security posture checks: %s", strings.Join(failures, "; "))
+		}
+		return runControllerCertificateRotationMutation(rotationMutationOpts{
+			ToolConfig:  cfg,
+			Cloud:       cloudKind,
+			Probe:       probe,
+			AutoApprove: *autoApprove,
+			SSHUser:     *sshUser,
+			SSHKey:      *sshKey,
+			SSHPort:     *sshPort,
+			Log:         log,
+		})
 	}
 	return outputCertificateRotationPlanText(os.Stdout, plan)
 }
@@ -174,14 +194,14 @@ func prepareRotationMutation(opts rotationMutationOpts) (*preparedRotationMutati
 	}
 	controllerHost := strings.TrimSpace(outputs["controller_ip"])
 	if controllerHost == "" {
-		return nil, fmt.Errorf("credential rotation requires controller_ip output")
+		return nil, fmt.Errorf("rotation requires controller_ip output")
 	}
 	sshKey := strings.TrimSpace(opts.SSHKey)
 	if sshKey == "" {
 		sshKey = infra.DefaultSSHPrivateKeyPath()
 	}
 	if sshKey == "" {
-		return nil, fmt.Errorf("credential rotation requires an SSH private key; set --ssh-key, HEPH_SSH_PRIVATE_KEY_PATH, SSH_PRIVATE_KEY_PATH, or SELFHOSTED_SSH_KEY_PATH")
+		return nil, fmt.Errorf("rotation requires an SSH private key; set --ssh-key, HEPH_SSH_PRIVATE_KEY_PATH, SSH_PRIVATE_KEY_PATH, or SELFHOSTED_SSH_KEY_PATH")
 	}
 	runner := infra.SSHRemoteRunner{
 		User:    strings.TrimSpace(opts.SSHUser),
@@ -434,6 +454,68 @@ func runRegistryCredentialRotationMutation(opts rotationMutationOpts) error {
 	return nil
 }
 
+func runControllerCertificateRotationMutation(opts rotationMutationOpts) error {
+	if opts.ToolConfig == nil {
+		return fmt.Errorf("tool config is required")
+	}
+	prepared, err := prepareRotationMutation(opts)
+	if err != nil {
+		return err
+	}
+	services := infra.CertificateTLSEnabledServices(prepared.Outputs)
+	if !opts.AutoApprove {
+		question := fmt.Sprintf("Rotate controller certificate for %s/%s and restart %s?", opts.Cloud.Canonical(), opts.ToolConfig.ToolName, certificateControllerServiceText(services))
+		if !cliPrompt(question) {
+			return printStderrLine("Cancelled.")
+		}
+	}
+
+	tf := infra.NewTerraformClient(opts.Log)
+	stateJSON, err := tf.ShowJSON(mainContext(), opts.ToolConfig.TerraformDir)
+	if err != nil {
+		return fmt.Errorf("reading Terraform state for controller CA key: %w", err)
+	}
+	caPrivateKeyPEM, err := infra.ControllerCAPrivateKeyFromTerraformShow(stateJSON)
+	if err != nil {
+		return err
+	}
+	material, err := infra.GenerateControllerCertificateMaterial(time.Now().UTC(), prepared.Outputs, caPrivateKeyPEM)
+	if err != nil {
+		return err
+	}
+
+	if err := printStdout("Rotating controller certificate for %s/%s\n", opts.Cloud.Canonical(), opts.ToolConfig.ToolName); err != nil {
+		return err
+	}
+	if err := printStdoutLine("Installing replacement TLS material on controller..."); err != nil {
+		return err
+	}
+	update := infra.ControllerCertificateUpdate{
+		Material: material,
+		Services: services,
+	}
+	if err := infra.UpdateControllerCertificate(mainContext(), prepared.Runner, prepared.ControllerHost, update); err != nil {
+		return fmt.Errorf("updating controller certificate: %w", err)
+	}
+
+	vars := infra.ControllerCertificateTerraformVars(material)
+	if _, err := infra.MergeRotationAutoVars(opts.ToolConfig.TerraformDir, vars); err != nil {
+		return fmt.Errorf("persisting rotated controller certificate Terraform vars: %w", err)
+	}
+
+	if err := printStdoutLine("Verifying workers can heartbeat after controller TLS restart..."); err != nil {
+		return err
+	}
+	if _, err := waitForProviderNativeFleet(mainContext(), opts.Cloud, prepared.Outputs, fleet.PlacementPolicy{}); err != nil {
+		return fmt.Errorf("verifying controller certificate rotation: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(os.Stdout, "Rotated controller certificate. Generation: %s\n", material.Generation); err != nil {
+		return err
+	}
+	return nil
+}
+
 func printStdout(format string, args ...interface{}) error {
 	_, err := fmt.Fprintf(os.Stdout, format, args...)
 	return err
@@ -452,11 +534,11 @@ func printStderrLine(line string) error {
 func parseRotationWorkerCount(outputs map[string]string) (int, error) {
 	raw := strings.TrimSpace(outputs["worker_count"])
 	if raw == "" {
-		return 0, fmt.Errorf("credential rotation requires worker_count output")
+		return 0, fmt.Errorf("rotation requires worker_count output")
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("credential rotation requires positive worker_count output, got %q", raw)
+		return 0, fmt.Errorf("rotation requires positive worker_count output, got %q", raw)
 	}
 	return n, nil
 }

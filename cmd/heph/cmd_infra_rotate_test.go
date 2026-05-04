@@ -49,12 +49,12 @@ func TestRunInfraRotateCredentialsRejectsInvalidComponentBeforeTerraform(t *test
 	}
 }
 
-func TestRunInfraRotateCertsRequiresDryRunBeforeTerraform(t *testing.T) {
-	err := runInfraRotateCerts([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "controller"}, testLogger())
+func TestRunInfraRotateCertsRejectsNonControllerMutationBeforeTerraform(t *testing.T) {
+	err := runInfraRotateCerts([]string{"--tool", "nmap", "--cloud", "hetzner", "--component", "worker"}, testLogger())
 	if err == nil {
-		t.Fatal("expected dry-run only error")
+		t.Fatal("expected unsupported mutation error")
 	}
-	if !strings.Contains(err.Error(), "--dry-run only") {
+	if !strings.Contains(err.Error(), "only --component controller") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
