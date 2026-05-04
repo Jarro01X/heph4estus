@@ -19,6 +19,7 @@ type NATSCredentials struct {
 	WorkerUser       string
 	WorkerPassword   string
 	Generation       string
+	RotatedAt        string
 }
 
 type NATSAuthUpdateMode string
@@ -106,6 +107,7 @@ func GenerateNATSCredentials(now time.Time) (NATSCredentials, error) {
 		WorkerUser:       "heph-worker-" + suffix,
 		WorkerPassword:   workerPassword,
 		Generation:       generation,
+		RotatedAt:        now.UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -116,6 +118,7 @@ func NATSTerraformVars(creds NATSCredentials) map[string]string {
 		"nats_worker_user_override":       creds.WorkerUser,
 		"nats_worker_password_override":   creds.WorkerPassword,
 		"nats_credential_generation":      creds.Generation,
+		"nats_credential_rotated_at":      creds.RotatedAt,
 	}
 }
 

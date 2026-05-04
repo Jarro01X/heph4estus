@@ -13,6 +13,7 @@
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.tfvars.json
 .terragrunt-cache/
 crash.log
 terraform.tfplan
