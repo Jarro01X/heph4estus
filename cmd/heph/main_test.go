@@ -234,6 +234,36 @@ func TestInfraUnknownSubcommand(t *testing.T) {
 	}
 }
 
+func TestInfraTrustRequiresSubcommand(t *testing.T) {
+	err := run([]string{"infra", "trust"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for infra trust without subcommand")
+	}
+	if !strings.Contains(err.Error(), "infra trust requires a subcommand") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraTrustInstallMissingTool(t *testing.T) {
+	err := run([]string{"infra", "trust", "install"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for trust install without --tool")
+	}
+	if !strings.Contains(err.Error(), "--tool flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInfraTrustInstallRejectsAWS(t *testing.T) {
+	err := run([]string{"infra", "trust", "install", "--tool", "nmap", "--cloud", "aws", "--dry-run"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for AWS trust install")
+	}
+	if !strings.Contains(err.Error(), "only supports provider-native clouds") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestInfraDeployMissingTool(t *testing.T) {
 	err := run([]string{"infra", "deploy"}, testLogger())
 	if err == nil {

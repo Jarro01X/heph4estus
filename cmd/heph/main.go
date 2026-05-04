@@ -21,7 +21,7 @@ const usage = `Usage: heph <command> [options]
 Commands:
   nmap     Run an nmap scan (auto-deploys infrastructure if needed)
   scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
-  infra    Manage cloud infrastructure explicitly (deploy/destroy/backup/recover)
+  infra    Manage cloud infrastructure explicitly (deploy/destroy/backup/recover/trust)
   fleet    Inspect and manage provider-native fleet state
   bench    Run provider-native fleet benchmark probes
   status   Check job status (--job-id required)

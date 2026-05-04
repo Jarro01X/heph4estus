@@ -26,7 +26,7 @@ func resolveToolConfig(tool, backend string, kind ...cloud.Kind) (*infra.ToolCon
 
 func runInfra(args []string, log logger.Logger) error {
 	if len(args) == 0 {
-		return fmt.Errorf("infra requires a subcommand: deploy, destroy, backup, recover")
+		return fmt.Errorf("infra requires a subcommand: deploy, destroy, backup, recover, trust")
 	}
 
 	sub := args[0]
@@ -39,8 +39,10 @@ func runInfra(args []string, log logger.Logger) error {
 		return runInfraBackup(args[1:], log)
 	case "recover":
 		return runInfraRecover(args[1:], log)
+	case "trust":
+		return runInfraTrust(args[1:], log)
 	default:
-		return fmt.Errorf("infra: unknown subcommand %q (expected deploy, destroy, backup, or recover)", sub)
+		return fmt.Errorf("infra: unknown subcommand %q (expected deploy, destroy, backup, recover, or trust)", sub)
 	}
 }
 
@@ -272,6 +274,130 @@ func runInfraRecover(args []string, log logger.Logger) error {
 		mode = "redeployed"
 	}
 	if _, err := fmt.Fprintf(os.Stdout, "Recovered %s infrastructure for %s from %s (%s)\n", cloudKind.Canonical(), *tool, *inputPath, mode); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runInfraTrust(args []string, log logger.Logger) error {
+	if len(args) == 0 {
+		return fmt.Errorf("infra trust requires a subcommand: install")
+	}
+	sub := args[0]
+	switch sub {
+	case "install":
+		return runInfraTrustInstall(args[1:], log)
+	default:
+		return fmt.Errorf("infra trust: unknown subcommand %q (expected install)", sub)
+	}
+}
+
+func runInfraTrustInstall(args []string, log logger.Logger) error {
+	fs := flag.NewFlagSet("infra trust install", flag.ContinueOnError)
+	tool := fs.String("tool", "", "Tool whose provider-native controller trust should be installed")
+	cloudFlag := fs.String("cloud", "", "Cloud provider: "+cloud.SupportedKindsText()+" (default: from config or aws)")
+	autoApprove := fs.Bool("auto-approve", false, "Skip interactive approval prompt")
+	dryRun := fs.Bool("dry-run", false, "Show trust paths and validation without writing files")
+	trustDir := fs.String("trust-dir", "", "Directory for Heph's local controller CA trust cache")
+	dockerCertsDir := fs.String("docker-certs-dir", "", "Docker registry certs directory (default: /etc/docker/certs.d or HEPH_DOCKER_CERTS_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tool == "" {
+		return fmt.Errorf("--tool flag is required")
+	}
+
+	opCfg, _ := operator.LoadConfig()
+	cloudKind, err := resolveCLICloud(*cloudFlag, opCfg)
+	if err != nil {
+		return err
+	}
+	if !cloudKind.IsProviderNative() {
+		return fmt.Errorf("infra trust install only supports provider-native clouds, got %q", cloudKind.Canonical())
+	}
+
+	cfg, err := infra.ResolveToolConfig(*tool, cloudKind)
+	if err != nil {
+		return err
+	}
+	outputs, err := infra.NewTerraformClient(log).ReadOutputs(mainContext(), cfg.TerraformDir)
+	if err != nil {
+		return err
+	}
+	installCfg := infra.RegistryTrustInstallConfig{
+		RegistryTrustConfig: infra.RegistryTrustConfig{
+			RegistryURL:                   outputs["registry_url"],
+			ControllerCAPEM:               outputs["controller_ca_pem"],
+			ControllerCAFingerprintSHA256: outputs["controller_ca_fingerprint_sha256"],
+			ControllerCertNotAfter:        outputs["controller_cert_not_after"],
+			TrustDir:                      *trustDir,
+			DockerCertsDir:                *dockerCertsDir,
+		},
+		DryRun: *dryRun,
+	}
+
+	plan, err := infra.InstallRegistryTrust(infra.RegistryTrustInstallConfig{
+		RegistryTrustConfig: installCfg.RegistryTrustConfig,
+		DryRun:              true,
+	})
+	if err != nil {
+		return err
+	}
+	if *dryRun {
+		return outputRegistryTrustInstallResult(plan, true)
+	}
+	if !*autoApprove {
+		question := fmt.Sprintf("Install controller CA for Docker registry %s at %s?", plan.RegistryHost, plan.DockerCAPath)
+		if !cliPrompt(question) {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+	}
+
+	result, err := infra.InstallRegistryTrust(installCfg)
+	if err != nil {
+		return err
+	}
+	return outputRegistryTrustInstallResult(result, false)
+}
+
+func outputRegistryTrustInstallResult(result *infra.RegistryTrustResult, dryRun bool) error {
+	if _, err := fmt.Fprintf(os.Stdout, "Registry:      %s\n", result.RegistryHost); err != nil {
+		return err
+	}
+	if result.FingerprintSHA256 != "" {
+		if _, err := fmt.Fprintf(os.Stdout, "CA fingerprint: sha256:%s\n", result.FingerprintSHA256); err != nil {
+			return err
+		}
+	}
+	if result.CertNotAfter != "" {
+		if _, err := fmt.Fprintf(os.Stdout, "Cert expires:  %s\n", result.CertNotAfter); err != nil {
+			return err
+		}
+	}
+	if dryRun {
+		if _, err := fmt.Fprintf(os.Stdout, "Would cache CA: %s\n", result.LocalCAPath); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "Would install:  %s\n", result.DockerCAPath); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(os.Stdout, "Dry run: no files written."); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Cached CA:     %s\n", result.LocalCAPath); err != nil {
+		return err
+	}
+	status := "already trusted"
+	if result.Installed {
+		status = "installed"
+	}
+	if _, err := fmt.Fprintf(os.Stdout, "Docker CA:     %s (%s)\n", result.DockerCAPath, status); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "Restart Docker before pushing to this registry: sudo systemctl restart docker"); err != nil {
 		return err
 	}
 	return nil
