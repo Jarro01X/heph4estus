@@ -173,8 +173,8 @@ func NATSAuthConfig(creds NATSCredentials, tlsEnabled bool) string {
 	}
 	b.WriteString("authorization {\n")
 	b.WriteString("  users = [\n")
-	b.WriteString(fmt.Sprintf("    { user: %s, password: %s },\n", strconv.Quote(creds.OperatorUser), strconv.Quote(creds.OperatorPassword)))
-	b.WriteString(fmt.Sprintf("    { user: %s, password: %s }\n", strconv.Quote(creds.WorkerUser), strconv.Quote(creds.WorkerPassword)))
+	_, _ = fmt.Fprintf(&b, "    { user: %s, password: %s },\n", strconv.Quote(creds.OperatorUser), strconv.Quote(creds.OperatorPassword))
+	_, _ = fmt.Fprintf(&b, "    { user: %s, password: %s }\n", strconv.Quote(creds.WorkerUser), strconv.Quote(creds.WorkerPassword))
 	b.WriteString("  ]\n")
 	b.WriteString("}\n")
 	return b.String()
