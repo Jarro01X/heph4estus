@@ -3,45 +3,15 @@ package selfhosted
 import (
 	"context"
 	"testing"
-	"time"
 
 	"heph4estus/internal/logger"
-
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	"heph4estus/internal/testutil/natstest"
 )
-
-func startEmbeddedNATS(t *testing.T) *natsserver.Server {
-	t.Helper()
-	opts := &natsserver.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		HTTPHost:  "127.0.0.1",
-		HTTPPort:  -1,
-		NoSigs:    true,
-		NoLog:     true,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-	}
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		t.Fatalf("embedded nats: %v", err)
-	}
-	srv.Start()
-	if !srv.ReadyForConnections(5 * time.Second) {
-		t.Fatal("embedded nats not ready")
-	}
-	t.Cleanup(srv.Shutdown)
-	return srv
-}
 
 func newTestQueue(t *testing.T) *Queue {
 	t.Helper()
-	srv := startEmbeddedNATS(t)
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	srv := natstest.Start(t, natstest.Options{JetStream: true})
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 	q, err := NewQueueFromConn(nc, QueueConfig{
 		StreamName:     "test",

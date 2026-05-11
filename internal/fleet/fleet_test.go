@@ -9,32 +9,8 @@ import (
 
 	"heph4estus/internal/fleetstate"
 	"heph4estus/internal/logger"
-
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	"heph4estus/internal/testutil/natstest"
 )
-
-func startEmbeddedNATS(t *testing.T) *natsserver.Server {
-	t.Helper()
-	opts := &natsserver.Options{
-		Host:     "127.0.0.1",
-		Port:     -1,
-		HTTPHost: "127.0.0.1",
-		HTTPPort: -1,
-		NoSigs:   true,
-		NoLog:    true,
-	}
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		t.Fatalf("embedded nats: %v", err)
-	}
-	srv.Start()
-	if !srv.ReadyForConnections(5 * time.Second) {
-		t.Fatal("embedded nats not ready")
-	}
-	t.Cleanup(srv.Shutdown)
-	return srv
-}
 
 func TestHeartbeatMessage_Roundtrip(t *testing.T) {
 	orig := HeartbeatMessage{
@@ -203,12 +179,9 @@ func TestApplyAdmissionPolicy_RolloutCanaryRestrictsAdmission(t *testing.T) {
 }
 
 func TestNATSFleetManager_Heartbeat(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -224,10 +197,7 @@ func TestNATSFleetManager_Heartbeat(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	// Publish a heartbeat from a separate connection to simulate a worker.
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	hb := HeartbeatMessage{
@@ -275,12 +245,9 @@ func TestNATSFleetManager_Heartbeat(t *testing.T) {
 }
 
 func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -293,10 +260,7 @@ func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	for i := range 3 {
@@ -321,12 +285,9 @@ func TestNATSFleetManager_MultipleWorkers(t *testing.T) {
 }
 
 func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -339,10 +300,7 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	// First heartbeat: not ready yet.
@@ -412,12 +370,9 @@ func TestNATSFleetManager_HeartbeatUpdate(t *testing.T) {
 }
 
 func TestWorkerHealthTimeout(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	// Use a very short health timeout for testing.
@@ -431,10 +386,7 @@ func TestWorkerHealthTimeout(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	hb := HeartbeatMessage{
@@ -475,12 +427,9 @@ func TestWorkerHealthTimeout(t *testing.T) {
 }
 
 func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -493,10 +442,7 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	// Publish 2 ready workers before calling WaitForWorkers.
@@ -530,12 +476,9 @@ func TestNATSFleetManager_WaitForWorkers(t *testing.T) {
 }
 
 func TestNATSFleetManager_WaitForWorkers_DiversityPolicy(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -552,10 +495,7 @@ func TestNATSFleetManager_WaitForWorkers_DiversityPolicy(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	heartbeats := []HeartbeatMessage{
@@ -579,12 +519,9 @@ func TestNATSFleetManager_WaitForWorkers_DiversityPolicy(t *testing.T) {
 }
 
 func TestNATSFleetManager_WaitForWorkers_ExpectedVersion(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -598,10 +535,7 @@ func TestNATSFleetManager_WaitForWorkers_ExpectedVersion(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	heartbeats := []HeartbeatMessage{
@@ -647,12 +581,9 @@ func TestFleetState_Summarize_IPv6Policy(t *testing.T) {
 }
 
 func TestNATSFleetManager_WaitForWorkers_ContextCancel(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -679,12 +610,9 @@ func TestNATSFleetManager_WaitForWorkers_ContextCancel(t *testing.T) {
 }
 
 func TestNATSFleetManager_InvalidHeartbeat(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -697,10 +625,7 @@ func TestNATSFleetManager_InvalidHeartbeat(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	// Publish garbage data.
@@ -721,12 +646,9 @@ func TestNATSFleetManager_InvalidHeartbeat(t *testing.T) {
 }
 
 func TestNATSFleetManager_IgnoresMismatchedGeneration(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 	t.Cleanup(nc.Close)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
@@ -740,10 +662,7 @@ func TestNATSFleetManager_IgnoresMismatchedGeneration(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	pub, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("pub connect: %v", err)
-	}
+	pub := natstest.Connect(t, srv)
 	defer pub.Close()
 
 	hb := HeartbeatMessage{
@@ -771,12 +690,9 @@ func TestNATSFleetManager_IgnoresMismatchedGeneration(t *testing.T) {
 }
 
 func TestNATSFleetManager_Close(t *testing.T) {
-	srv := startEmbeddedNATS(t)
+	srv := natstest.Start(t, natstest.Options{})
 
-	nc, err := nats.Connect(srv.ClientURL())
-	if err != nil {
-		t.Fatalf("nats connect: %v", err)
-	}
+	nc := natstest.Connect(t, srv)
 
 	mgr, err := NewNATSFleetManagerFromConn(nc, NATSFleetManagerConfig{
 		DesiredWorkers: 1,
