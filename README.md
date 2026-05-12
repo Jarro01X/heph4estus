@@ -217,10 +217,10 @@ Cost and teardown posture:
 
 Security posture:
 - Provider-native Terraform outputs include `controller_security_mode`, service TLS/auth posture, credential generation metadata, controller certificate expiry, and NATS mTLS client certificate expiry.
-- `private-auth` remains compatibility mode. `tls` encrypts NATS, MinIO, and the controller registry while keeping role-scoped credentials. `mtls` additionally requires NATS client certificates for worker/operator NATS connections.
+- `private-auth` remains the default compatibility mode. `tls` encrypts NATS, MinIO, and the controller registry while keeping role-scoped credentials. `mtls` additionally requires NATS client certificates for worker/operator NATS connections.
 - After deploy, run `./bin/heph doctor --cloud <provider> --tool <tool>` to report controller posture, missing TLS/auth, certificate expiry, stale credentials, and mTLS output health.
-- Rotate role-scoped credentials with `./bin/heph infra rotate credentials --tool <tool> --cloud <provider> --component nats|minio|registry|all`.
-- Rotate controller certificates with `./bin/heph infra rotate certs --tool <tool> --cloud <provider> --component controller|ca`.
+- Rotate role-scoped credentials with `./bin/heph infra rotate credentials --tool <tool> --cloud <provider> --component nats|minio|registry`; `--component all` is a dry-run planning view.
+- Rotate controller certificates with `./bin/heph infra rotate certs --tool <tool> --cloud <provider> --component controller|ca`; `worker` and `all` certificate rotation are dry-run planning only.
 - Phase 6 production-readiness baseline is TLS plus role-scoped rotatable credentials. MinIO and registry client-certificate mTLS are intentionally deferred unless live validation shows they are needed.
 
 Useful provider-native fleet operations:
