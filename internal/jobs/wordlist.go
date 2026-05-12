@@ -78,7 +78,9 @@ func (p *WordlistPlan) Cleanup() error {
 	if p == nil || p.cleanup == nil {
 		return nil
 	}
-	return p.cleanup()
+	cleanup := p.cleanup
+	p.cleanup = nil
+	return cleanup()
 }
 
 // PlanWordlistJob splits a wordlist into chunks and prepares tasks.
