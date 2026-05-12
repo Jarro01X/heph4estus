@@ -10,6 +10,13 @@ import (
 	"testing"
 )
 
+func cleanupWordlistPlan(t *testing.T, plan *WordlistPlan) {
+	t.Helper()
+	if err := plan.Cleanup(); err != nil {
+		t.Fatalf("cleanup wordlist plan: %v", err)
+	}
+}
+
 func TestParseWordlistEntries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -163,7 +170,7 @@ func TestPlanWordlistFileCreatesCompatibleTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer plan.Cleanup()
+	defer cleanupWordlistPlan(t, plan)
 
 	if plan.TotalWords != 4 {
 		t.Fatalf("TotalWords = %d, want 4", plan.TotalWords)
@@ -212,7 +219,7 @@ func TestPlanWordlistFileInputKeysRemainStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer plan.Cleanup()
+	defer cleanupWordlistPlan(t, plan)
 
 	for i, task := range plan.Tasks {
 		want := InputKey("gobuster", "job-abc", i)
@@ -257,7 +264,7 @@ func TestUploadChunksReadsFileChunksOneAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan wordlist file: %v", err)
 	}
-	defer plan.Cleanup()
+	defer cleanupWordlistPlan(t, plan)
 
 	storage := &recordingStorage{}
 	if err := UploadChunks(context.Background(), storage, "bucket", plan); err != nil {
@@ -285,7 +292,7 @@ func TestUploadChunksFailureIncludesChunkIndexAndKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan wordlist file: %v", err)
 	}
-	defer plan.Cleanup()
+	defer cleanupWordlistPlan(t, plan)
 
 	failKey := InputKey("ffuf", "job-123", 1)
 	err = UploadChunks(context.Background(), &recordingStorage{failKey: failKey}, "bucket", plan)

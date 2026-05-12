@@ -142,7 +142,9 @@ func splitWithMetadata(meta *Metadata, tempDir string, policy Policy, keyForChun
 	if err != nil {
 		return nil, fmt.Errorf("opening wordlist file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	result := &Result{Metadata: *meta}
 	targetBytes := ceilDiv(meta.totalEntryBytes, int64(meta.EffectiveChunks))
@@ -299,7 +301,9 @@ func scanWordlistStats(path string, scannerMax int) (int, int64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("opening wordlist file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := newScanner(file, scannerMax)
 	var words int

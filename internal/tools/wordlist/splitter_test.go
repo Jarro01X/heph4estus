@@ -25,6 +25,13 @@ func readChunk(t *testing.T, path string) string {
 	return string(data)
 }
 
+func cleanupSplitResult(t *testing.T, result *Result) {
+	t.Helper()
+	if err := result.Cleanup(); err != nil {
+		t.Fatalf("cleanup split result: %v", err)
+	}
+}
+
 func TestSplitFileRejectsEmptyFile(t *testing.T) {
 	path := writeWordlist(t, "")
 
@@ -58,7 +65,7 @@ func TestSplitFileTinyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if result.TotalWords != 2 {
 		t.Fatalf("TotalWords = %d, want 2", result.TotalWords)
@@ -84,7 +91,7 @@ func TestSplitFileExactSizeSplits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if len(result.Chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d", len(result.Chunks))
@@ -104,7 +111,7 @@ func TestSplitFileUnevenSizeSplits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if len(result.Chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d", len(result.Chunks))
@@ -124,7 +131,7 @@ func TestSplitFileExplicitChunkCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if result.EffectiveChunks != 3 {
 		t.Fatalf("EffectiveChunks = %d, want 3", result.EffectiveChunks)
@@ -146,7 +153,7 @@ func TestSplitFileAutoChunkCountFromSizeAndWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if result.EffectiveChunks != 3 {
 		t.Fatalf("EffectiveChunks = %d, want 3", result.EffectiveChunks)
@@ -160,7 +167,7 @@ func TestSplitFileNoEmptyChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if result.EffectiveChunks != 2 {
 		t.Fatalf("EffectiveChunks = %d, want 2", result.EffectiveChunks)
@@ -179,7 +186,7 @@ func TestSplitFilePreservesRawEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split wordlist: %v", err)
 	}
-	defer result.Cleanup()
+	defer cleanupSplitResult(t, result)
 
 	if got := readChunk(t, result.Chunks[0].Path); got != "#comment\n admin\ntrailing \n" {
 		t.Fatalf("chunk data = %q", got)

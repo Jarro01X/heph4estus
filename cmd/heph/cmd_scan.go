@@ -366,13 +366,21 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, pref
 	if err != nil {
 		return false, fmt.Errorf("creating wordlist temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			logStatus("Warning: failed to remove wordlist temp dir %s: %v", tempDir, err)
+		}
+	}()
 
 	plan, err := jobs.PlanWordlistFile(tool, jobID, runtimeTarget, options, wordlistFile, tempDir, chunks, workers)
 	if err != nil {
 		return false, fmt.Errorf("planning wordlist job: %w", err)
 	}
-	defer plan.Cleanup()
+	defer func() {
+		if err := plan.Cleanup(); err != nil {
+			logStatus("Warning: failed to clean temporary wordlist chunks: %v", err)
+		}
+	}()
 
 	requested := "auto"
 	if chunks > 0 {
