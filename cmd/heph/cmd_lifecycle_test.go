@@ -115,7 +115,68 @@ func TestPreflightWordlistFileRejectsEmptyWordlist(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "planning wordlist job") {
+	if !strings.Contains(err.Error(), "no entries found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPreflightWordlistFileAutoSizesOmittedChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	meta, err := preflightWordlistFile("ffuf", path, "https://example.com/FUZZ", "", 0, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.TotalWords != 3 {
+		t.Fatalf("TotalWords = %d, want 3", meta.TotalWords)
+	}
+	if meta.EffectiveChunks != 2 {
+		t.Fatalf("EffectiveChunks = %d, want 2", meta.EffectiveChunks)
+	}
+}
+
+func TestPreflightWordlistFileHonorsExplicitChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	meta, err := preflightWordlistFile("ffuf", path, "https://example.com/FUZZ", "", 3, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.RequestedChunks != 3 || meta.EffectiveChunks != 3 {
+		t.Fatalf("requested/effective chunks = %d/%d, want 3/3", meta.RequestedChunks, meta.EffectiveChunks)
+	}
+}
+
+func TestPreflightWordlistFileRejectsDirectory(t *testing.T) {
+	_, err := preflightWordlistFile("ffuf", t.TempDir(), "https://example.com/FUZZ", "", 0, 2)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPreflightWordlistFileRejectsUnsafeExplicitChunkSizing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "huge-words.txt")
+	if err := os.WriteFile(path, []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	if err := os.Truncate(path, 65*1024*1024); err != nil {
+		t.Fatalf("truncate temp file: %v", err)
+	}
+
+	_, err := preflightWordlistFile("ffuf", path, "https://example.com/FUZZ", "", 1, 1)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "increase --chunks") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
