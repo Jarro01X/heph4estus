@@ -19,6 +19,7 @@ import (
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/worker"
 )
 
@@ -28,7 +29,7 @@ func runScan(args []string, log logger.Logger) error {
 	inputFile := fs.String("file", "", "Path to file containing targets (target_list modules)")
 	wordlistFile := fs.String("wordlist", "", "Path to wordlist file (wordlist modules)")
 	runtimeTarget := fs.String("target", "", "Runtime target / URL (wordlist modules, e.g. https://example.com/FUZZ)")
-	chunks := fs.Int("chunks", 0, "Number of wordlist chunks (default: worker count)")
+	chunks := fs.Int("chunks", 0, "Number of wordlist chunks (default: auto-size from file size and workers)")
 	options := fs.String("options", "", "Extra tool-specific options")
 	workers := fs.Int("workers", 0, "Number of worker tasks to launch (default: from config or 10)")
 	computeMode := fs.String("compute-mode", "", "Compute mode: auto, fargate, or spot (default: from config or auto)")
@@ -128,9 +129,9 @@ func runScan(args []string, log logger.Logger) error {
 
 	// Validate local inputs before any lifecycle side effects.
 	var targetContent string
-	var wordlistContent string
+	var wordlistMeta *wordlisttool.Metadata
 	if mod.InputType == modules.InputTypeWordlist {
-		wordlistContent, err = preflightWordlistFile(*tool, *wordlistFile, *runtimeTarget, *options, *chunks, *workers)
+		wordlistMeta, err = preflightWordlistFile(*tool, *wordlistFile, *runtimeTarget, *options, *chunks, *workers)
 		if err != nil {
 			return err
 		}
@@ -249,7 +250,7 @@ func runScan(args []string, log logger.Logger) error {
 		started bool
 	)
 	if mod.InputType == modules.InputTypeWordlist {
-		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistContent, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistMeta, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	} else {
 		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	}
@@ -360,17 +361,37 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
 }
 
-func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
-	if chunks <= 0 {
-		chunks = workers
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, preflight *wordlisttool.Metadata, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+	tempDir, err := os.MkdirTemp("", "heph-wordlist-*")
+	if err != nil {
+		return false, fmt.Errorf("creating wordlist temp dir: %w", err)
 	}
+	defer os.RemoveAll(tempDir)
 
-	plan, err := jobs.PlanWordlistJob(tool, jobID, runtimeTarget, options, content, chunks)
+	plan, err := jobs.PlanWordlistFile(tool, jobID, runtimeTarget, options, wordlistFile, tempDir, chunks, workers)
 	if err != nil {
 		return false, fmt.Errorf("planning wordlist job: %w", err)
 	}
+	defer plan.Cleanup()
 
-	logStatus("Parsed %d entries from %s, splitting into %d chunks [job %s]", plan.TotalWords, wordlistFile, len(plan.Tasks), jobID)
+	requested := "auto"
+	if chunks > 0 {
+		requested = strconv.Itoa(chunks)
+	}
+	sourceBytes := plan.TotalSourceBytes
+	if preflight != nil && preflight.TotalSourceBytes > 0 {
+		sourceBytes = preflight.TotalSourceBytes
+	}
+	logStatus("Parsed %d entries from %s (%s); chunks requested=%s effective=%d target=%s max=%s [job %s]",
+		plan.TotalWords,
+		wordlistFile,
+		formatByteSize(sourceBytes),
+		requested,
+		plan.EffectiveChunks,
+		formatByteSize(plan.TargetChunkSize),
+		formatByteSize(plan.MaxChunkSize),
+		jobID,
+	)
 	if runtimeTarget != "" {
 		logStatus("Target: %s", runtimeTarget)
 	}
@@ -379,7 +400,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	_ = tracker.UpdatePhase(jobID, operator.PhaseUploading)
 	if store := tracker.Store(); store != nil {
 		if rec, loadErr := store.Load(jobID); loadErr == nil {
-			rec.TotalTasks = len(plan.Tasks)
+			rec.TotalTasks = plan.EffectiveChunks
 			rec.TotalWords = plan.TotalWords
 			rec.RuntimeTarget = runtimeTarget
 			_ = store.Update(rec)
@@ -387,7 +408,7 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 	}
 
 	// Upload chunks.
-	logStatus("Uploading %d chunks to s3://%s/...", len(plan.Tasks), bucket)
+	logStatus("Uploading %d chunks to s3://%s/...", plan.EffectiveChunks, bucket)
 	uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer uploadCancel()
 	if err := jobs.UploadChunks(uploadCtx, storage, bucket, plan); err != nil {
@@ -412,6 +433,9 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile, content, ru
 		return false, fmt.Errorf("enqueueing chunk tasks: %w", err)
 	}
 	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
+	if err := plan.Cleanup(); err != nil {
+		logStatus("Warning: failed to clean temporary wordlist chunks: %v", err)
+	}
 
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
@@ -437,18 +461,23 @@ func preflightTargetListFile(path string) (string, error) {
 	return string(content), nil
 }
 
-func preflightWordlistFile(tool, path, runtimeTarget, options string, chunks, workers int) (string, error) {
-	content, err := os.ReadFile(path)
+func preflightWordlistFile(_, path, _, _ string, chunks, workers int) (*wordlisttool.Metadata, error) {
+	meta, err := wordlisttool.InspectFile(path, wordlisttool.Policy{
+		RequestedChunks: chunks,
+		WorkerCount:     workers,
+	})
 	if err != nil {
-		return "", fmt.Errorf("reading wordlist file: %w", err)
+		return nil, fmt.Errorf("validating wordlist file: %w", err)
 	}
-	if chunks <= 0 {
-		chunks = workers
+	return meta, nil
+}
+
+func formatByteSize(n int64) string {
+	const mib = 1024 * 1024
+	if n%mib == 0 && n >= mib {
+		return fmt.Sprintf("%d MiB", n/mib)
 	}
-	if _, err := jobs.PlanWordlistJob(tool, "preflight", runtimeTarget, options, string(content), chunks); err != nil {
-		return "", fmt.Errorf("planning wordlist job: %w", err)
-	}
-	return string(content), nil
+	return fmt.Sprintf("%d bytes", n)
 }
 
 func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) error {
