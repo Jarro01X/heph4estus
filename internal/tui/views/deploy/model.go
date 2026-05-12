@@ -452,6 +452,7 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				AMIID:                 outputs["ami_id"],
 				ToolName:              cfg.ToolName,
 				ToolOptions:           cfg.ToolOptions,
+				WordlistPath:          cfg.WordlistPath,
 				WordlistContent:       cfg.WordlistContent,
 				RuntimeTarget:         cfg.RuntimeTarget,
 				ChunkCount:            cfg.ChunkCount,
