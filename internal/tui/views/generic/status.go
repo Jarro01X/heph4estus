@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -219,7 +220,7 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker Ge
 		Ellipsis:       lipgloss.NewStyle().Foreground(core.Steel),
 	}
 
-	isWL := infra.WordlistContent != ""
+	isWL := infra.WordlistPath != "" || infra.WordlistContent != ""
 
 	var jobTracker *operator.Tracker
 	if len(jt) > 0 && jt[0] != nil {
@@ -325,16 +326,7 @@ func (m *StatusModel) initWordlist() tea.Cmd {
 	infra := m.infra
 	uploader := m.uploader
 
-	chunkCount := infra.ChunkCount
-	if chunkCount <= 0 {
-		chunkCount = infra.WorkerCount
-	}
-
-	plan, err := jobs.PlanWordlistJob(
-		infra.ToolName, infra.JobID,
-		infra.RuntimeTarget, infra.ToolOptions,
-		infra.WordlistContent, chunkCount,
-	)
+	plan, tempDir, err := m.planWordlist(infra)
 	if err != nil {
 		m.errMsg = fmt.Sprintf("Wordlist error: %v", err)
 		return nil
@@ -346,11 +338,48 @@ func (m *StatusModel) initWordlist() tea.Cmd {
 	m.trackCreate()
 
 	return func() tea.Msg {
+		defer func() {
+			if tempDir != "" {
+				_ = os.RemoveAll(tempDir)
+			}
+		}()
+		defer plan.Cleanup()
 		if err := uploader.UploadChunks(context.Background(), infra.S3BucketName, plan); err != nil {
 			return uploadCompleteMsg{err: err}
 		}
 		return uploadCompleteMsg{tasks: plan.Tasks, words: plan.TotalWords}
 	}
+}
+
+func (m *StatusModel) planWordlist(infra core.InfraOutputs) (*jobs.WordlistPlan, string, error) {
+	if infra.WordlistPath != "" {
+		tempDir, err := os.MkdirTemp("", "heph-wordlist-*")
+		if err != nil {
+			return nil, "", fmt.Errorf("creating temp dir: %w", err)
+		}
+		plan, err := jobs.PlanWordlistFile(
+			infra.ToolName, infra.JobID,
+			infra.RuntimeTarget, infra.ToolOptions,
+			infra.WordlistPath, tempDir,
+			infra.ChunkCount, infra.WorkerCount,
+		)
+		if err != nil {
+			_ = os.RemoveAll(tempDir)
+			return nil, "", err
+		}
+		return plan, tempDir, nil
+	}
+
+	chunkCount := infra.ChunkCount
+	if chunkCount <= 0 {
+		chunkCount = infra.WorkerCount
+	}
+	plan, err := jobs.PlanWordlistJob(
+		infra.ToolName, infra.JobID,
+		infra.RuntimeTarget, infra.ToolOptions,
+		infra.WordlistContent, chunkCount,
+	)
+	return plan, "", err
 }
 
 func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
@@ -526,6 +555,7 @@ func (m *StatusModel) View() string {
 			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
 		}
 		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Chunks:"), m.totalTargets)
+		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 
 	case phaseEnqueuing:

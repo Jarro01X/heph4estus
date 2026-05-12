@@ -79,9 +79,10 @@ type DeployConfig struct {
 	PostDeployView ViewID
 
 	// Wordlist module fields — set for wordlist-type tools (ffuf, gobuster, etc.).
-	WordlistContent string // Raw wordlist file content
+	WordlistPath    string // Local wordlist file path preferred for large inputs
+	WordlistContent string // Raw wordlist file content retained for small tests/backward compatibility
 	RuntimeTarget   string // Single runtime target / URL (e.g. "https://example.com/FUZZ")
-	ChunkCount      int    // Number of wordlist chunks (defaults to WorkerCount)
+	ChunkCount      int    // Requested wordlist chunks; zero enables auto-sizing.
 
 	// Lifecycle fields.
 	CleanupPolicy string // "reuse" or "destroy-after"
@@ -139,9 +140,10 @@ type InfraOutputs struct {
 	ToolOptions string // Extra tool-specific CLI flags
 
 	// Wordlist module fields — carried forward from DeployConfig.
+	WordlistPath    string
 	WordlistContent string
 	RuntimeTarget   string
-	ChunkCount      int
+	ChunkCount      int // Requested wordlist chunks; zero enables auto-sizing.
 
 	// Lifecycle summary fields.
 	CleanupPolicy string // "reuse" or "destroy-after"

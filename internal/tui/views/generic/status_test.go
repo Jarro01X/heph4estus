@@ -3,6 +3,8 @@ package generic
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,10 +21,12 @@ import (
 type mockUploader struct {
 	uploaded bool
 	err      error
+	plan     *jobs.WordlistPlan
 }
 
-func (u *mockUploader) UploadChunks(_ context.Context, _ string, _ *jobs.WordlistPlan) error {
+func (u *mockUploader) UploadChunks(_ context.Context, _ string, plan *jobs.WordlistPlan) error {
 	u.uploaded = true
+	u.plan = plan
 	return u.err
 }
 
@@ -257,18 +261,23 @@ func TestGenericStatusNoTargets(t *testing.T) {
 	}
 }
 
-func testWordlistInfra() core.InfraOutputs {
+func testWordlistInfra(t *testing.T) core.InfraOutputs {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("admin\nlogin\napi\ntest\n# comment\n\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
 	return core.InfraOutputs{
-		SQSQueueURL:     "https://sqs.example.com/q",
-		S3BucketName:    "test-bucket",
-		ECSClusterName:  "test-cluster",
-		ToolName:        "ffuf",
-		ToolOptions:     "-ac",
-		WordlistContent: "admin\nlogin\napi\ntest\n# comment\n\n",
-		RuntimeTarget:   "https://example.com/FUZZ",
-		ChunkCount:      2,
-		WorkerCount:     2,
-		ComputeMode:     "fargate",
+		SQSQueueURL:    "https://sqs.example.com/q",
+		S3BucketName:   "test-bucket",
+		ECSClusterName: "test-cluster",
+		ToolName:       "ffuf",
+		ToolOptions:    "-ac",
+		WordlistPath:   path,
+		RuntimeTarget:  "https://example.com/FUZZ",
+		ChunkCount:     2,
+		WorkerCount:    2,
+		ComputeMode:    "fargate",
 	}
 }
 
@@ -276,7 +285,7 @@ func TestGenericStatusWordlistInit(t *testing.T) {
 	sub := &mockSubmitter{}
 	tracker := &mockTracker{}
 	uploader := &mockUploader{}
-	m := NewStatusWithDeps(testWordlistInfra(), sub, tracker, uploader)
+	m := NewStatusWithDeps(testWordlistInfra(t), sub, tracker, uploader)
 
 	cmd := m.Init()
 	if cmd == nil {
@@ -305,6 +314,9 @@ func TestGenericStatusWordlistInit(t *testing.T) {
 	if !uploader.uploaded {
 		t.Fatal("expected uploader to have been called")
 	}
+	if uploader.plan == nil || len(uploader.plan.ChunkFiles) != 2 {
+		t.Fatalf("expected file-based chunk plan, got %#v", uploader.plan)
+	}
 	if len(uc.tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(uc.tasks))
 	}
@@ -331,7 +343,7 @@ func TestGenericStatusWordlistInit(t *testing.T) {
 func TestGenericStatusWordlistUploadToEnqueue(t *testing.T) {
 	sub := &mockSubmitter{}
 	tracker := &mockTracker{}
-	m := NewStatusWithDeps(testWordlistInfra(), sub, tracker, &mockUploader{})
+	m := NewStatusWithDeps(testWordlistInfra(t), sub, tracker, &mockUploader{})
 	m.Init()
 
 	tasks := []worker.Task{
@@ -350,7 +362,7 @@ func TestGenericStatusWordlistUploadToEnqueue(t *testing.T) {
 func TestGenericStatusWordlistViewShowsTarget(t *testing.T) {
 	sub := &mockSubmitter{}
 	tracker := &mockTracker{}
-	m := NewStatusWithDeps(testWordlistInfra(), sub, tracker, &mockUploader{})
+	m := NewStatusWithDeps(testWordlistInfra(t), sub, tracker, &mockUploader{})
 	m.Init()
 
 	v := m.View()
@@ -359,6 +371,33 @@ func TestGenericStatusWordlistViewShowsTarget(t *testing.T) {
 	}
 	if !strings.Contains(v, "chunks") || !strings.Contains(v, "Uploading") {
 		t.Fatal("expected view to show uploading chunks status")
+	}
+	if !strings.Contains(v, "Words") {
+		t.Fatal("expected view to show total words after planning")
+	}
+}
+
+func TestGenericStatusWordlistContentFallback(t *testing.T) {
+	infra := testWordlistInfra(t)
+	infra.WordlistPath = ""
+	infra.WordlistContent = "admin\nlogin\n"
+
+	uploader := &mockUploader{}
+	m := NewStatusWithDeps(infra, &mockSubmitter{}, &mockTracker{}, uploader)
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("expected init command")
+	}
+	msg := cmd()
+	uc, ok := msg.(uploadCompleteMsg)
+	if !ok {
+		t.Fatalf("expected uploadCompleteMsg, got %T", msg)
+	}
+	if uc.err != nil {
+		t.Fatalf("unexpected upload error: %v", uc.err)
+	}
+	if uploader.plan == nil || len(uploader.plan.ChunkData) == 0 {
+		t.Fatal("expected fallback in-memory chunk data")
 	}
 }
 

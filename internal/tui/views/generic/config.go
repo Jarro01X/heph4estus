@@ -17,6 +17,7 @@ import (
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/tui/core"
 )
 
@@ -25,8 +26,10 @@ type fileReadMsg struct {
 	err     error
 }
 
-// wordlistReadMsg carries the wordlist file content separately from target file.
+// wordlistReadMsg carries bounded wordlist metadata separately from target files.
 type wordlistReadMsg struct {
+	path    string
+	meta    *wordlisttool.Metadata
 	content string
 	err     error
 }
@@ -191,7 +194,7 @@ func buildWordlistInputs(mod *modules.ModuleDefinition, workers int, computeMode
 	optsInput.CharLimit = 256
 
 	chunksInput := textinput.New()
-	chunksInput.Placeholder = "default: worker count"
+	chunksInput.Placeholder = "auto"
 	chunksInput.CharLimit = 6
 
 	workerInput := textinput.New()
@@ -387,10 +390,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 		workerCount = 10
 	}
 
-	chunkCount, _ := strconv.Atoi(m.wlInputs[wlFieldChunks].Value())
-	if chunkCount <= 0 {
-		chunkCount = workerCount
-	}
+	chunkCount, _ := strconv.Atoi(strings.TrimSpace(m.wlInputs[wlFieldChunks].Value()))
 
 	computeMode := strings.TrimSpace(m.wlInputs[wlFieldComputeMode].Value())
 	if computeMode == "" {
@@ -435,6 +435,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 					Placement:       placement,
 					ToolName:        m.toolName,
 					ToolOptions:     toolOptions,
+					WordlistPath:    msg.path,
 					WordlistContent: msg.content,
 					RuntimeTarget:   runtimeTarget,
 					ChunkCount:      chunkCount,
@@ -474,6 +475,7 @@ func (m *ConfigModel) handleWordlistFileRead(msg wordlistReadMsg) tea.Cmd {
 				ToolName:        m.toolName,
 				ToolOptions:     toolOptions,
 				PostDeployView:  core.ViewGenericStatus,
+				WordlistPath:    msg.path,
 				WordlistContent: msg.content,
 				RuntimeTarget:   runtimeTarget,
 				ChunkCount:      chunkCount,
@@ -629,19 +631,30 @@ func (m *ConfigModel) submitWordlist() tea.Cmd {
 	}
 
 	chunksStr := strings.TrimSpace(m.wlInputs[wlFieldChunks].Value())
+	requestedChunks := 0
 	if chunksStr != "" {
-		if v, err := strconv.Atoi(chunksStr); err != nil || v <= 0 {
+		v, err := strconv.Atoi(chunksStr)
+		if err != nil || v <= 0 {
 			m.errMsg = "Chunks must be a positive number"
 			return nil
 		}
+		requestedChunks = v
+	}
+
+	workerCount, _ := strconv.Atoi(m.wlInputs[wlFieldWorkerCount].Value())
+	if workerCount <= 0 {
+		workerCount = 10
 	}
 
 	m.errMsg = ""
 	return func() tea.Msg {
-		data, err := os.ReadFile(wlPath)
+		meta, err := wordlisttool.InspectFile(wlPath, wordlisttool.Policy{
+			RequestedChunks: requestedChunks,
+			WorkerCount:     workerCount,
+		})
 		if err != nil {
 			return wordlistReadMsg{err: err}
 		}
-		return wordlistReadMsg{content: string(data)}
+		return wordlistReadMsg{path: wlPath, meta: meta}
 	}
 }

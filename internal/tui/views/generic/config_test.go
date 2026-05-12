@@ -1,6 +1,8 @@
 package generic
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -113,6 +115,38 @@ func TestGenericConfigWordlistShowsFields(t *testing.T) {
 	}
 	if !strings.Contains(v, "Chunks") {
 		t.Fatal("expected Chunks label")
+	}
+}
+
+func TestGenericConfigWordlistCarriesPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("admin\nlogin\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+
+	m := NewConfig("ffuf")
+	m.wlInputs[wlFieldTarget].SetValue("https://example.com/FUZZ")
+	m.wlInputs[wlFieldComputeMode].SetValue("auto")
+	m.wlInputs[wlFieldCloud].SetValue("aws")
+
+	_, cmd := m.Update(wordlistReadMsg{path: path})
+	if cmd == nil {
+		t.Fatal("expected navigation command after wordlist metadata read")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateWithDataMsg)
+	if !ok {
+		t.Fatalf("expected NavigateWithDataMsg, got %T", msg)
+	}
+	cfg, ok := nav.Data.(core.DeployConfig)
+	if !ok {
+		t.Fatalf("expected DeployConfig, got %T", nav.Data)
+	}
+	if cfg.WordlistPath != path {
+		t.Fatalf("WordlistPath = %q, want %q", cfg.WordlistPath, path)
+	}
+	if cfg.WordlistContent != "" {
+		t.Fatalf("WordlistContent should not be populated for path-based flow")
 	}
 }
 
