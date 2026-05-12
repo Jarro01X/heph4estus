@@ -337,18 +337,34 @@ func (m *StatusModel) initWordlist() tea.Cmd {
 	m.phase = phaseUploading
 	m.trackCreate()
 
-	return func() tea.Msg {
+	return func() (msg tea.Msg) {
 		defer func() {
 			if tempDir != "" {
-				_ = os.RemoveAll(tempDir)
+				if err := os.RemoveAll(tempDir); err != nil {
+					msg = uploadCleanupError(msg, fmt.Errorf("removing wordlist temp dir: %w", err))
+				}
 			}
 		}()
-		defer plan.Cleanup()
+		defer func() {
+			if err := plan.Cleanup(); err != nil {
+				msg = uploadCleanupError(msg, fmt.Errorf("cleaning wordlist chunks: %w", err))
+			}
+		}()
 		if err := uploader.UploadChunks(context.Background(), infra.S3BucketName, plan); err != nil {
 			return uploadCompleteMsg{err: err}
 		}
 		return uploadCompleteMsg{tasks: plan.Tasks, words: plan.TotalWords}
 	}
+}
+
+func uploadCleanupError(msg tea.Msg, err error) tea.Msg {
+	if err == nil {
+		return msg
+	}
+	if current, ok := msg.(uploadCompleteMsg); ok && current.err != nil {
+		return msg
+	}
+	return uploadCompleteMsg{err: err}
 }
 
 func (m *StatusModel) planWordlist(infra core.InfraOutputs) (*jobs.WordlistPlan, string, error) {
