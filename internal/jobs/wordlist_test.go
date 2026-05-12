@@ -1,6 +1,10 @@
 package jobs
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -145,6 +149,174 @@ func TestPlanWordlistJobEmptyWordlist(t *testing.T) {
 	_, err := PlanWordlistJob("ffuf", "job-123", "https://example.com/FUZZ", "", "\n\n", 2)
 	if err == nil {
 		t.Fatal("expected error for empty wordlist")
+	}
+}
+
+func TestPlanWordlistFileCreatesCompatibleTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	content := "admin\nlogin\napi\ntest\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "-ac", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer plan.Cleanup()
+
+	if plan.TotalWords != 4 {
+		t.Fatalf("TotalWords = %d, want 4", plan.TotalWords)
+	}
+	if plan.TotalSourceBytes != int64(len(content)) {
+		t.Fatalf("TotalSourceBytes = %d, want %d", plan.TotalSourceBytes, len(content))
+	}
+	if plan.EffectiveChunks != 2 {
+		t.Fatalf("EffectiveChunks = %d, want 2", plan.EffectiveChunks)
+	}
+	if len(plan.ChunkData) != 0 {
+		t.Fatalf("file-based plan should not keep ChunkData, got %d entries", len(plan.ChunkData))
+	}
+	if len(plan.ChunkFiles) != 2 || len(plan.Tasks) != 2 {
+		t.Fatalf("chunks/tasks = %d/%d, want 2/2", len(plan.ChunkFiles), len(plan.Tasks))
+	}
+
+	task := plan.Tasks[0]
+	if task.ToolName != "ffuf" || task.JobID != "job-123" {
+		t.Fatalf("unexpected task identity: %#v", task)
+	}
+	if task.InputKey != "scans/ffuf/job-123/inputs/chunk_0.txt" {
+		t.Fatalf("InputKey = %q", task.InputKey)
+	}
+	if task.ChunkIdx != 0 || task.TotalChunks != 2 {
+		t.Fatalf("chunk metadata = %d/%d, want 0/2", task.ChunkIdx, task.TotalChunks)
+	}
+	if task.GroupID != SafeTargetStem("https://example.com/FUZZ") {
+		t.Fatalf("GroupID = %q", task.GroupID)
+	}
+	if plan.ChunkFiles[0].Key != task.InputKey {
+		t.Fatalf("chunk key = %q, task key = %q", plan.ChunkFiles[0].Key, task.InputKey)
+	}
+	if plan.ChunkFiles[0].ByteSize == 0 || plan.ChunkFiles[0].WordCount == 0 {
+		t.Fatalf("chunk metadata not populated: %#v", plan.ChunkFiles[0])
+	}
+}
+
+func TestPlanWordlistFileInputKeysRemainStable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+
+	plan, err := PlanWordlistFile("gobuster", "job-abc", "example.com", "", path, t.TempDir(), 3, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer plan.Cleanup()
+
+	for i, task := range plan.Tasks {
+		want := InputKey("gobuster", "job-abc", i)
+		if task.InputKey != want {
+			t.Fatalf("task %d InputKey = %q, want %q", i, task.InputKey, want)
+		}
+	}
+}
+
+type uploadRecord struct {
+	key  string
+	size int
+}
+
+type recordingStorage struct {
+	uploads       []uploadRecord
+	failKey       string
+	maxUploadSize int
+}
+
+func (s *recordingStorage) Upload(_ context.Context, _, key string, data []byte) error {
+	if key == s.failKey {
+		return errors.New("upload failed")
+	}
+	s.uploads = append(s.uploads, uploadRecord{key: key, size: len(data)})
+	if len(data) > s.maxUploadSize {
+		s.maxUploadSize = len(data)
+	}
+	return nil
+}
+
+func (s *recordingStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
+func (s *recordingStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
+func (s *recordingStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+
+func TestUploadChunksReadsFileChunksOneAtATime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("plan wordlist file: %v", err)
+	}
+	defer plan.Cleanup()
+
+	storage := &recordingStorage{}
+	if err := UploadChunks(context.Background(), storage, "bucket", plan); err != nil {
+		t.Fatalf("upload chunks: %v", err)
+	}
+	if len(storage.uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(storage.uploads))
+	}
+	for i, upload := range storage.uploads {
+		if upload.size != int(plan.ChunkFiles[i].ByteSize) {
+			t.Fatalf("upload %d size = %d, want %d", i, upload.size, plan.ChunkFiles[i].ByteSize)
+		}
+		if upload.size > int(plan.MaxChunkSize) {
+			t.Fatalf("upload %d exceeded max chunk size: %d", i, upload.size)
+		}
+	}
+}
+
+func TestUploadChunksFailureIncludesChunkIndexAndKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("plan wordlist file: %v", err)
+	}
+	defer plan.Cleanup()
+
+	failKey := InputKey("ffuf", "job-123", 1)
+	err = UploadChunks(context.Background(), &recordingStorage{failKey: failKey}, "bucket", plan)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "chunk 1") || !strings.Contains(err.Error(), failKey) {
+		t.Fatalf("error should include chunk index and key, got %v", err)
+	}
+}
+
+func TestUploadChunksRejectsOversizedChunkBeforeRead(t *testing.T) {
+	plan := &WordlistPlan{
+		MaxChunkSize: 10,
+		ChunkFiles: []WordlistChunk{{
+			Path:     filepath.Join(t.TempDir(), "missing.txt"),
+			Key:      "scans/ffuf/job-123/inputs/chunk_0.txt",
+			ByteSize: 11,
+			Index:    0,
+		}},
+	}
+
+	err := UploadChunks(context.Background(), &recordingStorage{}, "bucket", plan)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "above max safe chunk size") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "reading chunk") {
+		t.Fatalf("expected max-size error before reading file, got %v", err)
 	}
 }
 
