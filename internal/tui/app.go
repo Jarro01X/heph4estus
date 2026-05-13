@@ -174,7 +174,8 @@ func (a *App) buildResultsDeps(infra core.InfraOutputs, toolName string) (core.R
 
 	if infra.Exported && infra.ExportDir != "" {
 		source = &core.LocalResultsSource{
-			ResultsDir: filepath.Join(infra.ExportDir, "results"),
+			ResultsDir:   filepath.Join(infra.ExportDir, "results"),
+			ArtifactsDir: filepath.Join(infra.ExportDir, "artifacts"),
 		}
 	} else {
 		provider, err := a.buildProvider(infra.Cloud)

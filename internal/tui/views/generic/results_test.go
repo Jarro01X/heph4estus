@@ -15,10 +15,12 @@ import (
 
 // mockResultsSource implements core.ResultsSource for testing.
 type mockResultsSource struct {
-	keys    []string
-	listErr error
-	data    map[string][]byte
-	dlErr   error
+	keys        []string
+	listErr     error
+	data        map[string][]byte
+	dlErr       error
+	artifacts   map[string][]byte
+	artifactErr error
 }
 
 func (s *mockResultsSource) ListKeys(_ context.Context) ([]string, error) {
@@ -33,6 +35,16 @@ func (s *mockResultsSource) Download(_ context.Context, key string) ([]byte, err
 		return d, nil
 	}
 	return nil, fmt.Errorf("not found: %s", key)
+}
+
+func (s *mockResultsSource) DownloadArtifact(_ context.Context, key string) ([]byte, error) {
+	if s.artifactErr != nil {
+		return nil, s.artifactErr
+	}
+	if d, ok := s.artifacts[key]; ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("artifact not found: %s", key)
 }
 
 // mockDestroyer implements core.Destroyer for testing.
@@ -131,6 +143,81 @@ func TestGenericResultsDetailView(t *testing.T) {
 
 	if !m.detail {
 		t.Fatal("expected detail mode to be active")
+	}
+}
+
+func TestGenericResultsDetailViewFormatsArtifact(t *testing.T) {
+	result := worker.Result{
+		ToolName:  "httpx",
+		Target:    "example.com",
+		OutputKey: "scans/httpx/job-1/artifacts/example.com_1700000000.jsonl",
+		Timestamp: time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC),
+	}
+	data, _ := json.Marshal(result)
+
+	key := "example.com_1700000000.json"
+	source := &mockResultsSource{
+		keys: []string{key},
+		data: map[string][]byte{key: data},
+		artifacts: map[string][]byte{
+			result.OutputKey: []byte(`{"url":"https://example.com","status_code":200,"title":"Example","webserver":"nginx","tech":["Go"]}` + "\n"),
+		},
+	}
+	m := NewResults(testResultInfra(), source, nil)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected detail load command")
+	}
+	msg = cmd()
+	m.Update(msg)
+
+	content := m.details[key]
+	if !strings.Contains(content, "HTTPX Results") {
+		t.Fatal("expected formatted httpx section")
+	}
+	if !strings.Contains(content, "https://example.com") {
+		t.Fatal("expected artifact URL in detail view")
+	}
+	if !strings.Contains(content, "Example") {
+		t.Fatal("expected artifact title in detail view")
+	}
+}
+
+func TestGenericResultsDetailViewShowsArtifactErrorWithFallback(t *testing.T) {
+	result := worker.Result{
+		ToolName:  "httpx",
+		Target:    "example.com",
+		Output:    "stdout fallback",
+		OutputKey: "scans/httpx/job-1/artifacts/missing.jsonl",
+		Timestamp: time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC),
+	}
+	data, _ := json.Marshal(result)
+
+	key := "example.com_1700000000.json"
+	source := &mockResultsSource{
+		keys:        []string{key},
+		data:        map[string][]byte{key: data},
+		artifactErr: fmt.Errorf("not found"),
+	}
+	m := NewResults(testResultInfra(), source, nil)
+	cmd := m.Init()
+	msg := cmd()
+	m.Update(msg)
+
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg = cmd()
+	m.Update(msg)
+
+	content := m.details[key]
+	if !strings.Contains(content, "Artifact:  unavailable") {
+		t.Fatal("expected artifact error in detail view")
+	}
+	if !strings.Contains(content, "stdout fallback") {
+		t.Fatal("expected stdout fallback in detail view")
 	}
 }
 
