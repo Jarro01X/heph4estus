@@ -25,8 +25,10 @@ type keysLoadedMsg struct {
 }
 
 type resultLoadedMsg struct {
-	result worker.Result
-	err    error
+	key     string
+	result  worker.Result
+	content string
+	err     error
 }
 
 // pageStatusesMsg carries lightweight status info for a page of results.
@@ -79,6 +81,7 @@ type ResultsModel struct {
 	page       int
 	cursor     int
 	results    map[string]*worker.Result
+	details    map[string]string
 	detail     bool
 	detailVP   viewport.Model
 	destroying bool
@@ -108,6 +111,7 @@ func NewResults(infra core.InfraOutputs, source core.ResultsSource, destroyer co
 		destroyer: destroyer,
 		infra:     infra,
 		results:   make(map[string]*worker.Result),
+		details:   make(map[string]string),
 		help:      h,
 	}
 
@@ -214,12 +218,22 @@ func (m *ResultsModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("Error loading detail: %v", msg.err)
 			return m, nil
 		}
-		pk := m.pageKeys()
-		if m.cursor < len(pk) {
-			m.results[pk[m.cursor]] = &msg.result
+		key := msg.key
+		if key == "" {
+			pk := m.pageKeys()
+			if m.cursor < len(pk) {
+				key = pk[m.cursor]
+			}
+		}
+		if key != "" {
+			m.results[key] = &msg.result
+			m.details[key] = msg.content
 		}
 		m.detail = true
-		content := formatResult(m.infra.S3BucketName, msg.result)
+		content := msg.content
+		if content == "" {
+			content = formatResult(m.infra.S3BucketName, msg.result)
+		}
 		m.detailVP.SetContent(content)
 		m.detailVP.GotoTop()
 
@@ -413,22 +427,32 @@ func (m *ResultsModel) loadDetail() tea.Cmd {
 	k := pk[m.cursor]
 
 	if r, ok := m.results[k]; ok {
+		if content, ok := m.details[k]; ok {
+			return func() tea.Msg {
+				return resultLoadedMsg{key: k, result: *r, content: content}
+			}
+		}
+		src := m.source
+		bucket := m.infra.S3BucketName
 		return func() tea.Msg {
-			return resultLoadedMsg{result: *r}
+			content := formatResultFromSource(context.Background(), src, bucket, *r)
+			return resultLoadedMsg{key: k, result: *r, content: content}
 		}
 	}
 
 	src := m.source
+	bucket := m.infra.S3BucketName
 	return func() tea.Msg {
 		data, err := src.Download(context.Background(), k)
 		if err != nil {
-			return resultLoadedMsg{err: err}
+			return resultLoadedMsg{key: k, err: err}
 		}
 		var result worker.Result
 		if err := json.Unmarshal(data, &result); err != nil {
-			return resultLoadedMsg{err: err}
+			return resultLoadedMsg{key: k, err: err}
 		}
-		return resultLoadedMsg{result: result}
+		content := formatResultFromSource(context.Background(), src, bucket, result)
+		return resultLoadedMsg{key: k, result: result, content: content}
 	}
 }
 
@@ -441,28 +465,7 @@ func (m *ResultsModel) runDestroy() tea.Cmd {
 }
 
 func formatResult(bucket string, r worker.Result) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Target:    %s\n", r.Target)
-	fmt.Fprintf(&b, "Tool:      %s\n", r.ToolName)
-	if r.TotalChunks > 0 {
-		fmt.Fprintf(&b, "Chunk:     %d / %d\n", r.ChunkIdx+1, r.TotalChunks)
-	}
-	fmt.Fprintf(&b, "Timestamp: %s\n", r.Timestamp.Format("2006-01-02 15:04:05"))
-	if r.Error != "" {
-		fmt.Fprintf(&b, "Error:     %s\n", r.Error)
-	}
-	if r.OutputKey != "" {
-		outputRef := r.OutputKey
-		if bucket != "" && !strings.HasPrefix(outputRef, "s3://") {
-			outputRef = fmt.Sprintf("s3://%s/%s", bucket, strings.TrimPrefix(outputRef, "/"))
-		}
-		fmt.Fprintf(&b, "Output:    %s\n", outputRef)
-	}
-	if r.Output != "" {
-		b.WriteString("\n--- Output ---\n")
-		b.WriteString(r.Output)
-	}
-	return b.String()
+	return formatResultWithArtifact(bucket, r, nil, nil)
 }
 
 func truncate(s string, maxLen int) string {

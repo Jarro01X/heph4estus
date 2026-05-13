@@ -66,6 +66,22 @@ func TestS3ResultsSource_Download(t *testing.T) {
 	}
 }
 
+func TestS3ResultsSource_DownloadArtifact(t *testing.T) {
+	data := []byte(`{"url":"https://example.com","status_code":200}`)
+	key := "scans/httpx/job-1/artifacts/example.com_1000.jsonl"
+	s := &S3ResultsSource{
+		Storage: &mockStorage{data: map[string][]byte{key: data}},
+		Bucket:  "test-bucket",
+	}
+	got, err := s.DownloadArtifact(context.Background(), key)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Fatalf("expected %q, got %q", data, got)
+	}
+}
+
 func TestLocalResultsSource_ListKeys(t *testing.T) {
 	dir := t.TempDir()
 	resultsDir := filepath.Join(dir, "results")
@@ -105,6 +121,33 @@ func TestLocalResultsSource_Download(t *testing.T) {
 
 	src := &LocalResultsSource{ResultsDir: resultsDir}
 	got, err := src.Download(context.Background(), "192.168.1.1_1000.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("expected %q, got %q", content, got)
+	}
+}
+
+func TestLocalResultsSource_DownloadArtifact(t *testing.T) {
+	dir := t.TempDir()
+	resultsDir := filepath.Join(dir, "results")
+	artifactsDir := filepath.Join(dir, "artifacts")
+	nestedDir := filepath.Join(artifactsDir, "group1")
+	if err := os.MkdirAll(resultsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte(`<nmaprun></nmaprun>`)
+	if err := os.WriteFile(filepath.Join(nestedDir, "example.xml"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src := &LocalResultsSource{ResultsDir: resultsDir, ArtifactsDir: artifactsDir}
+	got, err := src.DownloadArtifact(context.Background(), "scans/nmap/job-1/artifacts/group1/example.xml")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
