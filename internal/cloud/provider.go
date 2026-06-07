@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 // ErrNotImplemented is returned by stub implementations.
@@ -21,6 +22,12 @@ type Storage interface {
 	Download(ctx context.Context, bucket, key string) ([]byte, error)
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
 	Count(ctx context.Context, bucket, prefix string) (int, error)
+}
+
+// StreamingStorage is an optional extension for backends that can upload an
+// object from a stream without materializing the full payload in memory.
+type StreamingStorage interface {
+	UploadStream(ctx context.Context, bucket, key string, body io.Reader, size int64) error
 }
 
 // Queue abstracts message-queue operations (SQS, Pub/Sub, etc.).
@@ -64,14 +71,14 @@ type ContainerOpts struct {
 // SpotOpts configures a spot/preemptible instance request.
 type SpotOpts struct {
 	AMI             string
-	InstanceTypes   []string          // Multiple types for availability
+	InstanceTypes   []string // Multiple types for availability
 	KeyPair         string
-	UserData        string            // base64-encoded
-	MaxPrice        string            // Per-instance-hour bid
+	UserData        string // base64-encoded
+	MaxPrice        string // Per-instance-hour bid
 	Count           int
 	SecurityGroups  []string
 	SubnetIDs       []string
-	InstanceProfile string            // IAM instance profile ARN
+	InstanceProfile string // IAM instance profile ARN
 	Tags            map[string]string
 }
 
