@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
@@ -78,4 +79,13 @@ func fleetWorkerCount(outputs map[string]string) int {
 		return 0
 	}
 	return n
+}
+
+func outputBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }

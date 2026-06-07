@@ -115,6 +115,11 @@ type InfraOutputs struct {
 	SQSQueueURL       string
 	ECRRepoURL        string
 	S3BucketName      string
+	S3Endpoint        string
+	S3Region          string
+	S3AccessKey       string
+	S3SecretKey       string
+	S3PathStyle       bool
 	ECSClusterName    string
 	TaskDefinitionARN string
 	SubnetIDs         []string
