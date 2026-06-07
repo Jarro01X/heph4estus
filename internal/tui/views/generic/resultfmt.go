@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	naabutool "heph4estus/internal/tools/naabu"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
@@ -96,6 +97,12 @@ func outputRef(bucket, key string) string {
 
 func formatToolArtifact(r worker.Result, artifact []byte) (string, string, error) {
 	switch strings.ToLower(strings.TrimSpace(r.ToolName)) {
+	case naabutool.ModuleNaabuNmap:
+		body, err := formatNaabuNmapArtifact(r, artifact)
+		return "Naabu + Nmap Open Ports", body, err
+	case naabutool.ModuleNaabu:
+		body, err := formatNaabuDiscoveryArtifact(artifact)
+		return "Naabu Open Ports", body, err
 	case "nmap":
 		body, err := formatNmapArtifact(r, artifact)
 		return "Nmap Open Ports", body, err
@@ -194,6 +201,80 @@ func nmapHostLabel(host nmapXMLHost, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func formatNaabuNmapArtifact(r worker.Result, artifact []byte) (string, error) {
+	ports, err := naabutool.ParseNmapXML(artifact, r.Target)
+	if err != nil {
+		return "", err
+	}
+	return formatNaabuOpenPorts(ports, "No open ports found."), nil
+}
+
+func formatNaabuDiscoveryArtifact(artifact []byte) (string, error) {
+	ports, err := naabutool.ParseDiscoveryJSONL(artifact)
+	if err != nil {
+		return "", err
+	}
+	return formatNaabuOpenPorts(ports, "No naabu ports found."), nil
+}
+
+func formatNaabuOpenPorts(ports []naabutool.OpenPort, emptyMessage string) string {
+	if len(ports) == 0 {
+		return emptyMessage
+	}
+
+	lines := []string{
+		fmt.Sprintf("%-24s %-9s %-30s %s", "HOST/IP", "PORT", "SERVICE", "DETAILS"),
+		fmt.Sprintf("%-24s %-9s %-30s %s", strings.Repeat("-", 24), strings.Repeat("-", 9), strings.Repeat("-", 30), strings.Repeat("-", 30)),
+	}
+	for _, port := range ports {
+		lines = append(lines, fmt.Sprintf("%-24s %-9s %-30s %s",
+			clipText(firstNonEmpty(port.Host, port.IP, "-"), 24),
+			formatNaabuPort(port),
+			clipText(formatNaabuService(port), 30),
+			clipText(formatNaabuDetails(port), 80),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatNaabuPort(port naabutool.OpenPort) string {
+	protocol := firstNonEmpty(port.Protocol, "tcp")
+	if port.Port <= 0 {
+		return protocol + "/-"
+	}
+	return fmt.Sprintf("%s/%d", protocol, port.Port)
+}
+
+func formatNaabuService(port naabutool.OpenPort) string {
+	service := strings.TrimSpace(strings.Join(nonEmpty(port.Service, port.Product, port.Version), " "))
+	if service == "" {
+		return "-"
+	}
+	return service
+}
+
+func formatNaabuDetails(port naabutool.OpenPort) string {
+	parts := make([]string, 0, 4)
+	if port.Host != "" && port.IP != "" && port.Host != port.IP {
+		parts = append(parts, "ip="+port.IP)
+	}
+	if port.TLS {
+		parts = append(parts, "tls")
+	}
+	if port.CDNName != "" {
+		parts = append(parts, "cdn="+port.CDNName)
+	} else if port.CDN {
+		parts = append(parts, "cdn")
+	}
+	if port.Timestamp != "" {
+		parts = append(parts, "time="+port.Timestamp)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ",")
 }
 
 type nucleiRecord struct {

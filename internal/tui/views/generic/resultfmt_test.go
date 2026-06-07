@@ -28,6 +28,45 @@ func TestFormatNmapArtifact(t *testing.T) {
 	}
 }
 
+func TestFormatNaabuNmapArtifact(t *testing.T) {
+	result := worker.Result{ToolName: "naabu-nmap", Target: "example.com"}
+	artifact := []byte(`<nmaprun><host><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="example.com"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="nginx" version="1.25"/></port><port protocol="tcp" portid="25"><state state="filtered"/></port></ports></host></nmaprun>`)
+
+	title, body, err := formatToolArtifact(result, artifact)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "Naabu + Nmap Open Ports" {
+		t.Fatalf("title = %q", title)
+	}
+	for _, want := range []string{"example.com", "tcp/443", "https nginx 1.25", "ip=192.0.2.10"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in naabu-nmap output:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "tcp/25") {
+		t.Fatal("filtered ports should not be rendered")
+	}
+}
+
+func TestFormatNaabuDiscoveryArtifact(t *testing.T) {
+	result := worker.Result{ToolName: "naabu", Target: "example.com"}
+	artifact := []byte(`{"host":"example.com","ip":"192.0.2.10","port":443,"tls":true,"cdn":true,"cdn-name":"cloudflare"}` + "\n")
+
+	title, body, err := formatToolArtifact(result, artifact)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "Naabu Open Ports" {
+		t.Fatalf("title = %q", title)
+	}
+	for _, want := range []string{"example.com", "tcp/443", "ip=192.0.2.10", "tls", "cdn=cloudflare"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in naabu output:\n%s", want, body)
+		}
+	}
+}
+
 func TestFormatNucleiArtifact(t *testing.T) {
 	body, err := formatNucleiArtifact([]byte(`{"template-id":"cves/2026/test","matched-at":"https://example.com","info":{"name":"Example Finding","severity":"high"}}` + "\n"))
 	if err != nil {
@@ -81,6 +120,22 @@ func TestFormatResultMalformedArtifactFallsBackToRaw(t *testing.T) {
 		ToolName:  "nuclei",
 		Target:    "example.com",
 		OutputKey: "scans/nuclei/job/artifacts/example.jsonl",
+		Timestamp: time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
+	}
+	body := formatResultWithArtifact("bucket", result, []byte(`{bad json}`), nil)
+	if !strings.Contains(body, "Artifact parse error") {
+		t.Fatal("expected parse error in formatted result")
+	}
+	if !strings.Contains(body, "{bad json}") {
+		t.Fatal("expected raw artifact fallback")
+	}
+}
+
+func TestFormatResultMalformedNaabuArtifactFallsBackToRaw(t *testing.T) {
+	result := worker.Result{
+		ToolName:  "naabu",
+		Target:    "example.com",
+		OutputKey: "scans/naabu/job/artifacts/example.jsonl",
 		Timestamp: time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
 	}
 	body := formatResultWithArtifact("bucket", result, []byte(`{bad json}`), nil)
