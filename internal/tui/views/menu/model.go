@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/modules"
+	naabutool "heph4estus/internal/tools/naabu"
 	"heph4estus/internal/tui/core"
 )
 
@@ -155,6 +156,7 @@ func buildMenuItems() []list.Item {
 	}
 
 	var items []list.Item
+	naabuAdded := false
 	for _, mod := range reg.List() {
 		switch {
 		case mod.Name == "nmap":
@@ -164,6 +166,15 @@ func buildMenuItems() []list.Item {
 				enabled: true,
 				target:  core.ViewNmapConfig,
 			})
+		case mod.Name == naabutool.ModuleNaabu || mod.Name == naabutool.ModuleNaabuNmap:
+			if !naabuAdded {
+				items = append(items, menuItem{
+					title:   "naabu — Fast port discovery + nmap pipeline",
+					enabled: true,
+					target:  core.ViewNaabuConfig,
+				})
+				naabuAdded = true
+			}
 		case mod.InputType == modules.InputTypeWordlist:
 			// Wordlist modules route to the generic config flow.
 			items = append(items, menuItem{
