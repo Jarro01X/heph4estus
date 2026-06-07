@@ -370,18 +370,11 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, prefl
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
 
-	bodies := make([]string, len(plan.Tasks))
-	for i, t := range plan.Tasks {
-		b, err := json.Marshal(t)
-		if err != nil {
-			return false, fmt.Errorf("marshaling task %d: %w", i, err)
-		}
-		bodies[i] = string(b)
-	}
-	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
+	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, plan.Tasks, jobs.EnqueueOptions{})
+	if err != nil {
 		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
-	logStatus("Enqueued %d target tasks", len(plan.Tasks))
+	logStatus("Enqueued %d target tasks", enqueueResult.SentTasks)
 	if plan.FileBacked {
 		if err := plan.Cleanup(); err != nil {
 			logStatus("Warning: failed to clean temporary target-list chunks: %v", err)
@@ -485,18 +478,11 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, pref
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
 
-	bodies := make([]string, len(plan.Tasks))
-	for i, t := range plan.Tasks {
-		b, err := json.Marshal(t)
-		if err != nil {
-			return false, fmt.Errorf("marshaling task %d: %w", i, err)
-		}
-		bodies[i] = string(b)
-	}
-	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
+	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, plan.Tasks, jobs.EnqueueOptions{})
+	if err != nil {
 		return false, fmt.Errorf("enqueueing chunk tasks: %w", err)
 	}
-	logStatus("Enqueued %d chunk tasks", len(plan.Tasks))
+	logStatus("Enqueued %d chunk tasks", enqueueResult.SentTasks)
 	if err := plan.Cleanup(); err != nil {
 		logStatus("Warning: failed to clean temporary wordlist chunks: %v", err)
 	}

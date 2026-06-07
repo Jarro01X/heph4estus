@@ -2,7 +2,6 @@ package generic
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -114,15 +113,8 @@ type realSubmitter struct {
 }
 
 func (s *realSubmitter) EnqueueTasks(ctx context.Context, queueURL string, tasks []worker.Task) error {
-	bodies := make([]string, len(tasks))
-	for i, t := range tasks {
-		b, err := json.Marshal(t)
-		if err != nil {
-			return fmt.Errorf("marshal task %d: %w", i, err)
-		}
-		bodies[i] = string(b)
-	}
-	return s.queue.SendBatch(ctx, queueURL, bodies)
+	_, err := jobs.EnqueueTasks(ctx, s.queue, queueURL, tasks, jobs.EnqueueOptions{})
+	return err
 }
 
 func (s *realSubmitter) LaunchWorkers(ctx context.Context, opts cloud.ContainerOpts) (string, error) {

@@ -319,10 +319,9 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
 
-	const sqsMaxPayload = 256 * 1024 // 256 KB SQS message size limit
-	bodies := make([]string, len(tasks))
+	genericTasks := make([]worker.Task, len(tasks))
 	for i, t := range tasks {
-		gt := worker.Task{
+		genericTasks[i] = worker.Task{
 			ToolName:    "nmap",
 			JobID:       t.JobID,
 			Target:      t.Target,
@@ -331,19 +330,12 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 			ChunkIdx:    t.ChunkIdx,
 			TotalChunks: t.TotalChunks,
 		}
-		b, err := json.Marshal(gt)
-		if err != nil {
-			return false, fmt.Errorf("marshaling task %d: %w", i, err)
-		}
-		if len(b) > sqsMaxPayload {
-			return false, fmt.Errorf("task %d exceeds SQS 256KB limit (%d bytes)", i, len(b))
-		}
-		bodies[i] = string(b)
 	}
-	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
+	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, genericTasks, jobs.EnqueueOptions{})
+	if err != nil {
 		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
-	logStatus("Enqueued %d targets", len(tasks))
+	logStatus("Enqueued %d targets", enqueueResult.SentTasks)
 
 	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
