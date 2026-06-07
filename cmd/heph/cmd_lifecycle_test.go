@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -368,6 +370,68 @@ func TestRunNmapScanWithDepsStartedFalseOnLaunchFailure(t *testing.T) {
 	}
 	if started {
 		t.Fatal("expected started=false on launch failure")
+	}
+}
+
+func TestRunNmapScanWithDepsBatchesLargeEnqueue(t *testing.T) {
+	tasks := make([]nmaptool.ScanTask, 25)
+	for i := range tasks {
+		tasks[i] = nmaptool.ScanTask{
+			JobID:   "job-1",
+			Target:  fmt.Sprintf("192.0.2.%d", i),
+			Options: "-sS",
+		}
+	}
+	queue := &mockQueue{}
+
+	started, err := runNmapScanWithDeps(
+		context.Background(),
+		tasks,
+		1,
+		"fargate",
+		0,
+		"text",
+		testOutputs(),
+		queue,
+		&mockStorage{count: len(tasks)},
+		&mockCompute{},
+		operator.NoopTracker(),
+		"job-1",
+		fleet.PlacementPolicy{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Fatal("expected started=true")
+	}
+
+	gotSizes := make([]int, len(queue.batches))
+	for i, batch := range queue.batches {
+		gotSizes[i] = len(batch)
+	}
+	sort.Ints(gotSizes)
+	wantSizes := []int{5, 10, 10}
+	for i, want := range wantSizes {
+		if gotSizes[i] != want {
+			t.Fatalf("queued batch sizes = %v, want %v", gotSizes, wantSizes)
+		}
+	}
+
+	sawLast := false
+	for _, batch := range queue.batches {
+		for _, body := range batch {
+			var task worker.Task
+			if err := json.Unmarshal([]byte(body), &task); err != nil {
+				t.Fatalf("unmarshal task: %v", err)
+			}
+			if task.ToolName == "nmap" && task.Target == "192.0.2.24" {
+				sawLast = true
+			}
+		}
+	}
+	if !sawLast {
+		t.Fatal("expected queued payloads to include the final nmap target")
 	}
 }
 
