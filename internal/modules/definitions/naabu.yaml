@@ -1,0 +1,10 @@
+name: naabu
+description: Fast port discovery scanner
+exec: ["naabu", "-host", "{{target}}", "-silent", "-json", "-o", "{{output}}"]
+input_type: target_list
+output_ext: jsonl
+install_cmd: "go install github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1"
+default_cpu: 256
+default_memory: 512
+timeout: 5m
+tags: [scanner, network]

@@ -8,6 +8,7 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/modules"
+	naabutool "heph4estus/internal/tools/naabu"
 )
 
 // ToolConfig holds all deploy metadata derived from a module definition.
@@ -51,6 +52,9 @@ func ResolveToolConfig(tool string, kind ...cloud.Kind) (*ToolConfig, error) {
 		DockerTag:   fmt.Sprintf("heph-%s-worker:latest", tool),
 		ECRRepoName: fmt.Sprintf("heph-dev-%s", tool),
 		BuildArgs:   InstallCmdToBuildArgs(mod.InstallCmd),
+	}
+	if tool == naabutool.ModuleNaabu || tool == naabutool.ModuleNaabuNmap {
+		cfg.Dockerfile = "containers/naabu/Dockerfile"
 	}
 
 	switch cloudKind.Canonical() {

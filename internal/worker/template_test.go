@@ -34,6 +34,12 @@ func TestRenderCommand(t *testing.T) {
 			want:     "tool -w /tmp/words.txt -o /tmp/out.txt",
 		},
 		{
+			name:     "naabu nmap shell template",
+			template: "naabu -host {{target}} -silent -nmap-cli 'nmap -sV {{options}} -oX {{output}}'",
+			vars:     TemplateVars{Output: "/tmp/out.xml", Target: "192.0.2.10", Options: "-Pn -T4"},
+			want:     "naabu -host 192.0.2.10 -silent -nmap-cli 'nmap -sV -Pn -T4 -oX /tmp/out.xml'",
+		},
+		{
 			name:     "no placeholders",
 			template: "echo hello",
 			vars:     TemplateVars{Input: "/tmp/in", Output: "/tmp/out", Target: "target"},

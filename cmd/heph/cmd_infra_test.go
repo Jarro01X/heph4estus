@@ -87,7 +87,7 @@ func TestResolveToolPaths_Httpx(t *testing.T) {
 
 func TestResolveToolPaths_AllRegistryTools(t *testing.T) {
 	// Every registered tool should be resolvable via generic backend.
-	tools := []string{"dalfox", "dnsx", "gospider", "gowitness", "httpx", "katana", "masscan", "massdns", "nmap", "nuclei", "subfinder", "feroxbuster", "ffuf", "gobuster"}
+	tools := []string{"dalfox", "dnsx", "gospider", "gowitness", "httpx", "katana", "masscan", "massdns", "naabu", "naabu-nmap", "nmap", "nuclei", "subfinder", "feroxbuster", "ffuf", "gobuster"}
 	for _, tool := range tools {
 		paths, err := resolveToolConfig(tool, "generic")
 		if err != nil {
