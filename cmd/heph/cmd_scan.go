@@ -362,6 +362,10 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 }
 
 func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, preflight *wordlisttool.Metadata, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+	if err := wordlisttool.CleanupStaleTempDirs(wordlisttool.DefaultStaleTempAge); err != nil {
+		logStatus("Warning: failed to clean stale wordlist temp dirs: %v", err)
+	}
+
 	tempDir, err := os.MkdirTemp("", "heph-wordlist-*")
 	if err != nil {
 		return false, fmt.Errorf("creating wordlist temp dir: %w", err)
