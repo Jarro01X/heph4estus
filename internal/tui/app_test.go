@@ -92,6 +92,18 @@ func TestNavigateToNmapConfig(t *testing.T) {
 	}
 }
 
+func TestNavigateToNaabuConfig(t *testing.T) {
+	app := NewApp()
+	app.Init()
+
+	_, _ = app.Update(core.NavigateMsg{Target: core.ViewNaabuConfig})
+
+	v := app.View()
+	if !strings.Contains(v.Content, "Naabu") {
+		t.Fatal("expected naabu config view to contain 'Naabu'")
+	}
+}
+
 func TestNavigateWithDataMsg_Deploy(t *testing.T) {
 	app := NewApp()
 	app.Init()

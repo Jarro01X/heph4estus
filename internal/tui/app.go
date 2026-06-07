@@ -15,6 +15,7 @@ import (
 	"heph4estus/internal/tui/views/deploy"
 	genericview "heph4estus/internal/tui/views/generic"
 	"heph4estus/internal/tui/views/menu"
+	naabuview "heph4estus/internal/tui/views/naabu"
 	nmapview "heph4estus/internal/tui/views/nmap"
 	"heph4estus/internal/tui/views/settings"
 )
@@ -58,6 +59,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newView = menu.New()
 		case core.ViewNmapConfig:
 			newView = nmapview.NewConfig()
+		case core.ViewNaabuConfig:
+			newView = naabuview.NewConfig()
 		}
 		if newView != nil {
 			a.switchView(newView)

@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"heph4estus/internal/modules"
+	naabutool "heph4estus/internal/tools/naabu"
 	"heph4estus/internal/tui/core"
 )
 
@@ -80,6 +81,62 @@ func TestMenuNmapRoutesToNmapConfig(t *testing.T) {
 	}
 	if nav.Target != core.ViewNmapConfig {
 		t.Fatalf("expected ViewNmapConfig, got %v", nav.Target)
+	}
+}
+
+func TestMenuNaabuRoutesToNaabuConfig(t *testing.T) {
+	items := buildMenuItems()
+	naabuIdx := -1
+	for i, item := range items {
+		mi, ok := item.(menuItem)
+		if ok && mi.target == core.ViewNaabuConfig {
+			naabuIdx = i
+			break
+		}
+	}
+	if naabuIdx == -1 {
+		t.Fatal("naabu entry not found in menu items")
+	}
+
+	m := New()
+	for i := 0; i < naabuIdx; i++ {
+		m.Update(tea.KeyPressMsg{Code: 'j'})
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected command from selecting naabu")
+	}
+	msg := cmd()
+	nav, ok := msg.(core.NavigateMsg)
+	if !ok {
+		t.Fatalf("expected NavigateMsg, got %T", msg)
+	}
+	if nav.Target != core.ViewNaabuConfig {
+		t.Fatalf("expected ViewNaabuConfig, got %v", nav.Target)
+	}
+}
+
+func TestMenuHidesRawNaabuModules(t *testing.T) {
+	items := buildMenuItems()
+	var naabuEntries int
+	for _, item := range items {
+		mi, ok := item.(menuItem)
+		if !ok {
+			continue
+		}
+		if strings.Contains(mi.title, naabutool.ModuleNaabuNmap) {
+			t.Fatalf("menu should not expose raw %q entry", naabutool.ModuleNaabuNmap)
+		}
+		if mi.target == core.ViewNaabuConfig {
+			naabuEntries++
+		}
+		if mi.toolName == naabutool.ModuleNaabu || mi.toolName == naabutool.ModuleNaabuNmap {
+			t.Fatalf("menu should not route raw naabu module %q through generic config", mi.toolName)
+		}
+	}
+	if naabuEntries != 1 {
+		t.Fatalf("naabu menu entries = %d, want 1", naabuEntries)
 	}
 }
 
@@ -174,8 +231,8 @@ func TestBuildMenuItemsContainsAllModules(t *testing.T) {
 	}
 
 	items := buildMenuItems()
-	// Should have one item per module + Settings.
-	expectedCount := len(reg.List()) + 1
+	// Raw naabu modules collapse into one dedicated entry, plus Settings.
+	expectedCount := len(reg.List())
 	if len(items) != expectedCount {
 		t.Errorf("expected %d menu items, got %d", expectedCount, len(items))
 	}
