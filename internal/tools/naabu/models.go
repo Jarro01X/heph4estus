@@ -25,6 +25,23 @@ type DiscoveryResult struct {
 	IP        string `json:"ip,omitempty"`
 	Port      int    `json:"port,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
+	TLS       bool   `json:"tls,omitempty"`
+	CDN       bool   `json:"cdn,omitempty"`
+	CDNName   string `json:"cdn-name,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+type OpenPort struct {
+	Host      string `json:"host,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	Service   string `json:"service,omitempty"`
+	Product   string `json:"product,omitempty"`
+	Version   string `json:"version,omitempty"`
+	TLS       bool   `json:"tls,omitempty"`
+	CDN       bool   `json:"cdn,omitempty"`
+	CDNName   string `json:"cdn-name,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
