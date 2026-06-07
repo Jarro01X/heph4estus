@@ -17,6 +17,7 @@ import (
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/operator"
+	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
@@ -369,6 +370,9 @@ func uploadCleanupError(msg tea.Msg, err error) tea.Msg {
 
 func (m *StatusModel) planWordlist(infra core.InfraOutputs) (*jobs.WordlistPlan, string, error) {
 	if infra.WordlistPath != "" {
+		if err := wordlisttool.CleanupStaleTempDirs(wordlisttool.DefaultStaleTempAge); err != nil {
+			m.cleanupWarning = fmt.Sprintf("wordlist temp cleanup warning: %v", err)
+		}
 		tempDir, err := os.MkdirTemp("", "heph-wordlist-*")
 		if err != nil {
 			return nil, "", fmt.Errorf("creating temp dir: %w", err)

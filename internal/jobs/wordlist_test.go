@@ -3,11 +3,14 @@ package jobs
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"heph4estus/internal/cloud"
 )
 
 func cleanupWordlistPlan(t *testing.T, plan *WordlistPlan) {
@@ -254,6 +257,121 @@ func (s *recordingStorage) Upload(_ context.Context, _, key string, data []byte)
 func (s *recordingStorage) Download(context.Context, string, string) ([]byte, error) { return nil, nil }
 func (s *recordingStorage) List(context.Context, string, string) ([]string, error)   { return nil, nil }
 func (s *recordingStorage) Count(context.Context, string, string) (int, error)       { return 0, nil }
+
+type streamingRecordingStorage struct {
+	recordingStorage
+	streamUploads []uploadRecord
+	streamFailKey string
+	streamNotImpl bool
+}
+
+func (s *streamingRecordingStorage) UploadStream(_ context.Context, _, key string, body io.Reader, size int64) error {
+	if s.streamNotImpl {
+		return cloud.ErrNotImplemented
+	}
+	if key == s.streamFailKey {
+		return errors.New("stream upload failed")
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	s.streamUploads = append(s.streamUploads, uploadRecord{key: key, size: len(data)})
+	if int64(len(data)) != size {
+		return errors.New("stream size mismatch")
+	}
+	return nil
+}
+
+func TestUploadChunksUsesStreamingStorageForFileChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("plan wordlist file: %v", err)
+	}
+	defer cleanupWordlistPlan(t, plan)
+
+	storage := &streamingRecordingStorage{}
+	if err := UploadChunks(context.Background(), storage, "bucket", plan); err != nil {
+		t.Fatalf("upload chunks: %v", err)
+	}
+	if len(storage.streamUploads) != 2 {
+		t.Fatalf("stream uploads = %d, want 2", len(storage.streamUploads))
+	}
+	if len(storage.uploads) != 0 {
+		t.Fatalf("byte uploads = %d, want 0", len(storage.uploads))
+	}
+	for i, upload := range storage.streamUploads {
+		if upload.size != int(plan.ChunkFiles[i].ByteSize) {
+			t.Fatalf("stream upload %d size = %d, want %d", i, upload.size, plan.ChunkFiles[i].ByteSize)
+		}
+	}
+}
+
+func TestUploadChunksFallsBackWhenStreamingNotImplemented(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("plan wordlist file: %v", err)
+	}
+	defer cleanupWordlistPlan(t, plan)
+
+	storage := &streamingRecordingStorage{streamNotImpl: true}
+	if err := UploadChunks(context.Background(), storage, "bucket", plan); err != nil {
+		t.Fatalf("upload chunks: %v", err)
+	}
+	if len(storage.streamUploads) != 0 {
+		t.Fatalf("stream uploads = %d, want 0", len(storage.streamUploads))
+	}
+	if len(storage.uploads) != 2 {
+		t.Fatalf("byte uploads = %d, want 2", len(storage.uploads))
+	}
+}
+
+func TestUploadChunksStreamingFailureIncludesChunkIndexAndKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "words.txt")
+	if err := os.WriteFile(path, []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	plan, err := PlanWordlistFile("ffuf", "job-123", "https://example.com/FUZZ", "", path, t.TempDir(), 2, 1)
+	if err != nil {
+		t.Fatalf("plan wordlist file: %v", err)
+	}
+	defer cleanupWordlistPlan(t, plan)
+
+	failKey := InputKey("ffuf", "job-123", 1)
+	err = UploadChunks(context.Background(), &streamingRecordingStorage{streamFailKey: failKey}, "bucket", plan)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "chunk 1") || !strings.Contains(err.Error(), failKey) {
+		t.Fatalf("error should include chunk index and key, got %v", err)
+	}
+}
+
+func TestUploadChunksPreservesInMemoryPlanUpload(t *testing.T) {
+	plan, err := PlanWordlistJob("ffuf", "job-123", "https://example.com/FUZZ", "", "a\nb\n", 2)
+	if err != nil {
+		t.Fatalf("plan wordlist job: %v", err)
+	}
+
+	storage := &recordingStorage{}
+	if err := UploadChunks(context.Background(), storage, "bucket", plan); err != nil {
+		t.Fatalf("upload chunks: %v", err)
+	}
+	if len(storage.uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(storage.uploads))
+	}
+	if storage.uploads[0].key != plan.ChunkKeys[0] || storage.uploads[1].key != plan.ChunkKeys[1] {
+		t.Fatalf("uploaded keys = %v, want %v", storage.uploads, plan.ChunkKeys)
+	}
+}
 
 func TestUploadChunksReadsFileChunksOneAtATime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "words.txt")
