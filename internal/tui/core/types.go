@@ -60,6 +60,9 @@ type DeployConfig struct {
 	TerraformVars map[string]string
 
 	TargetsContent string
+	TargetsPath    string // Local target-list file path preferred for large inputs
+	TargetCount    int    // Effective target count from bounded preflight
+	TargetChunks   int    // Effective chunk count for file-input modules
 	NmapOptions    string
 	WorkerCount    int
 	ComputeMode    string // "auto", "fargate", "spot" — default "auto"
@@ -120,6 +123,9 @@ type InfraOutputs struct {
 
 	// Carried forward from DeployConfig for the status view.
 	TargetsContent string
+	TargetsPath    string
+	TargetCount    int
+	TargetChunks   int
 	NmapOptions    string
 	WorkerCount    int
 	ComputeMode    string // Resolved compute mode

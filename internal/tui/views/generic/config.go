@@ -2,7 +2,6 @@ package generic
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -17,13 +16,15 @@ import (
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	targetlisttool "heph4estus/internal/tools/targetlist"
 	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/tui/core"
 )
 
-type fileReadMsg struct {
-	content string
-	err     error
+type targetListReadMsg struct {
+	path string
+	meta *targetlisttool.Metadata
+	err  error
 }
 
 // wordlistReadMsg carries bounded wordlist metadata separately from target files.
@@ -252,7 +253,7 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			return m, m.updateFocus()
 		}
 
-	case fileReadMsg:
+	case targetListReadMsg:
 		return m, m.handleTargetListFileRead(msg)
 
 	case wordlistReadMsg:
@@ -276,9 +277,9 @@ func (m *ConfigModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 	return m, nil
 }
 
-func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
+func (m *ConfigModel) handleTargetListFileRead(msg targetListReadMsg) tea.Cmd {
 	if msg.err != nil {
-		m.errMsg = fmt.Sprintf("Error reading file: %v", msg.err)
+		m.errMsg = fmt.Sprintf("Error reading target file: %v", msg.err)
 		return nil
 	}
 	workerCount, _ := strconv.Atoi(m.inputs[cfgFieldWorkerCount].Value())
@@ -320,17 +321,19 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 			return core.NavigateWithDataMsg{
 				Target: core.ViewGenericStatus,
 				Data: core.InfraOutputs{
-					Cloud:          cloudKind,
-					SQSQueueURL:    shCfg.QueueID,
-					S3BucketName:   shCfg.Bucket,
-					TargetsContent: msg.content,
-					WorkerCount:    workerCount,
-					ComputeMode:    computeMode,
-					Placement:      placement,
-					ToolName:       m.toolName,
-					ToolOptions:    toolOptions,
-					CleanupPolicy:  cleanupPolicy,
-					OutputDir:      outputDir,
+					Cloud:         cloudKind,
+					SQSQueueURL:   shCfg.QueueID,
+					S3BucketName:  shCfg.Bucket,
+					TargetsPath:   msg.path,
+					TargetCount:   msg.meta.TotalTargets,
+					TargetChunks:  msg.meta.EffectiveChunks,
+					WorkerCount:   workerCount,
+					ComputeMode:   computeMode,
+					Placement:     placement,
+					ToolName:      m.toolName,
+					ToolOptions:   toolOptions,
+					CleanupPolicy: cleanupPolicy,
+					OutputDir:     outputDir,
 					Selfhosted: &core.SelfhostedRuntime{
 						WorkerHosts: shCfg.WorkerHosts,
 						SSHUser:     shCfg.SSHUser,
@@ -359,7 +362,9 @@ func (m *ConfigModel) handleTargetListFileRead(msg fileReadMsg) tea.Cmd {
 				AWSRegion:      infra.AWSRegion(),
 				BuildArgs:      tc.BuildArgs,
 				TerraformVars:  tc.TerraformVars,
-				TargetsContent: msg.content,
+				TargetsPath:    msg.path,
+				TargetCount:    msg.meta.TotalTargets,
+				TargetChunks:   msg.meta.EffectiveChunks,
 				WorkerCount:    workerCount,
 				ComputeMode:    computeMode,
 				Placement:      placement,
@@ -607,13 +612,17 @@ func (m *ConfigModel) submitTargetList() tea.Cmd {
 		m.errMsg = "Target file is required"
 		return nil
 	}
+	workerCount, _ := strconv.Atoi(m.inputs[cfgFieldWorkerCount].Value())
+	if workerCount <= 0 {
+		workerCount = 10
+	}
 	m.errMsg = ""
 	return func() tea.Msg {
-		data, err := os.ReadFile(path)
+		meta, err := targetlisttool.InspectFile(path, targetlisttool.Policy{WorkerCount: workerCount})
 		if err != nil {
-			return fileReadMsg{err: err}
+			return targetListReadMsg{err: err}
 		}
-		return fileReadMsg{content: string(data)}
+		return targetListReadMsg{path: path, meta: meta}
 	}
 }
 

@@ -32,6 +32,7 @@ type JobRecord struct {
 	StartedAt             time.Time             `json:"started_at,omitempty"`
 	UpdatedAt             time.Time             `json:"updated_at"`
 	TotalTasks            int                   `json:"total_tasks"`
+	TotalTargets          int                   `json:"total_targets,omitempty"`
 	TotalWords            int                   `json:"total_words,omitempty"`
 	WorkerCount           int                   `json:"worker_count,omitempty"`
 	ComputeMode           string                `json:"compute_mode,omitempty"`

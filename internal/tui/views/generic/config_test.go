@@ -8,8 +8,20 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"heph4estus/internal/cloud"
+	targetlisttool "heph4estus/internal/tools/targetlist"
 	"heph4estus/internal/tui/core"
 )
+
+func targetListMsg(path string, targets int) targetListReadMsg {
+	return targetListReadMsg{
+		path: path,
+		meta: &targetlisttool.Metadata{
+			Path:            path,
+			TotalTargets:    targets,
+			EffectiveChunks: targets,
+		},
+	}
+}
 
 func TestGenericConfigShowsToolName(t *testing.T) {
 	m := NewConfig("httpx")
@@ -154,8 +166,7 @@ func TestGenericConfigFileRead(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("aws")
-	// Simulate successful file read.
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n10.0.0.1\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 2))
 	if cmd == nil {
 		t.Fatal("expected navigation command after file read")
 	}
@@ -177,8 +188,14 @@ func TestGenericConfigFileRead(t *testing.T) {
 	if cfg.PostDeployView != core.ViewGenericStatus {
 		t.Fatal("expected PostDeployView to be ViewGenericStatus")
 	}
-	if cfg.TargetsContent != "example.com\n10.0.0.1\n" {
-		t.Fatalf("unexpected targets content: %q", cfg.TargetsContent)
+	if cfg.TargetsPath != "/tmp/targets.txt" {
+		t.Fatalf("TargetsPath = %q, want /tmp/targets.txt", cfg.TargetsPath)
+	}
+	if cfg.TargetsContent != "" {
+		t.Fatalf("TargetsContent should not be populated for path-based flow")
+	}
+	if cfg.TargetCount != 2 {
+		t.Fatalf("TargetCount = %d, want 2", cfg.TargetCount)
 	}
 	if cfg.BuildArgs == nil {
 		t.Fatal("expected BuildArgs to be set")
@@ -189,7 +206,7 @@ func TestGenericConfigInvalidComputeMode(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldCloud].SetValue("aws")
 	m.inputs[cfgFieldComputeMode].SetValue("gpu")
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 1))
 	if cmd != nil {
 		t.Fatal("expected nil command for invalid compute mode")
 	}
@@ -205,7 +222,7 @@ func TestGenericConfigHetznerNavigatesToDeploy(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("hetzner")
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 1))
 	if cmd == nil {
 		t.Fatal("expected navigation command for Hetzner provider")
 	}
@@ -239,7 +256,7 @@ func TestGenericConfigManualNavigatesToStatus(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("manual")
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 1))
 	if cmd == nil {
 		t.Fatal("expected navigation command for manual provider")
 	}
@@ -258,13 +275,16 @@ func TestGenericConfigManualNavigatesToStatus(t *testing.T) {
 	if infra.Cloud != cloud.KindManual {
 		t.Fatalf("expected cloud manual, got %q", infra.Cloud)
 	}
+	if infra.TargetsPath != "/tmp/targets.txt" {
+		t.Fatalf("TargetsPath = %q, want /tmp/targets.txt", infra.TargetsPath)
+	}
 }
 
 func TestGenericConfigManualRejectsFargate(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldCloud].SetValue("manual")
 	m.inputs[cfgFieldComputeMode].SetValue("fargate")
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 1))
 	if cmd != nil {
 		t.Fatal("expected nil command for manual + fargate")
 	}
@@ -280,7 +300,7 @@ func TestGenericConfigManualMissingEnv(t *testing.T) {
 	m := NewConfig("httpx")
 	m.inputs[cfgFieldComputeMode].SetValue("auto")
 	m.inputs[cfgFieldCloud].SetValue("manual")
-	_, cmd := m.Update(fileReadMsg{content: "example.com\n"})
+	_, cmd := m.Update(targetListMsg("/tmp/targets.txt", 1))
 	if cmd != nil {
 		t.Fatal("expected nil command when manual env is missing")
 	}

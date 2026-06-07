@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,17 +11,22 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/fleet"
+	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
 	nmaptool "heph4estus/internal/tools/nmap"
+	"heph4estus/internal/worker"
 )
 
 type mockQueue struct {
 	sendBatchErr error
+	batches      [][]string
 }
 
 func (q *mockQueue) Send(context.Context, string, string) error { return nil }
 
-func (q *mockQueue) SendBatch(context.Context, string, []string) error {
+func (q *mockQueue) SendBatch(_ context.Context, _ string, bodies []string) error {
+	copied := append([]string(nil), bodies...)
+	q.batches = append(q.batches, copied)
 	return q.sendBatchErr
 }
 
@@ -29,13 +35,17 @@ func (q *mockQueue) Receive(context.Context, string) (*cloud.Message, error) { r
 func (q *mockQueue) Delete(context.Context, string, string) error { return nil }
 
 type mockStorage struct {
-	count    int
-	countErr error
-	listErr  error
-	keys     []string
+	count      int
+	countErr   error
+	listErr    error
+	keys       []string
+	uploadKeys []string
 }
 
-func (s *mockStorage) Upload(context.Context, string, string, []byte) error { return nil }
+func (s *mockStorage) Upload(_ context.Context, _, key string, _ []byte) error {
+	s.uploadKeys = append(s.uploadKeys, key)
+	return nil
+}
 
 func (s *mockStorage) Download(context.Context, string, string) ([]byte, error) {
 	return []byte("{}"), nil
@@ -90,13 +100,39 @@ func testOutputs() map[string]string {
 	}
 }
 
+func writeTargetFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+	return path
+}
+
+func targetListModule(fileInput bool) *modules.ModuleDefinition {
+	exec := []string{"tool", "{{target}}"}
+	if fileInput {
+		exec = []string{"tool", "-l", "{{input}}"}
+	}
+	return &modules.ModuleDefinition{
+		Name:          "httpx",
+		Exec:          exec,
+		InputType:     modules.InputTypeTargetList,
+		OutputExt:     "jsonl",
+		InstallCmd:    "true",
+		DefaultCPU:    256,
+		DefaultMemory: 512,
+		Timeout:       "1m",
+	}
+}
+
 func TestPreflightTargetListFileRejectsEmptyTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "targets.txt")
 	if err := os.WriteFile(path, []byte("\n# comment only\n\n"), 0o644); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	_, err := preflightTargetListFile(path)
+	_, err := preflightTargetListFile(path, 1)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -182,12 +218,18 @@ func TestPreflightWordlistFileRejectsUnsafeExplicitChunkSizing(t *testing.T) {
 }
 
 func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
+	path := writeTargetFile(t, "example.com\n")
+	meta, err := preflightTargetListFile(path, 1)
+	if err != nil {
+		t.Fatalf("preflight target file: %v", err)
+	}
 	started, err := runTargetListScan(
 		context.Background(),
 		"httpx",
 		"job-1",
-		"targets.txt",
-		"example.com\n",
+		path,
+		meta,
+		targetListModule(false),
 		"",
 		1,
 		"fargate",
@@ -211,12 +253,18 @@ func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
 }
 
 func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
+	path := writeTargetFile(t, "example.com\n")
+	meta, err := preflightTargetListFile(path, 1)
+	if err != nil {
+		t.Fatalf("preflight target file: %v", err)
+	}
 	started, err := runTargetListScan(
 		context.Background(),
 		"httpx",
 		"job-1",
-		"targets.txt",
-		"example.com\n",
+		path,
+		meta,
+		targetListModule(false),
 		"",
 		1,
 		"fargate",
@@ -236,6 +284,60 @@ func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("expected started=true after successful worker launch")
+	}
+}
+
+func TestRunTargetListScanUploadsChunksForInputModules(t *testing.T) {
+	path := writeTargetFile(t, "example.com\n10.0.0.1\n# skipped\n10.0.0.2\n")
+	meta, err := preflightTargetListFile(path, 2)
+	if err != nil {
+		t.Fatalf("preflight target file: %v", err)
+	}
+	queue := &mockQueue{}
+	storage := &mockStorage{count: 2}
+
+	started, err := runTargetListScan(
+		context.Background(),
+		"httpx",
+		"job-1",
+		path,
+		meta,
+		targetListModule(true),
+		"",
+		2,
+		"fargate",
+		"text",
+		queue,
+		storage,
+		&mockCompute{},
+		testOutputs(),
+		"results-bucket",
+		"queue-url",
+		operator.NoopTracker(),
+		cloud.KindAWS,
+		fleet.PlacementPolicy{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Fatal("expected started=true")
+	}
+	if len(storage.uploadKeys) != 2 {
+		t.Fatalf("uploaded chunks = %d, want 2", len(storage.uploadKeys))
+	}
+	if len(queue.batches) != 1 || len(queue.batches[0]) != 2 {
+		t.Fatalf("queued batches = %#v, want one batch with two tasks", queue.batches)
+	}
+	var task worker.Task
+	if err := json.Unmarshal([]byte(queue.batches[0][0]), &task); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	if task.InputKey == "" {
+		t.Fatal("expected chunk task InputKey")
+	}
+	if task.TotalChunks != 2 {
+		t.Fatalf("TotalChunks = %d, want 2", task.TotalChunks)
 	}
 }
 
@@ -393,12 +495,18 @@ func TestRunTargetListScan_ProviderNativeSkipsRunContainer(t *testing.T) {
 	t.Cleanup(func() { waitForProviderNativeFleetFunc = oldWait })
 
 	comp := &mockCompute{}
+	path := writeTargetFile(t, "example.com\n")
+	meta, err := preflightTargetListFile(path, 10)
+	if err != nil {
+		t.Fatalf("preflight target file: %v", err)
+	}
 	started, err := runTargetListScan(
 		context.Background(),
 		"httpx",
 		"job-hetzner",
-		"targets.txt",
-		"example.com\n",
+		path,
+		meta,
+		targetListModule(false),
 		"",
 		10,
 		"auto",

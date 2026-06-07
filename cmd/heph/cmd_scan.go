@@ -19,6 +19,7 @@ import (
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	targetlisttool "heph4estus/internal/tools/targetlist"
 	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/worker"
 )
@@ -128,7 +129,7 @@ func runScan(args []string, log logger.Logger) error {
 	}
 
 	// Validate local inputs before any lifecycle side effects.
-	var targetContent string
+	var targetMeta *targetlisttool.Metadata
 	var wordlistMeta *wordlisttool.Metadata
 	if mod.InputType == modules.InputTypeWordlist {
 		wordlistMeta, err = preflightWordlistFile(*tool, *wordlistFile, *runtimeTarget, *options, *chunks, *workers)
@@ -136,7 +137,7 @@ func runScan(args []string, log logger.Logger) error {
 			return err
 		}
 	} else {
-		targetContent, err = preflightTargetListFile(*inputFile)
+		targetMeta, err = preflightTargetListFile(*inputFile, *workers)
 		if err != nil {
 			return err
 		}
@@ -252,7 +253,7 @@ func runScan(args []string, log logger.Logger) error {
 	if mod.InputType == modules.InputTypeWordlist {
 		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistMeta, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	} else {
-		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetContent, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetMeta, mod, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
 	}
 
 	if scanErr != nil {
@@ -304,32 +305,73 @@ func runScan(args []string, log logger.Logger) error {
 	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
-	targets := parseTargetLines(content)
-	if len(targets) == 0 {
-		return false, fmt.Errorf("no targets found in %s", inputFile)
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, preflight *targetlisttool.Metadata, mod *modules.ModuleDefinition, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+	fileBacked := targetListUsesFileInput(mod)
+	var (
+		tempDir string
+		err     error
+	)
+	if fileBacked {
+		if err := targetlisttool.CleanupStaleTempDirs(targetlisttool.DefaultStaleTempAge); err != nil {
+			logStatus("Warning: failed to clean stale target-list temp dirs: %v", err)
+		}
+		tempDir, err = os.MkdirTemp("", "heph-targetlist-*")
+		if err != nil {
+			return false, fmt.Errorf("creating target-list temp dir: %w", err)
+		}
+		defer func() {
+			if err := os.RemoveAll(tempDir); err != nil {
+				logStatus("Warning: failed to remove target-list temp dir %s: %v", tempDir, err)
+			}
+		}()
 	}
 
-	logStatus("Parsed %d targets from %s [job %s]", len(targets), inputFile, jobID)
+	plan, err := jobs.PlanTargetListFile(tool, jobID, options, inputFile, tempDir, workers, fileBacked)
+	if err != nil {
+		return false, fmt.Errorf("planning target-list job: %w", err)
+	}
+	defer func() {
+		if err := plan.Cleanup(); err != nil {
+			logStatus("Warning: failed to clean temporary target-list chunks: %v", err)
+		}
+	}()
 
-	// Build tasks.
-	tasks := make([]worker.Task, len(targets))
-	for i, t := range targets {
-		tasks[i] = worker.Task{
-			ToolName: tool,
-			JobID:    jobID,
-			Target:   t,
-			Options:  options,
+	sourceBytes := plan.TotalSourceBytes
+	if preflight != nil && preflight.TotalSourceBytes > 0 {
+		sourceBytes = preflight.TotalSourceBytes
+	}
+	if plan.FileBacked {
+		logStatus("Parsed %d targets from %s (%s); chunks effective=%d target=%s max=%s [job %s]",
+			plan.TotalTargets,
+			inputFile,
+			formatByteSize(sourceBytes),
+			plan.EffectiveChunks,
+			formatByteSize(plan.TargetChunkSize),
+			formatByteSize(plan.MaxChunkSize),
+			jobID,
+		)
+	} else {
+		logStatus("Parsed %d targets from %s [job %s]", plan.TotalTargets, inputFile, jobID)
+	}
+
+	if plan.FileBacked {
+		_ = tracker.UpdatePhase(jobID, operator.PhaseUploading)
+		logStatus("Uploading %d target-list chunks to s3://%s/...", plan.EffectiveChunks, bucket)
+		uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
+		defer uploadCancel()
+		if err := jobs.UploadTargetListChunks(uploadCtx, storage, bucket, plan); err != nil {
+			return false, fmt.Errorf("uploading target-list chunks: %w", err)
 		}
 	}
 
 	// Enqueue targets.
-	logStatus("Enqueueing %d targets...", len(tasks))
+	_ = tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
+	logStatus("Enqueueing %d target tasks...", len(plan.Tasks))
 	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
 	defer enqueueCancel()
 
-	bodies := make([]string, len(tasks))
-	for i, t := range tasks {
+	bodies := make([]string, len(plan.Tasks))
+	for i, t := range plan.Tasks {
 		b, err := json.Marshal(t)
 		if err != nil {
 			return false, fmt.Errorf("marshaling task %d: %w", i, err)
@@ -339,12 +381,18 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	if err := queue.SendBatch(enqueueCtx, queueURL, bodies); err != nil {
 		return false, fmt.Errorf("enqueueing targets: %w", err)
 	}
-	logStatus("Enqueued %d targets", len(tasks))
+	logStatus("Enqueued %d target tasks", len(plan.Tasks))
+	if plan.FileBacked {
+		if err := plan.Cleanup(); err != nil {
+			logStatus("Warning: failed to clean temporary target-list chunks: %v", err)
+		}
+	}
 
 	// Update job record with total task count.
 	if store := tracker.Store(); store != nil {
 		if rec, loadErr := store.Load(jobID); loadErr == nil {
-			rec.TotalTasks = len(tasks)
+			rec.TotalTasks = len(plan.Tasks)
+			rec.TotalTargets = plan.TotalTargets
 			_ = store.Update(rec)
 		}
 	}
@@ -358,7 +406,11 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile, content, opt
 	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
 
 	// Poll for progress.
-	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(tasks), "targets", format)
+	unitLabel := "targets"
+	if plan.FileBacked {
+		unitLabel = "chunks"
+	}
+	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), unitLabel, format)
 }
 
 func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, preflight *wordlisttool.Metadata, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
@@ -462,15 +514,12 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, pref
 	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)
 }
 
-func preflightTargetListFile(path string) (string, error) {
-	content, err := os.ReadFile(path)
+func preflightTargetListFile(path string, workers int) (*targetlisttool.Metadata, error) {
+	meta, err := targetlisttool.InspectFile(path, targetlisttool.Policy{WorkerCount: workers})
 	if err != nil {
-		return "", fmt.Errorf("reading target file: %w", err)
+		return nil, fmt.Errorf("validating target file: %w", err)
 	}
-	if len(parseTargetLines(string(content))) == 0 {
-		return "", fmt.Errorf("no targets found in %s", path)
-	}
-	return string(content), nil
+	return meta, nil
 }
 
 func preflightWordlistFile(_, path, _, _ string, chunks, workers int) (*wordlisttool.Metadata, error) {
@@ -651,15 +700,6 @@ func outputGenericResults(ctx context.Context, storage cloud.Storage, bucket, pr
 	return nil
 }
 
-// parseTargetLines splits content into non-empty, non-comment lines.
-func parseTargetLines(content string) []string {
-	var targets []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		targets = append(targets, line)
-	}
-	return targets
+func targetListUsesFileInput(mod *modules.ModuleDefinition) bool {
+	return mod != nil && mod.NeedsInput() && !mod.NeedsTarget()
 }
