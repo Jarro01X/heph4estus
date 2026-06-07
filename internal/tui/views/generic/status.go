@@ -16,7 +16,9 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/jobs"
+	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	targetlisttool "heph4estus/internal/tools/targetlist"
 	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
@@ -68,9 +70,10 @@ type autoDestroyCompleteMsg struct {
 }
 
 type uploadCompleteMsg struct {
-	tasks []worker.Task
-	words int
-	err   error
+	tasks   []worker.Task
+	words   int
+	targets int
+	err     error
 }
 
 const SpotThreshold = 50
@@ -89,15 +92,20 @@ type GenericTracker interface {
 
 // GenericUploader abstracts chunk uploads to storage.
 type GenericUploader interface {
-	UploadChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error
+	UploadWordlistChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error
+	UploadTargetListChunks(ctx context.Context, bucket string, plan *jobs.TargetListPlan) error
 }
 
 type realUploader struct {
 	storage cloud.Storage
 }
 
-func (u *realUploader) UploadChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error {
+func (u *realUploader) UploadWordlistChunks(ctx context.Context, bucket string, plan *jobs.WordlistPlan) error {
 	return jobs.UploadChunks(ctx, u.storage, bucket, plan)
+}
+
+func (u *realUploader) UploadTargetListChunks(ctx context.Context, bucket string, plan *jobs.TargetListPlan) error {
+	return jobs.UploadTargetListChunks(ctx, u.storage, bucket, plan)
 }
 
 type realSubmitter struct {
@@ -166,15 +174,17 @@ type StatusModel struct {
 	destroyer  core.Destroyer // for auto-destroy after export (nil = no destroy)
 	infra      core.InfraOutputs
 
-	phase        statusPhase
-	isWordlist   bool
-	totalTargets int // for target_list: target count; for wordlist: chunk count
-	totalWords   int // only for wordlist jobs
-	enqueueSent  int
-	workersUp    int
-	completed    int
-	startTime    time.Time
-	errMsg       string
+	phase                statusPhase
+	isWordlist           bool
+	totalTargets         int // task count for progress
+	totalWords           int // only for wordlist jobs
+	totalTargetEntries   int // original target count for target-list jobs
+	targetListFileBacked bool
+	enqueueSent          int
+	workersUp            int
+	completed            int
+	startTime            time.Time
+	errMsg               string
 
 	spotInstanceIDs []string
 	rateSamples     []rateSample
@@ -194,8 +204,11 @@ type rateSample struct {
 
 // NewStatus creates a status view with real cloud clients.
 func NewStatus(infra core.InfraOutputs, q cloud.Queue, s cloud.Storage, c cloud.Compute, counter cloud.ProgressCounter, jt *operator.Tracker, destroyer core.Destroyer) *StatusModel {
-	targets := parseTargetLines(infra.TargetsContent)
-	useCounter := counter != nil && len(targets) >= 10_000
+	targetCount := infra.TargetCount
+	if targetCount == 0 && infra.TargetsContent != "" {
+		targetCount = len(parseTargetLines(infra.TargetsContent))
+	}
+	useCounter := counter != nil && targetCount >= 10_000
 
 	m := NewStatusWithDeps(infra,
 		&realSubmitter{queue: q, compute: c},
@@ -261,6 +274,7 @@ func (m *StatusModel) trackCreate() {
 		ToolName:              m.infra.ToolName,
 		Phase:                 operator.PhaseEnqueuing,
 		TotalTasks:            m.totalTargets,
+		TotalTargets:          m.totalTargetEntries,
 		TotalWords:            m.totalWords,
 		WorkerCount:           m.infra.WorkerCount,
 		ComputeMode:           m.infra.ComputeMode,
@@ -277,7 +291,7 @@ func (m *StatusModel) trackCreate() {
 		NATSClientCertPEM:     m.infra.NATSClientCertPEM,
 		NATSClientKeyPEM:      m.infra.NATSClientKeyPEM,
 	}
-	if m.isWordlist {
+	if m.isWordlist || m.targetListFileBacked {
 		rec.Phase = operator.PhaseUploading
 	}
 	_ = m.jobTracker.Create(rec)
@@ -295,28 +309,58 @@ func (m *StatusModel) Init() tea.Cmd {
 }
 
 func (m *StatusModel) initTargetList() tea.Cmd {
-	targets := parseTargetLines(m.infra.TargetsContent)
+	infra := m.infra
+	uploader := m.uploader
 
-	tasks := make([]worker.Task, len(targets))
-	for i, t := range targets {
-		tasks[i] = worker.Task{
-			ToolName: m.infra.ToolName,
-			JobID:    m.infra.JobID,
-			Target:   t,
-			Options:  m.infra.ToolOptions,
+	plan, tempDir, err := m.planTargetList(infra)
+	if err != nil {
+		if strings.Contains(err.Error(), "no targets found") {
+			m.errMsg = "No targets found"
+			return nil
 		}
+		m.errMsg = fmt.Sprintf("Target-list error: %v", err)
+		return nil
 	}
-	m.totalTargets = len(tasks)
+
+	m.totalTargets = len(plan.Tasks)
+	m.totalTargetEntries = plan.TotalTargets
+	m.targetListFileBacked = plan.FileBacked
 
 	if m.totalTargets == 0 {
 		m.errMsg = "No targets found"
 		return nil
 	}
 
-	m.phase = phaseEnqueuing
+	if plan.FileBacked {
+		m.phase = phaseUploading
+	} else {
+		m.phase = phaseEnqueuing
+	}
 	m.trackCreate()
-	infra := m.infra
 	sub := m.submitter
+
+	if plan.FileBacked {
+		return func() (msg tea.Msg) {
+			defer func() {
+				if tempDir != "" {
+					if err := os.RemoveAll(tempDir); err != nil {
+						msg = uploadCleanupError(msg, fmt.Errorf("removing target-list temp dir: %w", err))
+					}
+				}
+			}()
+			defer func() {
+				if err := plan.Cleanup(); err != nil {
+					msg = uploadCleanupError(msg, fmt.Errorf("cleaning target-list chunks: %w", err))
+				}
+			}()
+			if err := uploader.UploadTargetListChunks(context.Background(), infra.S3BucketName, plan); err != nil {
+				return uploadCompleteMsg{err: err}
+			}
+			return uploadCompleteMsg{tasks: plan.Tasks, targets: plan.TotalTargets}
+		}
+	}
+
+	tasks := plan.Tasks
 	return func() tea.Msg {
 		err := sub.EnqueueTasks(context.Background(), infra.SQSQueueURL, tasks)
 		return enqueueProgressMsg{sent: len(tasks), total: len(tasks), err: err}
@@ -351,7 +395,7 @@ func (m *StatusModel) initWordlist() tea.Cmd {
 				msg = uploadCleanupError(msg, fmt.Errorf("cleaning wordlist chunks: %w", err))
 			}
 		}()
-		if err := uploader.UploadChunks(context.Background(), infra.S3BucketName, plan); err != nil {
+		if err := uploader.UploadWordlistChunks(context.Background(), infra.S3BucketName, plan); err != nil {
 			return uploadCompleteMsg{err: err}
 		}
 		return uploadCompleteMsg{tasks: plan.Tasks, words: plan.TotalWords}
@@ -366,6 +410,43 @@ func uploadCleanupError(msg tea.Msg, err error) tea.Msg {
 		return msg
 	}
 	return uploadCompleteMsg{err: err}
+}
+
+func (m *StatusModel) planTargetList(infra core.InfraOutputs) (*jobs.TargetListPlan, string, error) {
+	if infra.TargetsPath != "" {
+		reg, err := modules.NewDefaultRegistry()
+		if err != nil {
+			return nil, "", fmt.Errorf("loading module registry: %w", err)
+		}
+		mod, err := reg.Get(infra.ToolName)
+		if err != nil {
+			return nil, "", fmt.Errorf("loading module %q: %w", infra.ToolName, err)
+		}
+		fileBacked := mod.NeedsInput() && !mod.NeedsTarget()
+		var tempDir string
+		if fileBacked {
+			if err := targetlisttool.CleanupStaleTempDirs(targetlisttool.DefaultStaleTempAge); err != nil {
+				m.cleanupWarning = fmt.Sprintf("target-list temp cleanup warning: %v", err)
+			}
+			tempDir, err = os.MkdirTemp("", "heph-targetlist-*")
+			if err != nil {
+				return nil, "", fmt.Errorf("creating temp dir: %w", err)
+			}
+		}
+		plan, err := jobs.PlanTargetListFile(infra.ToolName, infra.JobID, infra.ToolOptions, infra.TargetsPath, tempDir, infra.WorkerCount, fileBacked)
+		if err != nil {
+			if tempDir != "" {
+				_ = os.RemoveAll(tempDir)
+			}
+			return nil, "", err
+		}
+		return plan, tempDir, nil
+	}
+	plan, err := jobs.PlanTargetListContent(infra.ToolName, infra.JobID, infra.ToolOptions, infra.TargetsContent)
+	if err != nil {
+		return nil, "", err
+	}
+	return plan, "", nil
 }
 
 func (m *StatusModel) planWordlist(infra core.InfraOutputs) (*jobs.WordlistPlan, string, error) {
@@ -426,6 +507,9 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			return m, nil
 		}
 		m.totalWords = msg.words
+		if msg.targets > 0 {
+			m.totalTargetEntries = msg.targets
+		}
 		m.totalTargets = len(msg.tasks)
 		m.phase = phaseEnqueuing
 		m.trackPhase(operator.PhaseEnqueuing)
@@ -564,18 +648,23 @@ func (m *StatusModel) View() string {
 	b.WriteString("\n")
 
 	unitLabel := "targets"
-	if m.isWordlist {
+	if m.isWordlist || m.targetListFileBacked {
 		unitLabel = "chunks"
 	}
 
 	switch m.phase {
 	case phaseUploading:
-		b.WriteString(core.SelectedStyle.Render("  Uploading wordlist chunks...") + "\n\n")
-		if m.infra.RuntimeTarget != "" {
-			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
+		if m.isWordlist {
+			b.WriteString(core.SelectedStyle.Render("  Uploading wordlist chunks...") + "\n\n")
+			if m.infra.RuntimeTarget != "" {
+				fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
+			}
+			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
+		} else {
+			b.WriteString(core.SelectedStyle.Render("  Uploading target-list chunks...") + "\n\n")
+			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Targets:"), m.totalTargetEntries)
 		}
 		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Chunks:"), m.totalTargets)
-		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())
 
 	case phaseEnqueuing:
@@ -583,6 +672,9 @@ func (m *StatusModel) View() string {
 		if m.isWordlist && m.infra.RuntimeTarget != "" {
 			fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Target:"), m.infra.RuntimeTarget)
 			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Words:"), m.totalWords)
+		}
+		if m.targetListFileBacked {
+			fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Targets:"), m.totalTargetEntries)
 		}
 		fmt.Fprintf(&b, "  %s%d\n", labelStyle.Render("Tasks:"), m.totalTargets)
 		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Elapsed:"), elapsed.String())

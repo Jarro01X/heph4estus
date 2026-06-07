@@ -19,14 +19,22 @@ import (
 
 // mockUploader records chunk uploads.
 type mockUploader struct {
-	uploaded bool
-	err      error
-	plan     *jobs.WordlistPlan
+	uploaded       bool
+	targetUploaded bool
+	err            error
+	plan           *jobs.WordlistPlan
+	targetPlan     *jobs.TargetListPlan
 }
 
-func (u *mockUploader) UploadChunks(_ context.Context, _ string, plan *jobs.WordlistPlan) error {
+func (u *mockUploader) UploadWordlistChunks(_ context.Context, _ string, plan *jobs.WordlistPlan) error {
 	u.uploaded = true
 	u.plan = plan
+	return u.err
+}
+
+func (u *mockUploader) UploadTargetListChunks(_ context.Context, _ string, plan *jobs.TargetListPlan) error {
+	u.targetUploaded = true
+	u.targetPlan = plan
 	return u.err
 }
 
@@ -117,6 +125,69 @@ func TestGenericStatusInit(t *testing.T) {
 	}
 	if task.Options != "-silent" {
 		t.Errorf("task.Options = %q, want -silent", task.Options)
+	}
+}
+
+func TestGenericStatusTargetListPathUploadsChunksForInputModule(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	if err := os.WriteFile(path, []byte("example.com\n10.0.0.1\n10.0.0.2\n"), 0o644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+	infra := testInfra()
+	infra.TargetsContent = ""
+	infra.TargetsPath = path
+	infra.TargetCount = 3
+	infra.WorkerCount = 2
+
+	sub := &mockSubmitter{}
+	uploader := &mockUploader{}
+	m := NewStatusWithDeps(infra, sub, &mockTracker{}, uploader)
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("expected upload command")
+	}
+	if m.phase != phaseUploading {
+		t.Fatalf("expected phaseUploading, got %d", m.phase)
+	}
+	if !m.targetListFileBacked {
+		t.Fatal("expected file-backed target-list plan")
+	}
+	if m.totalTargets != 2 {
+		t.Fatalf("tasks/chunks = %d, want 2", m.totalTargets)
+	}
+	if m.totalTargetEntries != 3 {
+		t.Fatalf("target entries = %d, want 3", m.totalTargetEntries)
+	}
+
+	msg := cmd()
+	if !uploader.targetUploaded {
+		t.Fatal("expected target-list chunks to upload")
+	}
+	up, ok := msg.(uploadCompleteMsg)
+	if !ok {
+		t.Fatalf("expected uploadCompleteMsg, got %T", msg)
+	}
+	if len(up.tasks) != 2 {
+		t.Fatalf("uploaded tasks = %d, want 2", len(up.tasks))
+	}
+	if up.tasks[0].InputKey == "" {
+		t.Fatal("expected chunk task InputKey")
+	}
+
+	_, enqueueCmd := m.Update(up)
+	if enqueueCmd == nil {
+		t.Fatal("expected enqueue command after upload")
+	}
+	enqueueMsg := enqueueCmd()
+	if _, ok := enqueueMsg.(enqueueProgressMsg); !ok {
+		t.Fatalf("expected enqueueProgressMsg, got %T", enqueueMsg)
+	}
+	if len(sub.enqueuedTasks) != 2 {
+		t.Fatalf("enqueued tasks = %d, want 2", len(sub.enqueuedTasks))
+	}
+	if sub.enqueuedTasks[0].InputKey == "" {
+		t.Fatal("expected enqueued chunk task InputKey")
 	}
 }
 
