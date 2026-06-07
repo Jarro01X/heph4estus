@@ -22,6 +22,7 @@ Commands:
   nmap     Run an nmap scan (auto-deploys infrastructure if needed)
   naabu    Run a naabu scan with combined or discovery mode
   scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
+  results  List, download, and export completed job results
   infra    Manage cloud infrastructure explicitly (deploy/destroy/backup/recover/trust/rotate)
   fleet    Inspect and manage provider-native fleet state
   bench    Run provider-native fleet benchmark probes
@@ -47,6 +48,8 @@ func run(args []string, log logger.Logger) error {
 		return runNaabu(cmdArgs, log)
 	case "scan":
 		return runScan(cmdArgs, log)
+	case "results":
+		return runResults(cmdArgs, log)
 	case "infra":
 		return runInfra(cmdArgs, log)
 	case "fleet":
