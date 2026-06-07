@@ -107,6 +107,107 @@ func TestNmapNonexistentFile(t *testing.T) {
 	}
 }
 
+// --- naabu subcommand ---
+
+func TestUsageIncludesNaabu(t *testing.T) {
+	if !strings.Contains(usage, "naabu") {
+		t.Fatal("expected usage to include naabu command")
+	}
+}
+
+func TestNaabuMissingFile(t *testing.T) {
+	err := run([]string{"naabu"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for naabu without --file")
+	}
+	if !strings.Contains(err.Error(), "--file flag is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNaabuInvalidMode(t *testing.T) {
+	err := run([]string{"naabu", "--file", "targets.txt", "--mode", "pipeline"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for invalid naabu mode")
+	}
+	if !strings.Contains(err.Error(), "--mode must be combined or discovery") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNaabuDiscoveryRejectsNmapOptions(t *testing.T) {
+	err := run([]string{"naabu", "--file", "targets.txt", "--mode", "discovery", "--nmap-options", "-Pn"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for nmap options in discovery mode")
+	}
+	if !strings.Contains(err.Error(), "--nmap-options is only valid with --mode combined") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNaabuCombinedMapsToNaabuNmapScan(t *testing.T) {
+	args := buildNaabuScanArgs("combined", naabuScanArgsOptions{
+		InputFile:   "targets.txt",
+		NmapOptions: "-Pn",
+		Workers:     12,
+		Format:      "json",
+	})
+	if got := flagValue(args, "--tool"); got != "naabu-nmap" {
+		t.Fatalf("--tool = %q, want naabu-nmap", got)
+	}
+	if got := flagValue(args, "--options"); got != "-Pn" {
+		t.Fatalf("--options = %q, want -Pn", got)
+	}
+	if got := flagValue(args, "--workers"); got != "12" {
+		t.Fatalf("--workers = %q, want 12", got)
+	}
+	if got := flagValue(args, "--format"); got != "json" {
+		t.Fatalf("--format = %q, want json", got)
+	}
+}
+
+func TestNaabuDiscoveryMapsToNaabuScan(t *testing.T) {
+	args := buildNaabuScanArgs("discovery", naabuScanArgsOptions{
+		InputFile:   "targets.txt",
+		NmapOptions: "-Pn",
+	})
+	if got := flagValue(args, "--tool"); got != "naabu" {
+		t.Fatalf("--tool = %q, want naabu", got)
+	}
+	if got := flagValue(args, "--options"); got != "" {
+		t.Fatalf("--options should not be set for discovery, got %q", got)
+	}
+}
+
+func TestNaabuZeroWorkersResolvesToDefault(t *testing.T) {
+	err := run([]string{"naabu", "--file", "/nonexistent/targets.txt", "--workers", "0"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error (file not found)")
+	}
+	if strings.Contains(err.Error(), "--workers must be positive") {
+		t.Fatal("--workers 0 should resolve to default, not error")
+	}
+}
+
+func TestNaabuNonexistentFile(t *testing.T) {
+	err := run([]string{"naabu", "--file", "/nonexistent/targets.txt"}, testLogger())
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !strings.Contains(err.Error(), "validating target file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func flagValue(args []string, flag string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // --- scan subcommand ---
 
 func TestScanMissingTool(t *testing.T) {

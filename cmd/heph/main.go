@@ -20,6 +20,7 @@ const usage = `Usage: heph <command> [options]
 
 Commands:
   nmap     Run an nmap scan (auto-deploys infrastructure if needed)
+  naabu    Run a naabu scan with combined or discovery mode
   scan     Run a generic tool scan (e.g. httpx, nuclei, ffuf; auto-deploys if needed)
   infra    Manage cloud infrastructure explicitly (deploy/destroy/backup/recover/trust/rotate)
   fleet    Inspect and manage provider-native fleet state
@@ -42,6 +43,8 @@ func run(args []string, log logger.Logger) error {
 	switch cmd {
 	case "nmap":
 		return runNmap(cmdArgs, log)
+	case "naabu":
+		return runNaabu(cmdArgs, log)
 	case "scan":
 		return runScan(cmdArgs, log)
 	case "infra":
