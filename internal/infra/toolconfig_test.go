@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	naabutool "heph4estus/internal/tools/naabu"
 )
 
 func TestResolveToolConfig_Nmap(t *testing.T) {
@@ -73,6 +74,34 @@ func TestResolveToolConfig_HighPriorityToolImagesUseGenericContainer(t *testing.
 			}
 			if cfg.BuildArgs[tt.buildArgKey] == "" {
 				t.Fatalf("BuildArgs missing %s", tt.buildArgKey)
+			}
+		})
+	}
+}
+
+func TestResolveToolConfig_NaabuModulesUseDedicatedContainer(t *testing.T) {
+	tests := []string{naabutool.ModuleNaabu, naabutool.ModuleNaabuNmap}
+	for _, tool := range tests {
+		t.Run(tool, func(t *testing.T) {
+			cfg, err := ResolveToolConfig(tool)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.Dockerfile != "containers/naabu/Dockerfile" {
+				t.Fatalf("Dockerfile = %q, want containers/naabu/Dockerfile", cfg.Dockerfile)
+			}
+			if cfg.DockerCtx != "." {
+				t.Fatalf("DockerCtx = %q, want .", cfg.DockerCtx)
+			}
+			wantTag := fmt.Sprintf("heph-%s-worker:latest", tool)
+			if cfg.DockerTag != wantTag {
+				t.Fatalf("DockerTag = %q, want %q", cfg.DockerTag, wantTag)
+			}
+			if cfg.ECRRepoName != fmt.Sprintf("heph-dev-%s", tool) {
+				t.Fatalf("ECRRepoName = %q", cfg.ECRRepoName)
+			}
+			if got := cfg.BuildArgs["GO_INSTALL_CMD"]; got != naabutool.InstallCmd {
+				t.Fatalf("GO_INSTALL_CMD = %q, want %q", got, naabutool.InstallCmd)
 			}
 		})
 	}

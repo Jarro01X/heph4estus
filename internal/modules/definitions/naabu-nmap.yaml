@@ -1,0 +1,10 @@
+name: naabu-nmap
+description: Fast port discovery plus deep nmap service scan
+shell: "naabu -host {{target}} -silent -nmap-cli 'nmap -sV {{options}} -oX {{output}}'"
+input_type: target_list
+output_ext: xml
+install_cmd: "go install github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1"
+default_cpu: 512
+default_memory: 1024
+timeout: 15m
+tags: [scanner, network, pipeline]

@@ -229,8 +229,8 @@ func TestNewDefaultRegistry(t *testing.T) {
 	}
 
 	names := r.Names()
-	if len(names) != 14 {
-		t.Fatalf("expected 14 modules, got %d: %v", len(names), names)
+	if len(names) != 16 {
+		t.Fatalf("expected 16 modules, got %d: %v", len(names), names)
 	}
 
 	// Every built-in module must pass validation (already validated by Add, but smoke-test)
@@ -250,7 +250,7 @@ func TestNewDefaultRegistry_KnownModules(t *testing.T) {
 	expected := []string{
 		"dalfox", "dnsx", "feroxbuster", "ffuf", "gobuster",
 		"gospider", "gowitness", "httpx", "katana", "massdns",
-		"masscan", "nmap", "nuclei", "subfinder",
+		"masscan", "naabu", "naabu-nmap", "nmap", "nuclei", "subfinder",
 	}
 	for _, name := range expected {
 		if _, err := r.Get(name); err != nil {
