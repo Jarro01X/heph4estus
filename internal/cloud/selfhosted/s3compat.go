@@ -124,6 +124,18 @@ func (s *Storage) Upload(ctx context.Context, bucket, key string, data []byte) e
 	return err
 }
 
+// UploadStream uploads a stream to an S3-compatible bucket without buffering
+// the full object in memory.
+func (s *Storage) UploadStream(ctx context.Context, bucket, key string, body io.Reader, _ int64) error {
+	s.logger.Info("Uploading stream to S3-compatible: %s/%s", bucket, key)
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   body,
+	})
+	return err
+}
+
 // Download retrieves an object from an S3-compatible bucket.
 func (s *Storage) Download(ctx context.Context, bucket, key string) ([]byte, error) {
 	s.logger.Info("Downloading object from S3-compatible: %s/%s", bucket, key)

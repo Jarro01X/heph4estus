@@ -10,13 +10,13 @@ import (
 	"heph4estus/internal/cloud"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
@@ -32,8 +32,8 @@ func (nopLogger) Fatal(string, ...interface{}) {}
 // ---------- SDK-level mocks ----------
 
 type mockS3API struct {
-	putObjectFunc      func(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	getObjectFunc      func(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	putObjectFunc     func(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	getObjectFunc     func(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	listObjectsV2Func func(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
@@ -48,6 +48,7 @@ func (m *mockS3API) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input
 }
 
 var _ S3API = (*mockS3API)(nil)
+var _ cloud.StreamingStorage = (*S3Client)(nil)
 
 type mockSQSAPI struct {
 	sendMessageFunc      func(context.Context, *sqs.SendMessageInput, ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
@@ -122,6 +123,30 @@ func TestS3Upload_Error(t *testing.T) {
 	}
 	if err := client.Upload(context.Background(), "b", "k", nil); !errors.Is(err, want) {
 		t.Fatalf("expected %v, got %v", want, err)
+	}
+}
+
+func TestS3UploadStream_Success(t *testing.T) {
+	client := &S3Client{
+		logger: nopLogger{},
+		client: &mockS3API{
+			putObjectFunc: func(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+				if aws.ToString(in.Bucket) != "b" || aws.ToString(in.Key) != "k" {
+					t.Fatalf("unexpected bucket/key: %s/%s", aws.ToString(in.Bucket), aws.ToString(in.Key))
+				}
+				data, err := io.ReadAll(in.Body)
+				if err != nil {
+					t.Fatalf("read body: %v", err)
+				}
+				if string(data) != "stream data" {
+					t.Fatalf("body = %q, want stream data", string(data))
+				}
+				return &s3.PutObjectOutput{}, nil
+			},
+		},
+	}
+	if err := client.UploadStream(context.Background(), "b", "k", strings.NewReader("stream data"), 11); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

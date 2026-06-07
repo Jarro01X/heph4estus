@@ -42,6 +42,18 @@ func (c *S3Client) Upload(ctx context.Context, bucket, key string, data []byte) 
 	return err
 }
 
+// UploadStream uploads a stream to an object store bucket without buffering
+// the full object in memory.
+func (c *S3Client) UploadStream(ctx context.Context, bucket, key string, body io.Reader, _ int64) error {
+	c.logger.Info("Uploading stream to S3: %s/%s", bucket, key)
+	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   body,
+	})
+	return err
+}
+
 // Download retrieves an object from the store.
 func (c *S3Client) Download(ctx context.Context, bucket, key string) ([]byte, error) {
 	c.logger.Info("Downloading object from S3: %s/%s", bucket, key)

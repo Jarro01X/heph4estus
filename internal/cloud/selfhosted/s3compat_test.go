@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"heph4estus/internal/cloud"
 	"heph4estus/internal/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -96,6 +97,25 @@ func TestStorageUploadDownloadRoundTrip(t *testing.T) {
 		t.Fatalf("Upload: %v", err)
 	}
 	got, err := s.Download(context.Background(), "bucket", "scans/a.json")
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("round trip mismatch: got %q, want %q", got, want)
+	}
+}
+
+func TestStorageUploadStreamDownloadRoundTrip(t *testing.T) {
+	fake := newFakeS3()
+	s := NewStorageWithClient(fake, logger.NewSimpleLogger())
+
+	var _ cloud.StreamingStorage = s
+
+	want := []byte("hello streaming heph4estus")
+	if err := s.UploadStream(context.Background(), "bucket", "scans/stream.txt", bytes.NewReader(want), int64(len(want))); err != nil {
+		t.Fatalf("UploadStream: %v", err)
+	}
+	got, err := s.Download(context.Background(), "bucket", "scans/stream.txt")
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}

@@ -3,6 +3,7 @@ package mock
 import (
 	"context"
 	"heph4estus/internal/cloud"
+	"io"
 )
 
 // Compile-time interface checks.
@@ -27,14 +28,22 @@ func (p *Provider) Compute() cloud.Compute { return p.ComputeImpl() }
 
 // Storage is a test double for cloud.Storage.
 type Storage struct {
-	UploadFunc   func(ctx context.Context, bucket, key string, data []byte) error
-	DownloadFunc func(ctx context.Context, bucket, key string) ([]byte, error)
-	ListFunc     func(ctx context.Context, bucket, prefix string) ([]string, error)
-	CountFunc    func(ctx context.Context, bucket, prefix string) (int, error)
+	UploadFunc       func(ctx context.Context, bucket, key string, data []byte) error
+	UploadStreamFunc func(ctx context.Context, bucket, key string, body io.Reader, size int64) error
+	DownloadFunc     func(ctx context.Context, bucket, key string) ([]byte, error)
+	ListFunc         func(ctx context.Context, bucket, prefix string) ([]string, error)
+	CountFunc        func(ctx context.Context, bucket, prefix string) (int, error)
 }
 
 func (s *Storage) Upload(ctx context.Context, bucket, key string, data []byte) error {
 	return s.UploadFunc(ctx, bucket, key, data)
+}
+
+func (s *Storage) UploadStream(ctx context.Context, bucket, key string, body io.Reader, size int64) error {
+	if s.UploadStreamFunc == nil {
+		return cloud.ErrNotImplemented
+	}
+	return s.UploadStreamFunc(ctx, bucket, key, body, size)
 }
 
 func (s *Storage) Download(ctx context.Context, bucket, key string) ([]byte, error) {
@@ -75,9 +84,9 @@ func (q *Queue) Delete(ctx context.Context, queueID, receiptHandle string) error
 
 // Compute is a test double for cloud.Compute.
 type Compute struct {
-	RunContainerFunc    func(ctx context.Context, opts cloud.ContainerOpts) (string, error)
+	RunContainerFunc     func(ctx context.Context, opts cloud.ContainerOpts) (string, error)
 	RunSpotInstancesFunc func(ctx context.Context, opts cloud.SpotOpts) ([]string, error)
-	GetSpotStatusFunc   func(ctx context.Context, instanceIDs []string) ([]cloud.SpotStatus, error)
+	GetSpotStatusFunc    func(ctx context.Context, instanceIDs []string) ([]cloud.SpotStatus, error)
 }
 
 func (c *Compute) RunContainer(ctx context.Context, opts cloud.ContainerOpts) (string, error) {
