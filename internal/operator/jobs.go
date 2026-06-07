@@ -41,6 +41,11 @@ type JobRecord struct {
 	Bucket                string                `json:"bucket,omitempty"`
 	ResultPrefix          string                `json:"result_prefix,omitempty"`
 	ArtifactPrefix        string                `json:"artifact_prefix,omitempty"`
+	S3Endpoint            string                `json:"s3_endpoint,omitempty"`
+	S3Region              string                `json:"s3_region,omitempty"`
+	S3AccessKey           string                `json:"s3_access_key,omitempty"`
+	S3SecretKey           string                `json:"s3_secret_key,omitempty"`
+	S3PathStyle           bool                  `json:"s3_path_style,omitempty"`
 	RuntimeTarget         string                `json:"runtime_target,omitempty"`
 	LastError             string                `json:"last_error,omitempty"`
 	LocalOutputDir        string                `json:"local_output_dir,omitempty"`

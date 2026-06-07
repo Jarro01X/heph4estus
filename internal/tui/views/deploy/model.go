@@ -435,6 +435,11 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				SQSQueueURL:           outputs["sqs_queue_url"],
 				ECRRepoURL:            outputs["ecr_repo_url"],
 				S3BucketName:          outputs["s3_bucket_name"],
+				S3Endpoint:            outputs["s3_endpoint"],
+				S3Region:              outputs["s3_region"],
+				S3AccessKey:           outputs["s3_access_key"],
+				S3SecretKey:           outputs["s3_secret_key"],
+				S3PathStyle:           parseBool(outputs["s3_path_style"]),
 				ECSClusterName:        outputs["ecs_cluster_name"],
 				TaskDefinitionARN:     outputs["task_definition_arn"],
 				SubnetIDs:             splitCSV(outputs["subnet_ids"]),
@@ -535,6 +540,15 @@ func parseInt(s string) int {
 		return 0
 	}
 	return n
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // simpleLogger satisfies logger.Logger for the default deployer.
