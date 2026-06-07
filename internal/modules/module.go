@@ -94,6 +94,11 @@ func (m *ModuleDefinition) NeedsWordlist() bool {
 	return containsPlaceholder(m.Exec, m.Shell, "wordlist") || containsPlaceholder(m.Exec, m.Shell, "input")
 }
 
+// NeedsInput returns true when the module command uses the {{input}} placeholder.
+func (m *ModuleDefinition) NeedsInput() bool {
+	return containsPlaceholder(m.Exec, m.Shell, "input")
+}
+
 func containsPlaceholder(exec []string, shell, placeholder string) bool {
 	needle := "{{" + placeholder + "}}"
 	for _, arg := range exec {

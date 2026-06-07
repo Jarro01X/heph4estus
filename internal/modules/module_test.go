@@ -194,6 +194,29 @@ func TestNeedsWordlist(t *testing.T) {
 	}
 }
 
+func TestNeedsInput(t *testing.T) {
+	m := ModuleDefinition{
+		Exec: []string{"tool", "-l", "{{input}}"},
+	}
+	if !m.NeedsInput() {
+		t.Error("expected NeedsInput() = true for module with {{input}}")
+	}
+
+	m2 := ModuleDefinition{
+		Exec: []string{"tool", "{{target}}"},
+	}
+	if m2.NeedsInput() {
+		t.Error("expected NeedsInput() = false without {{input}}")
+	}
+
+	m3 := ModuleDefinition{
+		Shell: "tool -l {{input}}",
+	}
+	if !m3.NeedsInput() {
+		t.Error("expected NeedsInput() = true for shell module with {{input}}")
+	}
+}
+
 func TestTimeoutDuration(t *testing.T) {
 	m := validModule()
 	m.Timeout = "5m"

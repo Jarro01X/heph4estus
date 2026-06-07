@@ -3,9 +3,7 @@ package jobs
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"heph4estus/internal/cloud"
@@ -176,7 +174,13 @@ func PlanWordlistFile(toolName, jobID, runtimeTarget, options, wordlistPath, tem
 func UploadChunks(ctx context.Context, storage cloud.Storage, bucket string, plan *WordlistPlan) error {
 	if len(plan.ChunkFiles) > 0 {
 		for _, chunk := range plan.ChunkFiles {
-			if err := uploadChunkFile(ctx, storage, bucket, plan, chunk); err != nil {
+			err := uploadFileChunk(ctx, storage, bucket, fileChunkUpload{
+				Path:     chunk.Path,
+				Key:      chunk.Key,
+				ByteSize: chunk.ByteSize,
+				Index:    chunk.Index,
+			}, plan.MaxChunkSize)
+			if err != nil {
 				return err
 			}
 		}
@@ -187,53 +191,6 @@ func UploadChunks(ctx context.Context, storage cloud.Storage, bucket string, pla
 		if err := storage.Upload(ctx, bucket, plan.ChunkKeys[i], data); err != nil {
 			return fmt.Errorf("uploading chunk %d (%s): %w", i, plan.ChunkKeys[i], err)
 		}
-	}
-	return nil
-}
-
-func uploadChunkFile(ctx context.Context, storage cloud.Storage, bucket string, plan *WordlistPlan, chunk WordlistChunk) error {
-	if chunk.ByteSize > plan.MaxChunkSize && plan.MaxChunkSize > 0 {
-		return fmt.Errorf("chunk %d (%s) is %d bytes, above max safe chunk size %d", chunk.Index, chunk.Key, chunk.ByteSize, plan.MaxChunkSize)
-	}
-
-	if streamer, ok := storage.(cloud.StreamingStorage); ok {
-		file, err := os.Open(chunk.Path)
-		if err != nil {
-			return fmt.Errorf("opening chunk %d (%s): %w", chunk.Index, chunk.Key, err)
-		}
-		err = streamer.UploadStream(ctx, bucket, chunk.Key, file, chunk.ByteSize)
-		closeErr := file.Close()
-		if err == nil {
-			if closeErr != nil {
-				return fmt.Errorf("closing chunk %d (%s): %w", chunk.Index, chunk.Key, closeErr)
-			}
-			return nil
-		}
-		if errors.Is(err, cloud.ErrNotImplemented) {
-			if closeErr != nil {
-				return fmt.Errorf("closing chunk %d (%s): %w", chunk.Index, chunk.Key, closeErr)
-			}
-			return uploadChunkFileBuffered(ctx, storage, bucket, plan, chunk)
-		}
-		if closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("closing chunk file: %w", closeErr))
-		}
-		return fmt.Errorf("uploading chunk %d (%s): %w", chunk.Index, chunk.Key, err)
-	}
-
-	return uploadChunkFileBuffered(ctx, storage, bucket, plan, chunk)
-}
-
-func uploadChunkFileBuffered(ctx context.Context, storage cloud.Storage, bucket string, plan *WordlistPlan, chunk WordlistChunk) error {
-	data, err := os.ReadFile(chunk.Path)
-	if err != nil {
-		return fmt.Errorf("reading chunk %d (%s): %w", chunk.Index, chunk.Key, err)
-	}
-	if int64(len(data)) > plan.MaxChunkSize && plan.MaxChunkSize > 0 {
-		return fmt.Errorf("chunk %d (%s) is %d bytes, above max safe chunk size %d", chunk.Index, chunk.Key, len(data), plan.MaxChunkSize)
-	}
-	if err := storage.Upload(ctx, bucket, chunk.Key, data); err != nil {
-		return fmt.Errorf("uploading chunk %d (%s): %w", chunk.Index, chunk.Key, err)
 	}
 	return nil
 }
