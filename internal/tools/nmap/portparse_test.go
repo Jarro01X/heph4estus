@@ -282,11 +282,11 @@ func TestFormatPortSpec(t *testing.T) {
 
 func TestExtractPortFlag(t *testing.T) {
 	tests := []struct {
-		name              string
-		options           string
-		wantPortSpec      string
-		wantRemaining     string
-		wantFound         bool
+		name          string
+		options       string
+		wantPortSpec  string
+		wantRemaining string
+		wantFound     bool
 	}{
 		{
 			name:          "separate -p flag",
@@ -379,10 +379,10 @@ func TestParseFormatRoundTrip(t *testing.T) {
 		{"22,80,443", "22,80,443"},
 		{"1-5", "1-5"},
 		{"22,80,100-103,443", "22,80,100-103,443"},
-		{"443,22,80", "22,80,443"},                   // sorted
-		{"80,80,443,80", "80,443"},                    // deduplicated
-		{"1-5,3-8", "1-8"},                            // overlapping ranges collapsed
-		{"5,4,3,2,1", "1-5"},                          // reversed individual ports → range
+		{"443,22,80", "22,80,443"}, // sorted
+		{"80,80,443,80", "80,443"}, // deduplicated
+		{"1-5,3-8", "1-8"},         // overlapping ranges collapsed
+		{"5,4,3,2,1", "1-5"},       // reversed individual ports → range
 	}
 
 	for _, tt := range tests {

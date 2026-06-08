@@ -152,12 +152,12 @@ func (d Decision) String() string {
 type Reason int
 
 const (
-	ReasonInfraReady        Reason = iota // matching infra exists
-	ReasonInfraMissing                    // no infra deployed
-	ReasonInfraStale                      // outputs incomplete
-	ReasonToolMismatch                    // different tool deployed
-	ReasonProbeError                      // terraform failed
-	ReasonBlockedByPolicy                 // --no-deploy prevents action
+	ReasonInfraReady      Reason = iota // matching infra exists
+	ReasonInfraMissing                  // no infra deployed
+	ReasonInfraStale                    // outputs incomplete
+	ReasonToolMismatch                  // different tool deployed
+	ReasonProbeError                    // terraform failed
+	ReasonBlockedByPolicy               // --no-deploy prevents action
 )
 
 func (r Reason) String() string {

@@ -13,9 +13,9 @@ import (
 
 // ExportResult summarises what was written to the local output directory.
 type ExportResult struct {
-	Dir            string // root output dir: <out>/<tool>/<job_id>
-	ResultCount    int
-	ArtifactCount  int
+	Dir           string // root output dir: <out>/<tool>/<job_id>
+	ResultCount   int
+	ArtifactCount int
 }
 
 // ExportJob downloads results and artifacts from S3 to a predictable local
