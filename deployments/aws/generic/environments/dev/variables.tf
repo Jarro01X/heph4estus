@@ -15,6 +15,11 @@ variable "tool_name" {
   type        = string
 }
 
+variable "image_tag" {
+  description = "Immutable ECR image tag to deploy"
+  type        = string
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string

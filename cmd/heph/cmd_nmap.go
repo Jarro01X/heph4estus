@@ -369,9 +369,13 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 		useSpot := !isSelfhosted && resolveComputeMode(computeMode, workers)
 		if useSpot {
 			ecrURL := outputs["ecr_repo_url"]
+			imageTag, err := awsImageTagFromOutputs(outputs)
+			if err != nil {
+				return false, err
+			}
 			userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
 				ECRRepoURL: ecrURL,
-				ImageTag:   "latest",
+				ImageTag:   imageTag,
 				Region:     regionFromECR(ecrURL),
 				EnvVars:    workerEnv,
 			})

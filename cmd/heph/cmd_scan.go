@@ -557,9 +557,13 @@ func launchGenericWorkers(ctx context.Context, tool string, workers int, compute
 	useSpot := !cloudKind.IsSelfhostedFamily() && resolveComputeMode(computeMode, workers)
 	if useSpot {
 		ecrURL := outputs["ecr_repo_url"]
+		imageTag, err := awsImageTagFromOutputs(outputs)
+		if err != nil {
+			return err
+		}
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
 			ECRRepoURL: ecrURL,
-			ImageTag:   "latest",
+			ImageTag:   imageTag,
 			Region:     regionFromECR(ecrURL),
 			EnvVars:    workerEnv,
 		})

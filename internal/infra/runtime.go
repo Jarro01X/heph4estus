@@ -12,6 +12,8 @@ var AWSRequiredOutputKeys = []string{
 	"sqs_queue_url",
 	"s3_bucket_name",
 	"ecr_repo_url",
+	"image_tag",
+	"docker_image",
 	"ecs_cluster_name",
 	"task_definition_arn",
 	"subnet_ids",

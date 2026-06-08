@@ -3,6 +3,16 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.worker.repository_url
 }
 
+output "image_tag" {
+  description = "Immutable image tag used by ECS tasks"
+  value       = var.image_tag
+}
+
+output "docker_image" {
+  description = "Full immutable worker image reference"
+  value       = "${aws_ecr_repository.worker.repository_url}:${var.image_tag}"
+}
+
 output "ecs_cluster_arn" {
   description = "ARN of the ECS cluster"
   value       = aws_ecs_cluster.worker.arn

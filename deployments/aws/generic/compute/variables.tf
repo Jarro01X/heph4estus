@@ -25,6 +25,11 @@ variable "kms_key_arn" {
   type        = string
 }
 
+variable "image_tag" {
+  description = "Immutable ECR image tag used by ECS tasks"
+  type        = string
+}
+
 variable "task_cpu" {
   description = "CPU units for the ECS task"
   type        = number

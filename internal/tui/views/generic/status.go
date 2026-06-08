@@ -808,9 +808,16 @@ func (m *StatusModel) launchSpotWorkers() tea.Cmd {
 	infra := m.infra
 	sub := m.submitter
 	return func() tea.Msg {
+		imageTag := strings.TrimSpace(infra.ImageTag)
+		if imageTag == "" {
+			return spotLaunchMsg{launchProgressMsg: launchProgressMsg{
+				total: infra.WorkerCount,
+				err:   fmt.Errorf("terraform outputs missing image_tag"),
+			}}
+		}
 		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
 			ECRRepoURL: infra.ECRRepoURL,
-			ImageTag:   "latest",
+			ImageTag:   imageTag,
 			Region:     regionFromECR(infra.ECRRepoURL),
 			EnvVars: map[string]string{
 				"QUEUE_URL":          infra.SQSQueueURL,

@@ -19,17 +19,18 @@ type ImagePublisher interface {
 	Authenticate(ctx context.Context) error
 
 	// Publish tags the local image and pushes it to the remote registry.
-	// Returns the remote image reference (e.g. "123.dkr.ecr.../nmap:latest"
+	// Returns the remote image reference (e.g. "123.dkr.ecr.../nmap:tag"
 	// or "10.0.1.5:5000/heph-nmap-worker:latest").
 	Publish(ctx context.Context, localTag string, stream io.Writer) (remoteRef string, err error)
 }
 
 // ECRPublisher publishes images to AWS Elastic Container Registry.
 type ECRPublisher struct {
-	ECR     *ECRClient
-	Docker  *DockerClient
-	Region  string
-	RepoURL string // ecr_repo_url from terraform outputs
+	ECR      *ECRClient
+	Docker   *DockerClient
+	Region   string
+	RepoURL  string // ecr_repo_url from terraform outputs
+	ImageTag string // image_tag from terraform outputs
 }
 
 func (p *ECRPublisher) Authenticate(ctx context.Context) error {
@@ -40,7 +41,10 @@ func (p *ECRPublisher) Publish(ctx context.Context, localTag string, stream io.W
 	if p.RepoURL == "" {
 		return "", fmt.Errorf("ecr_repo_url is required for AWS image publish")
 	}
-	remoteTag := p.RepoURL + ":latest"
+	if p.ImageTag == "" {
+		return "", fmt.Errorf("image_tag is required for AWS image publish")
+	}
+	remoteTag := p.RepoURL + ":" + p.ImageTag
 	if err := p.Docker.Tag(ctx, localTag, remoteTag); err != nil {
 		return "", err
 	}
@@ -94,10 +98,11 @@ func NewPublisher(kind cloud.Kind, docker *DockerClient, ecr *ECRClient, outputs
 		}
 	}
 	return &ECRPublisher{
-		ECR:     ecr,
-		Docker:  docker,
-		Region:  region,
-		RepoURL: outputs["ecr_repo_url"],
+		ECR:      ecr,
+		Docker:   docker,
+		Region:   region,
+		RepoURL:  outputs["ecr_repo_url"],
+		ImageTag: outputs["image_tag"],
 	}
 }
 

@@ -434,6 +434,7 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 				FleetWorkerCount:      parseInt(outputs["worker_count"]),
 				SQSQueueURL:           outputs["sqs_queue_url"],
 				ECRRepoURL:            outputs["ecr_repo_url"],
+				ImageTag:              outputs["image_tag"],
 				S3BucketName:          outputs["s3_bucket_name"],
 				S3Endpoint:            outputs["s3_endpoint"],
 				S3Region:              outputs["s3_region"],
