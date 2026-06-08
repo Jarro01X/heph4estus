@@ -142,9 +142,11 @@ make tf-security
 
 Use Trivy (`make tf-security`) for Terraform security scanning. `tfsec` is legacy and should not be used for new checks. Phase 11 separates Terraform lint cleanup from AWS security hardening, so Trivy findings are handled in dedicated follow-up PRs.
 
-The AWS generic dev environment uses a customer-managed KMS key for CloudWatch log groups, ECR repositories, SQS queues, and the S3 result bucket. The result bucket also writes S3 server access logs to a dedicated log bucket that uses SSE-S3, which is required for S3 log delivery destinations. AWS worker images are published with generated immutable ECR tags and ECS task definitions reference the full immutable image.
+The AWS generic dev environment uses a customer-managed KMS key for CloudWatch log groups, VPC Flow Logs, ECR repositories, SQS queues, and the S3 result bucket. The result bucket also writes S3 server access logs to a dedicated log bucket that uses SSE-S3, which is required for S3 log delivery destinations. AWS worker images are published with generated immutable ECR tags and ECS task definitions reference the full immutable image.
 
-After the encryption, logging, and immutable image-publishing baseline, expected remaining Trivy findings are tracked separately as networking/IAM audit findings for PR 11.4.
+Scanner worker egress defaults to arbitrary IPv4 targets because scan targets are user-supplied and may be anywhere on the public internet. Constrained environments can set `scanner_egress_ipv4_cidr_blocks` and `scanner_egress_ipv6_cidr_blocks` Terraform variables to narrower CIDR lists. The unrestricted default is explicitly documented in Terraform as an intentional scanner exception.
+
+After the encryption, logging, immutable image-publishing, networking, and IAM baseline, `make tf-security` should have no unreviewed AWS findings.
 
 ### 5. VPS Scan Execution
 
