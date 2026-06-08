@@ -33,3 +33,26 @@ variable "multi_nat" {
   type        = bool
   default     = false
 }
+
+variable "kms_key_arn" {
+  description = "ARN of the customer-managed KMS key used by encrypted AWS networking logs"
+  type        = string
+}
+
+variable "log_retention_days" {
+  description = "Number of days to retain VPC Flow Logs"
+  type        = number
+  default     = 30
+}
+
+variable "scanner_egress_ipv4_cidr_blocks" {
+  description = "IPv4 CIDR blocks scanner workers may egress to"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "scanner_egress_ipv6_cidr_blocks" {
+  description = "IPv6 CIDR blocks scanner workers may egress to when IPv6 is enabled"
+  type        = list(string)
+  default     = ["::/0"]
+}
