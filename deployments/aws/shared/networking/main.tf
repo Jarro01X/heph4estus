@@ -2,6 +2,26 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+locals {
+  nat_gateway_count         = var.multi_nat ? var.az_count : 1
+  private_route_table_count = var.multi_nat ? var.az_count : 1
+}
+
+moved {
+  from = aws_eip.nat
+  to   = aws_eip.nat[0]
+}
+
+moved {
+  from = aws_nat_gateway.this
+  to   = aws_nat_gateway.this[0]
+}
+
+moved {
+  from = aws_route_table.private
+  to   = aws_route_table.private[0]
+}
+
 # VPC for the application
 resource "aws_vpc" "this" {
   cidr_block                       = var.vpc_cidr
@@ -74,10 +94,11 @@ resource "aws_egress_only_internet_gateway" "this" {
 
 # Elastic IP for NAT Gateway
 resource "aws_eip" "nat" {
+  count  = local.nat_gateway_count
   domain = "vpc"
 
   tags = {
-    Name        = "${var.name_prefix}-nat-eip"
+    Name        = var.multi_nat ? "${var.name_prefix}-nat-eip-${count.index + 1}" : "${var.name_prefix}-nat-eip"
     Environment = var.environment
     Terraform   = "true"
   }
@@ -85,11 +106,12 @@ resource "aws_eip" "nat" {
 
 # NAT Gateway
 resource "aws_nat_gateway" "this" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id # Place in first public subnet
+  count         = local.nat_gateway_count
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
 
   tags = {
-    Name        = "${var.name_prefix}-nat"
+    Name        = var.multi_nat ? "${var.name_prefix}-nat-${count.index + 1}" : "${var.name_prefix}-nat"
     Environment = var.environment
     Terraform   = "true"
   }
@@ -124,11 +146,12 @@ resource "aws_route_table" "public" {
 
 # Route table for private subnets
 resource "aws_route_table" "private" {
+  count  = local.private_route_table_count
   vpc_id = aws_vpc.this.id
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+    nat_gateway_id = aws_nat_gateway.this[var.multi_nat ? count.index : 0].id
   }
 
   dynamic "route" {
@@ -141,7 +164,7 @@ resource "aws_route_table" "private" {
   }
 
   tags = {
-    Name        = "${var.name_prefix}-private-rt"
+    Name        = var.multi_nat ? "${var.name_prefix}-private-rt-${count.index + 1}" : "${var.name_prefix}-private-rt"
     Environment = var.environment
     Terraform   = "true"
   }
@@ -158,7 +181,7 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table_association" "private" {
   count          = var.az_count
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[var.multi_nat ? count.index : 0].id
 }
 
 # Security group for ECS tasks
