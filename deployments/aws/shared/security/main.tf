@@ -76,7 +76,9 @@ resource "aws_iam_policy" "step_functions_logs" {
   })
 }
 
-# Custom policy for Step Functions to interact with other services
+# Step Functions needs PassRole to run ECS tasks. The PassRole statement below
+# is scoped to this module's ECS roles and ecs-tasks.amazonaws.com.
+#trivy:ignore:AVD-AWS-0342
 resource "aws_iam_policy" "step_functions_services" {
   name        = "${var.name_prefix}-step-functions-services-policy"
   description = "Policy for Step Functions to interact with other AWS services"
@@ -91,12 +93,26 @@ resource "aws_iam_policy" "step_functions_services" {
           "ecs:RunTask",
           "ecs:StopTask",
           "ecs:DescribeTasks",
-          "iam:PassRole",
           "events:PutTargets",
           "events:PutRule",
           "events:DescribeRule"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.ecs_task.arn
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       },
       {
         Effect   = "Allow"
