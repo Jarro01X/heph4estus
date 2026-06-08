@@ -21,3 +21,9 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "enable_ipv6" {
+  description = "Enable dual-stack IPv6 networking with egress-only internet gateway for private subnet IPv6 egress"
+  type        = bool
+  default     = false
+}
