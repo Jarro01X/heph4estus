@@ -83,7 +83,7 @@ func (c *SQSClient) Receive(ctx context.Context, queueID string) (*cloud.Message
 		QueueUrl:            &queueID,
 		MaxNumberOfMessages: 1,
 		WaitTimeSeconds:     20,
-		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameAll},
+		AttributeNames:      []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameAll},
 	})
 	if err != nil {
 		return nil, err

@@ -36,8 +36,8 @@ func (s *stubStorage) Download(_ context.Context, _, key string) ([]byte, error)
 
 func TestExportJobWritesResultsAndArtifacts(t *testing.T) {
 	store := &stubStorage{objects: map[string][]byte{
-		"scans/httpx/job-1/results/example.com_123.json": []byte(`{"target":"example.com"}`),
-		"scans/httpx/job-1/results/test.com_456.json":    []byte(`{"target":"test.com"}`),
+		"scans/httpx/job-1/results/example.com_123.json":  []byte(`{"target":"example.com"}`),
+		"scans/httpx/job-1/results/test.com_456.json":     []byte(`{"target":"test.com"}`),
 		"scans/httpx/job-1/artifacts/example.com_123.xml": []byte("<xml/>"),
 	}}
 
