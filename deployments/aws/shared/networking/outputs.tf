@@ -28,6 +28,11 @@ output "public_subnet_ipv6_cidr_blocks" {
   value       = var.enable_ipv6 ? aws_subnet.public[*].ipv6_cidr_block : []
 }
 
+output "nat_gateway_public_ips" {
+  description = "Public IPv4 addresses assigned to NAT gateways"
+  value       = aws_eip.nat[*].public_ip
+}
+
 output "ecs_security_group_id" {
   description = "ID of the security group for ECS tasks"
   value       = aws_security_group.ecs_tasks.id

@@ -15,6 +15,7 @@ module "networking" {
   name_prefix = var.name_prefix
   environment = local.environment
   enable_ipv6 = var.enable_ipv6
+  multi_nat   = var.multi_nat
 }
 
 # Create storage for results

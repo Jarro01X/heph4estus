@@ -33,6 +33,12 @@ variable "enable_ipv6" {
   default     = false
 }
 
+variable "multi_nat" {
+  description = "Create one NAT gateway per availability zone for IPv4 source IP diversity"
+  type        = bool
+  default     = false
+}
+
 variable "log_retention_days" {
   description = "Number of days to retain logs"
   type        = number

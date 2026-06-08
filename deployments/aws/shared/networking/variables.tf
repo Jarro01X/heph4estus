@@ -27,3 +27,9 @@ variable "enable_ipv6" {
   type        = bool
   default     = false
 }
+
+variable "multi_nat" {
+  description = "Create one NAT gateway per availability zone for IPv4 source IP diversity"
+  type        = bool
+  default     = false
+}

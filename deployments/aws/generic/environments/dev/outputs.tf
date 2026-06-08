@@ -53,6 +53,11 @@ output "public_subnet_ipv6_cidr_blocks" {
   value       = module.networking.public_subnet_ipv6_cidr_blocks
 }
 
+output "nat_gateway_public_ips" {
+  description = "Public IPv4 addresses assigned to NAT gateways"
+  value       = module.networking.nat_gateway_public_ips
+}
+
 output "egress_only_internet_gateway_id" {
   description = "ID of the egress-only internet gateway when IPv6 is enabled"
   value       = module.networking.egress_only_internet_gateway_id
