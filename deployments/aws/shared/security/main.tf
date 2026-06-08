@@ -40,7 +40,7 @@ resource "aws_iam_role" "step_functions" {
 resource "aws_iam_policy" "step_functions_logs" {
   name        = "${var.name_prefix}-step-functions-logs-policy"
   description = "Policy for Step Functions logs and X-Ray"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -71,7 +71,7 @@ resource "aws_iam_policy" "step_functions_logs" {
 resource "aws_iam_policy" "step_functions_services" {
   name        = "${var.name_prefix}-step-functions-services-policy"
   description = "Policy for Step Functions to interact with other AWS services"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -138,7 +138,7 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
 resource "aws_iam_policy" "ecs_execution_custom" {
   name        = "${var.name_prefix}-ecs-execution-custom-policy"
   description = "Custom policy for ECS execution role"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -196,7 +196,7 @@ resource "aws_iam_role" "ecs_task" {
 resource "aws_iam_policy" "ecs_task_custom" {
   name        = "${var.name_prefix}-ecs-task-custom-policy"
   description = "Custom policy for ECS task role"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
