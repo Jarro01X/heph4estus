@@ -48,7 +48,7 @@ resource "aws_cloudwatch_log_group" "worker_logs" {
 # ECR repository for container images
 resource "aws_ecr_repository" "worker" {
   name                 = "${var.name_prefix}-${var.tool_name}"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
 
   encryption_configuration {
@@ -118,7 +118,7 @@ resource "aws_ecs_task_definition" "worker" {
   container_definitions = jsonencode([
     {
       name        = "${var.tool_name}-worker"
-      image       = "${aws_ecr_repository.worker.repository_url}:latest"
+      image       = "${aws_ecr_repository.worker.repository_url}:${var.image_tag}"
       environment = local.all_env
       logConfiguration = {
         logDriver = "awslogs"

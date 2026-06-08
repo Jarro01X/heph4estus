@@ -114,6 +114,7 @@ type InfraOutputs struct {
 
 	SQSQueueURL       string
 	ECRRepoURL        string
+	ImageTag          string
 	S3BucketName      string
 	S3Endpoint        string
 	S3Region          string

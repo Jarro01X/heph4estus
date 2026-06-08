@@ -18,6 +18,16 @@ output "ecr_repo_url" {
   value       = module.compute.ecr_repository_url
 }
 
+output "image_tag" {
+  description = "Immutable image tag used by AWS workers"
+  value       = module.compute.image_tag
+}
+
+output "docker_image" {
+  description = "Full immutable worker image reference"
+  value       = module.compute.docker_image
+}
+
 output "s3_bucket_name" {
   description = "Name of the S3 bucket for results"
   value       = module.storage.bucket_id

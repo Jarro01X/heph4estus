@@ -150,6 +150,7 @@ module "compute" {
   name_prefix            = var.name_prefix
   environment            = local.environment
   aws_region             = var.aws_region
+  image_tag              = var.image_tag
   log_retention_days     = var.log_retention_days
   kms_key_arn            = aws_kms_key.infrastructure.arn
   task_cpu               = var.task_cpu

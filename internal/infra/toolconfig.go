@@ -1,10 +1,13 @@
 package infra
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/modules"
@@ -68,15 +71,34 @@ func ResolveToolConfig(tool string, kind ...cloud.Kind) (*ToolConfig, error) {
 		cfg.TerraformDir = "deployments/vultr"
 		cfg.TerraformVars = providerNativeTerraformVars(cloudKind, tool, cfg.DockerTag)
 	default:
+		imageTag, err := NewAWSImageTag(tool)
+		if err != nil {
+			return nil, err
+		}
 		cfg.TerraformDir = "deployments/aws/generic/environments/dev"
 		cfg.TerraformVars = map[string]string{
 			"tool_name":   tool,
+			"image_tag":   imageTag,
 			"task_cpu":    fmt.Sprintf("%d", mod.DefaultCPU),
 			"task_memory": fmt.Sprintf("%d", mod.DefaultMemory),
 		}
 	}
 
 	return cfg, nil
+}
+
+// NewAWSImageTag returns a unique ECR tag for a single AWS deploy. It does
+// not include a repository name, so it is safe to pass directly to Terraform.
+func NewAWSImageTag(tool string) (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("generating AWS image tag suffix: %w", err)
+	}
+	return formatAWSImageTag(tool, time.Now().UTC(), hex.EncodeToString(suffix[:])), nil
+}
+
+func formatAWSImageTag(tool string, ts time.Time, suffix string) string {
+	return fmt.Sprintf("heph-%s-worker-%s-%s", tool, ts.UTC().Format("20060102T150405Z"), suffix)
 }
 
 func providerNativeTerraformVars(kind cloud.Kind, tool, dockerTag string) map[string]string {
