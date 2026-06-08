@@ -1,3 +1,14 @@
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
 # Main SQS queue for tasks
 resource "aws_sqs_queue" "tasks" {
   name                       = "${var.name_prefix}-tasks"
