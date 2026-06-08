@@ -54,7 +54,7 @@ resource "aws_subnet" "public" {
   cidr_block                      = cidrsubnet(var.vpc_cidr, 8, count.index + var.az_count)
   ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, count.index + var.az_count) : null
   availability_zone               = data.aws_availability_zones.available.names[count.index]
-  map_public_ip_on_launch         = true
+  map_public_ip_on_launch         = false
   assign_ipv6_address_on_creation = var.enable_ipv6
 
   tags = {
@@ -195,28 +195,114 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[var.multi_nat ? count.index : 0].id
 }
 
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/aws/vpc-flow-logs/${var.name_prefix}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+
+  tags = {
+    Name        = "${var.name_prefix}-vpc-flow-logs"
+    Environment = var.environment
+    Terraform   = "true"
+  }
+}
+
+resource "aws_iam_role" "vpc_flow_logs" {
+  name = "${var.name_prefix}-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.name_prefix}-vpc-flow-logs-role"
+    Environment = var.environment
+    Terraform   = "true"
+  }
+}
+
+resource "aws_iam_policy" "vpc_flow_logs" {
+  name        = "${var.name_prefix}-vpc-flow-logs-policy"
+  description = "Allow VPC Flow Logs to write to CloudWatch Logs"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "${aws_cloudwatch_log_group.vpc_flow_logs.arn}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "vpc_flow_logs" {
+  role       = aws_iam_role.vpc_flow_logs.name
+  policy_arn = aws_iam_policy.vpc_flow_logs.arn
+}
+
+resource "aws_flow_log" "vpc" {
+  iam_role_arn    = aws_iam_role.vpc_flow_logs.arn
+  log_destination = aws_cloudwatch_log_group.vpc_flow_logs.arn
+  traffic_type    = "ALL"
+  vpc_id          = aws_vpc.this.id
+
+  tags = {
+    Name        = "${var.name_prefix}-vpc-flow-log"
+    Environment = var.environment
+    Terraform   = "true"
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.vpc_flow_logs]
+}
+
 # Security group for ECS tasks
+# Scanner workers need arbitrary target reachability by default. Operators can
+# narrow scanner_egress_ipv4_cidr_blocks for constrained environments.
+#trivy:ignore:AVD-AWS-0104
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.name_prefix}-ecs-tasks-sg"
   description = "Security group for Nmap scanner ECS tasks"
   vpc_id      = aws_vpc.this.id
 
-  # Allow outbound internet access for Nmap scanning
   egress {
+    description = "Allow scanner egress to configured IPv4 targets"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.scanner_egress_ipv4_cidr_blocks
   }
 
   dynamic "egress" {
     for_each = var.enable_ipv6 ? [1] : []
 
     content {
+      description      = "Allow scanner egress to configured IPv6 targets"
       from_port        = 0
       to_port          = 0
       protocol         = "-1"
-      ipv6_cidr_blocks = ["::/0"]
+      ipv6_cidr_blocks = var.scanner_egress_ipv6_cidr_blocks
     }
   }
 

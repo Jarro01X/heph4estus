@@ -110,6 +110,11 @@ module "networking" {
   environment = local.environment
   enable_ipv6 = var.enable_ipv6
   multi_nat   = var.multi_nat
+  kms_key_arn = aws_kms_key.infrastructure.arn
+
+  log_retention_days              = var.log_retention_days
+  scanner_egress_ipv4_cidr_blocks = var.scanner_egress_ipv4_cidr_blocks
+  scanner_egress_ipv6_cidr_blocks = var.scanner_egress_ipv6_cidr_blocks
 }
 
 # Create storage for results
