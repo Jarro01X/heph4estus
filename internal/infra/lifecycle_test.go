@@ -11,11 +11,15 @@ import (
 
 // fullOutputs returns a complete set of terraform outputs for testing.
 func fullOutputs(tool string) map[string]string {
+	repoURL := "123.dkr.ecr.us-east-1.amazonaws.com/" + tool
+	imageTag := testAWSImageTag(tool)
 	return map[string]string{
 		"tool_name":            tool,
 		"sqs_queue_url":        "https://sqs.example.com/q",
 		"s3_bucket_name":       "results-bucket",
-		"ecr_repo_url":         "123.dkr.ecr.us-east-1.amazonaws.com/" + tool,
+		"ecr_repo_url":         repoURL,
+		"image_tag":            imageTag,
+		"docker_image":         repoURL + ":" + imageTag,
 		"ecs_cluster_name":     "cluster",
 		"task_definition_arn":  "arn:aws:ecs:td",
 		"subnet_ids":           "[subnet-a subnet-b]",
@@ -25,12 +29,18 @@ func fullOutputs(tool string) map[string]string {
 	}
 }
 
+func testAWSImageTag(tool string) string {
+	return "heph-" + tool + "-worker-20260608T032422Z-a1b2c3d4"
+}
+
 func TestProbe_Ready(t *testing.T) {
 	outputJSON := `{
 		"tool_name":{"value":"nmap"},
 		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
 		"s3_bucket_name":{"value":"bucket"},
 		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"image_tag":{"value":"heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
+		"docker_image":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
 		"ecs_cluster_name":{"value":"cluster"},
 		"task_definition_arn":{"value":"arn:aws:ecs:td"},
 		"subnet_ids":{"value":"[subnet-a]"},
@@ -70,6 +80,8 @@ func TestProbe_Mismatch(t *testing.T) {
 		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
 		"s3_bucket_name":{"value":"bucket"},
 		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/httpx"},
+		"image_tag":{"value":"heph-httpx-worker-20260608T032422Z-a1b2c3d4"},
+		"docker_image":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/httpx:heph-httpx-worker-20260608T032422Z-a1b2c3d4"},
 		"ecs_cluster_name":{"value":"cluster"},
 		"task_definition_arn":{"value":"arn:aws:ecs:td"},
 		"subnet_ids":{"value":"[subnet-a]"},
@@ -116,6 +128,8 @@ func TestProbe_LegacyNoToolName(t *testing.T) {
 		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
 		"s3_bucket_name":{"value":"bucket"},
 		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/old"},
+		"image_tag":{"value":"heph-old-worker-20260608T032422Z-a1b2c3d4"},
+		"docker_image":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/old:heph-old-worker-20260608T032422Z-a1b2c3d4"},
 		"ecs_cluster_name":{"value":"cluster"},
 		"task_definition_arn":{"value":"arn:aws:ecs:td"},
 		"subnet_ids":{"value":"[subnet-a]"},
@@ -151,6 +165,8 @@ func TestProbe_MissingSpotOutputs(t *testing.T) {
 		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
 		"s3_bucket_name":{"value":"bucket"},
 		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"image_tag":{"value":"heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
+		"docker_image":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
 		"ecs_cluster_name":{"value":"cluster"},
 		"task_definition_arn":{"value":"arn:aws:ecs:td"},
 		"subnet_ids":{"value":"[subnet-a]"},
@@ -294,6 +310,8 @@ func TestRequiredOutputKeysForCloud_AWS(t *testing.T) {
 	want := map[string]bool{
 		"sqs_queue_url":        true,
 		"ecr_repo_url":         true,
+		"image_tag":            true,
+		"docker_image":         true,
 		"ecs_cluster_name":     true,
 		"ami_id":               true,
 		"instance_profile_arn": true,
@@ -529,6 +547,8 @@ func TestProbe_CloudMismatch_IgnoredForAWS(t *testing.T) {
 		"sqs_queue_url":{"value":"https://sqs.example.com/q"},
 		"s3_bucket_name":{"value":"bucket"},
 		"ecr_repo_url":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap"},
+		"image_tag":{"value":"heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
+		"docker_image":{"value":"123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4"},
 		"ecs_cluster_name":{"value":"cluster"},
 		"task_definition_arn":{"value":"arn:aws:ecs:td"},
 		"subnet_ids":{"value":"[subnet-a]"},

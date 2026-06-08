@@ -94,6 +94,8 @@ func TestDeployModel_LifecycleReuse(t *testing.T) {
 	outputs := map[string]string{
 		"sqs_queue_url":       "https://sqs.example.com/q",
 		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":           "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+		"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 		"s3_bucket_name":      "results-bucket",
 		"ecs_cluster_name":    "nmap-cluster",
 		"task_definition_arn": "arn:aws:ecs:td",
@@ -126,6 +128,13 @@ func TestDeployModel_LifecycleReuse(t *testing.T) {
 		}
 		if nav.Target != core.ViewNmapStatus {
 			t.Fatalf("expected ViewNmapStatus, got %v", nav.Target)
+		}
+		infraOut, ok := nav.Data.(core.InfraOutputs)
+		if !ok {
+			t.Fatalf("expected InfraOutputs, got %T", nav.Data)
+		}
+		if infraOut.ImageTag != outputs["image_tag"] {
+			t.Fatalf("ImageTag = %q, want %q", infraOut.ImageTag, outputs["image_tag"])
 		}
 	}
 }
@@ -173,6 +182,8 @@ func TestDeployModel_FullPipeline(t *testing.T) {
 		readOutputs: map[string]string{
 			"sqs_queue_url":       "https://sqs.example.com/q",
 			"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+			"image_tag":           "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+			"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 			"s3_bucket_name":      "results-bucket",
 			"ecs_cluster_name":    "nmap-cluster",
 			"task_definition_arn": "arn:aws:ecs:td",
@@ -321,6 +332,8 @@ func TestDeployModel_GenericPostDeployNavigation(t *testing.T) {
 		readOutputs: map[string]string{
 			"sqs_queue_url":       "https://sqs.example.com/q",
 			"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/httpx",
+			"image_tag":           "heph-httpx-worker-20260608T032422Z-a1b2c3d4",
+			"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/httpx:heph-httpx-worker-20260608T032422Z-a1b2c3d4",
 			"s3_bucket_name":      "results-bucket",
 			"ecs_cluster_name":    "cluster",
 			"task_definition_arn": "arn:aws:ecs:td",
@@ -541,6 +554,8 @@ func TestDeployModel_ReuseCarriesCleanupFields(t *testing.T) {
 	outputs := map[string]string{
 		"sqs_queue_url":       "https://sqs.example.com/q",
 		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":           "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+		"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 		"s3_bucket_name":      "bucket",
 		"ecs_cluster_name":    "cluster",
 		"task_definition_arn": "arn:aws:ecs:td",
@@ -585,6 +600,8 @@ func TestDeployModel_FreshDeployCarriesCleanupFields(t *testing.T) {
 		readOutputs: map[string]string{
 			"sqs_queue_url":       "https://sqs/q",
 			"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+			"image_tag":           "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+			"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 			"s3_bucket_name":      "bucket",
 			"ecs_cluster_name":    "cluster",
 			"task_definition_arn": "arn:td",
@@ -667,6 +684,8 @@ func TestDeployModel_ReuseCarriesCloudKind(t *testing.T) {
 	outputs := map[string]string{
 		"sqs_queue_url":       "https://sqs.example.com/q",
 		"ecr_repo_url":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":           "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+		"docker_image":        "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 		"s3_bucket_name":      "bucket",
 		"ecs_cluster_name":    "cluster",
 		"task_definition_arn": "arn:aws:ecs:td",

@@ -93,6 +93,8 @@ func testOutputs() map[string]string {
 		"sqs_queue_url":        "queue-url",
 		"s3_bucket_name":       "results-bucket",
 		"ecr_repo_url":         "123.dkr.ecr.us-east-1.amazonaws.com/repo",
+		"image_tag":            "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+		"docker_image":         "123.dkr.ecr.us-east-1.amazonaws.com/repo:heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 		"ecs_cluster_name":     "cluster",
 		"task_definition_arn":  "task-def",
 		"subnet_ids":           "[subnet-a subnet-b]",

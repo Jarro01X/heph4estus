@@ -76,6 +76,8 @@ func (t *mockTracker) CountResults(_ context.Context, _, _ string) (int, error) 
 func testInfra() core.InfraOutputs {
 	return core.InfraOutputs{
 		SQSQueueURL:    "https://sqs.example.com/q",
+		ECRRepoURL:     "123.dkr.ecr.us-east-1.amazonaws.com/httpx-worker",
+		ImageTag:       "heph-httpx-worker-20260608T032422Z-a1b2c3d4",
 		S3BucketName:   "test-bucket",
 		ECSClusterName: "test-cluster",
 		ToolName:       "httpx",

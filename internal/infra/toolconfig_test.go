@@ -2,8 +2,10 @@ package infra
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"heph4estus/internal/cloud"
 	naabutool "heph4estus/internal/tools/naabu"
@@ -25,6 +27,27 @@ func TestResolveToolConfig_Nmap(t *testing.T) {
 	}
 	if cfg.TerraformVars["tool_name"] != "nmap" {
 		t.Errorf("TerraformVars[tool_name] = %q", cfg.TerraformVars["tool_name"])
+	}
+	assertAWSImageTag(t, "nmap", cfg.TerraformVars["image_tag"])
+	if cfg.DockerTag != "heph-nmap-worker:latest" {
+		t.Errorf("DockerTag = %q, want heph-nmap-worker:latest", cfg.DockerTag)
+	}
+}
+
+func TestFormatAWSImageTag(t *testing.T) {
+	ts := time.Date(2026, 6, 8, 3, 24, 22, 0, time.FixedZone("PDT", -7*60*60))
+	got := formatAWSImageTag("nmap", ts, "a1b2c3d4")
+	want := "heph-nmap-worker-20260608T102422Z-a1b2c3d4"
+	if got != want {
+		t.Fatalf("formatAWSImageTag() = %q, want %q", got, want)
+	}
+}
+
+func assertAWSImageTag(t *testing.T, tool, tag string) {
+	t.Helper()
+	pattern := fmt.Sprintf(`^heph-%s-worker-\d{8}T\d{6}Z-[0-9a-f]{8}$`, regexp.QuoteMeta(tool))
+	if !regexp.MustCompile(pattern).MatchString(tag) {
+		t.Fatalf("image_tag = %q, want pattern %s", tag, pattern)
 	}
 }
 

@@ -32,15 +32,16 @@ func TestECRPublisher_Publish(t *testing.T) {
 	cap, exec := newCapturingExecutor("")
 	docker := &DockerClient{runCmd: exec, logger: nopLogger{}}
 	pub := &ECRPublisher{
-		Docker:  docker,
-		RepoURL: "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		Docker:   docker,
+		RepoURL:  "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		ImageTag: "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 	}
 
 	ref, err := pub.Publish(context.Background(), "heph-nmap-worker:latest", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expected := "123.dkr.ecr.us-east-1.amazonaws.com/nmap:latest"
+	expected := "123.dkr.ecr.us-east-1.amazonaws.com/nmap:heph-nmap-worker-20260608T032422Z-a1b2c3d4"
 	if ref != expected {
 		t.Fatalf("expected ref %q, got %q", expected, ref)
 	}
@@ -54,11 +55,23 @@ func TestECRPublisher_Publish(t *testing.T) {
 
 func TestECRPublisher_Publish_MissingRepoURL(t *testing.T) {
 	pub := &ECRPublisher{
-		Docker: &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}},
+		Docker:   &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}},
+		ImageTag: "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 	}
 	_, err := pub.Publish(context.Background(), "img:latest", nil)
 	if err == nil {
 		t.Fatal("expected error for missing ecr_repo_url")
+	}
+}
+
+func TestECRPublisher_Publish_MissingImageTag(t *testing.T) {
+	pub := &ECRPublisher{
+		Docker:  &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}},
+		RepoURL: "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+	}
+	_, err := pub.Publish(context.Background(), "img:latest", nil)
+	if err == nil {
+		t.Fatal("expected error for missing image_tag")
 	}
 }
 
@@ -155,13 +168,20 @@ func TestRegistryPublisher_Publish_MissingRegistryURL(t *testing.T) {
 }
 
 func TestNewPublisher_AWS(t *testing.T) {
-	outputs := map[string]string{"ecr_repo_url": "123.dkr.ecr.us-east-1.amazonaws.com/nmap"}
+	outputs := map[string]string{
+		"ecr_repo_url": "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":    "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+	}
 	docker := &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}}
 	ecr := &ECRClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}}
 
 	pub := NewPublisher(cloud.KindAWS, docker, ecr, outputs, "us-east-1")
-	if _, ok := pub.(*ECRPublisher); !ok {
+	ecrPub, ok := pub.(*ECRPublisher)
+	if !ok {
 		t.Fatalf("expected *ECRPublisher, got %T", pub)
+	}
+	if ecrPub.ImageTag != outputs["image_tag"] {
+		t.Fatalf("ImageTag = %q, want %q", ecrPub.ImageTag, outputs["image_tag"])
 	}
 }
 
@@ -188,13 +208,20 @@ func TestNewPublisher_Selfhosted(t *testing.T) {
 }
 
 func TestNewPublisher_EmptyKindDefaultsToAWS(t *testing.T) {
-	outputs := map[string]string{"ecr_repo_url": "123.dkr.ecr.us-east-1.amazonaws.com/nmap"}
+	outputs := map[string]string{
+		"ecr_repo_url": "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":    "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+	}
 	docker := &DockerClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}}
 	ecr := &ECRClient{runCmd: newMockExecutor("", "", 0, nil), logger: nopLogger{}}
 
 	pub := NewPublisher("", docker, ecr, outputs, "us-east-1")
-	if _, ok := pub.(*ECRPublisher); !ok {
+	ecrPub, ok := pub.(*ECRPublisher)
+	if !ok {
 		t.Fatalf("empty kind should default to ECRPublisher, got %T", pub)
+	}
+	if ecrPub.ImageTag != outputs["image_tag"] {
+		t.Fatalf("ImageTag = %q, want %q", ecrPub.ImageTag, outputs["image_tag"])
 	}
 }
 
