@@ -360,6 +360,22 @@ Future nmap results will land under the generic job-scoped prefixes (`scans/nmap
 
 ## Development
 
+Before opening a PR, run the fast local checks:
+
+```bash
+make fmt-check
+make vet
+make test
+make lint
+```
+
+If `make lint` fails because the installed `golangci-lint` binary was built with an older Go version than the module targets, install the repo-pinned linter and rerun it:
+
+```bash
+make install-lint
+make lint
+```
+
 For manual infrastructure management during development:
 
 ```bash
