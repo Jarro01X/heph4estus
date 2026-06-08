@@ -3,6 +3,11 @@ output "vpc_id" {
   value       = module.networking.vpc_id
 }
 
+output "vpc_ipv6_cidr_block" {
+  description = "Generated IPv6 CIDR block for the VPC when IPv6 is enabled"
+  value       = module.networking.vpc_ipv6_cidr_block
+}
+
 output "sqs_queue_url" {
   description = "URL of the SQS queue"
   value       = module.messaging.queue_url
@@ -36,6 +41,21 @@ output "security_group_id" {
 output "subnet_ids" {
   description = "Private subnet IDs for ECS tasks"
   value       = join(" ", module.networking.private_subnet_ids)
+}
+
+output "private_subnet_ipv6_cidr_blocks" {
+  description = "IPv6 CIDR blocks assigned to private subnets when IPv6 is enabled"
+  value       = module.networking.private_subnet_ipv6_cidr_blocks
+}
+
+output "public_subnet_ipv6_cidr_blocks" {
+  description = "IPv6 CIDR blocks assigned to public subnets when IPv6 is enabled"
+  value       = module.networking.public_subnet_ipv6_cidr_blocks
+}
+
+output "egress_only_internet_gateway_id" {
+  description = "ID of the egress-only internet gateway when IPv6 is enabled"
+  value       = module.networking.egress_only_internet_gateway_id
 }
 
 output "instance_profile_arn" {

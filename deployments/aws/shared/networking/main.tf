@@ -4,9 +4,10 @@ data "aws_availability_zones" "available" {
 
 # VPC for the application
 resource "aws_vpc" "this" {
-  cidr_block           = var.vpc_cidr
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  cidr_block                       = var.vpc_cidr
+  assign_generated_ipv6_cidr_block = var.enable_ipv6
+  enable_dns_hostnames             = true
+  enable_dns_support               = true
 
   tags = {
     Name        = "${var.name_prefix}-vpc"
@@ -17,11 +18,13 @@ resource "aws_vpc" "this" {
 
 # Public subnets for NAT gateway and internet-facing resources
 resource "aws_subnet" "public" {
-  count                   = var.az_count
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index + var.az_count)
-  availability_zone       = data.aws_availability_zones.available.names[count.index]
-  map_public_ip_on_launch = true
+  count                           = var.az_count
+  vpc_id                          = aws_vpc.this.id
+  cidr_block                      = cidrsubnet(var.vpc_cidr, 8, count.index + var.az_count)
+  ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, count.index + var.az_count) : null
+  availability_zone               = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch         = true
+  assign_ipv6_address_on_creation = var.enable_ipv6
 
   tags = {
     Name        = "${var.name_prefix}-public-${count.index + 1}"
@@ -32,10 +35,12 @@ resource "aws_subnet" "public" {
 
 # Private subnets for ECS tasks and internal resources
 resource "aws_subnet" "private" {
-  count             = var.az_count
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)
-  availability_zone = data.aws_availability_zones.available.names[count.index]
+  count                           = var.az_count
+  vpc_id                          = aws_vpc.this.id
+  cidr_block                      = cidrsubnet(var.vpc_cidr, 8, count.index)
+  ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, count.index) : null
+  availability_zone               = data.aws_availability_zones.available.names[count.index]
+  assign_ipv6_address_on_creation = var.enable_ipv6
 
   tags = {
     Name        = "${var.name_prefix}-private-${count.index + 1}"
@@ -50,6 +55,18 @@ resource "aws_internet_gateway" "this" {
 
   tags = {
     Name        = "${var.name_prefix}-igw"
+    Environment = var.environment
+    Terraform   = "true"
+  }
+}
+
+# Egress-only Internet Gateway for private IPv6 egress
+resource "aws_egress_only_internet_gateway" "this" {
+  count  = var.enable_ipv6 ? 1 : 0
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name        = "${var.name_prefix}-eigw"
     Environment = var.environment
     Terraform   = "true"
   }
@@ -89,6 +106,15 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.this.id
   }
 
+  dynamic "route" {
+    for_each = var.enable_ipv6 ? [1] : []
+
+    content {
+      ipv6_cidr_block = "::/0"
+      gateway_id      = aws_internet_gateway.this.id
+    }
+  }
+
   tags = {
     Name        = "${var.name_prefix}-public-rt"
     Environment = var.environment
@@ -103,6 +129,15 @@ resource "aws_route_table" "private" {
   route {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.this.id
+  }
+
+  dynamic "route" {
+    for_each = var.enable_ipv6 ? [1] : []
+
+    content {
+      ipv6_cidr_block        = "::/0"
+      egress_only_gateway_id = aws_egress_only_internet_gateway.this[0].id
+    }
   }
 
   tags = {
@@ -138,6 +173,17 @@ resource "aws_security_group" "ecs_tasks" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  dynamic "egress" {
+    for_each = var.enable_ipv6 ? [1] : []
+
+    content {
+      from_port        = 0
+      to_port          = 0
+      protocol         = "-1"
+      ipv6_cidr_blocks = ["::/0"]
+    }
   }
 
   tags = {
