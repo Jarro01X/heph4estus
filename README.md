@@ -25,7 +25,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 - **Go 1.26+**: For building the application
 - **Docker**: For building container images (managed by heph4estus)
-- **Terraform 1.1+**: For infrastructure provisioning (managed by heph4estus)
+- **Terraform 1.5+**: For infrastructure provisioning (managed by heph4estus)
 - **AWS CLI**: Configured with appropriate credentials and permissions (AWS path only)
 
 ## Quick Start
@@ -128,6 +128,19 @@ aws ecs put-account-setting-default --name dualStackIPv6 --value enabled
 ```
 
 This networking support only provisions the IPv6-capable VPC path and multi-NAT infrastructure. CLI/TUI controls and network status display are tracked separately.
+
+#### AWS Terraform Quality Checks
+
+AWS Terraform modules declare Terraform `>= 1.5.0`, `hashicorp/aws` `~> 6.0`, and `hashicorp/random` `~> 3.0` where used. Run these checks before changing AWS infrastructure:
+
+```bash
+make tf-fmt
+make tf-validate
+make tf-lint
+make tf-security
+```
+
+Use Trivy (`make tf-security`) for Terraform security scanning. `tfsec` is legacy and should not be used for new checks. Phase 11 separates Terraform lint cleanup from AWS security hardening, so Trivy findings are handled in dedicated follow-up PRs.
 
 ### 5. VPS Scan Execution
 
