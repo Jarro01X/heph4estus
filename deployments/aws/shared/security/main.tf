@@ -12,6 +12,15 @@ terraform {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+locals {
+  kms_key_actions = [
+    "kms:Decrypt",
+    "kms:Encrypt",
+    "kms:GenerateDataKey*",
+    "kms:DescribeKey"
+  ]
+}
+
 # ===== Step Functions Role =====
 resource "aws_iam_role" "step_functions" {
   name = "${var.name_prefix}-step-functions-role"
@@ -88,6 +97,11 @@ resource "aws_iam_policy" "step_functions_services" {
           "events:DescribeRule"
         ]
         Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = local.kms_key_actions
+        Resource = var.kms_key_arn
       }
     ]
   })
@@ -160,6 +174,11 @@ resource "aws_iam_policy" "ecs_execution_custom" {
           "logs:CreateLogGroup"
         ]
         Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = local.kms_key_actions
+        Resource = var.kms_key_arn
       }
     ]
   })
@@ -216,6 +235,11 @@ resource "aws_iam_policy" "ecs_task_custom" {
           "s3:GetObject"
         ]
         Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = local.kms_key_actions
+        Resource = var.kms_key_arn
       }
     ]
   })

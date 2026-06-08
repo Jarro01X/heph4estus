@@ -35,6 +35,7 @@ locals {
 # CloudWatch log group for ECS tasks
 resource "aws_cloudwatch_log_group" "worker_logs" {
   name              = "/ecs/${var.name_prefix}-${var.tool_name}"
+  kms_key_id        = var.kms_key_arn
   retention_in_days = var.log_retention_days
 
   tags = {
@@ -49,6 +50,11 @@ resource "aws_ecr_repository" "worker" {
   name                 = "${var.name_prefix}-${var.tool_name}"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
+
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = var.kms_key_arn
+  }
 
   image_scanning_configuration {
     scan_on_push = true

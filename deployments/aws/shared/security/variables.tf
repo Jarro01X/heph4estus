@@ -10,6 +10,11 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "kms_key_arn" {
+  description = "ARN of the customer-managed KMS key used by encrypted AWS services"
+  type        = string
+}
+
 variable "sqs_queue_arn" {
   description = "ARN of the SQS queue for tasks"
   type        = string
