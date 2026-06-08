@@ -5,8 +5,11 @@ TOOL_IMAGE_PREFIX ?= heph
 TOOL_IMAGE_SUFFIX ?= worker
 TOOL_IMAGE_TAG ?= latest
 TFLINT_CONFIG ?= $(CURDIR)/.tflint.hcl
+GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_TOOLCHAIN ?= go1.26.0
 
 TOOL_IMAGES := nmap nuclei subfinder httpx masscan naabu naabu-nmap
+GO_FILES := $(shell git ls-files '*.go')
 
 NMAP_INSTALL_CMD := apk add --no-cache nmap nmap-scripts
 NUCLEI_INSTALL_CMD := go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.7.1
@@ -24,7 +27,7 @@ NAABU_SMOKE_ARGS := -version
 
 tool_image = $(TOOL_IMAGE_PREFIX)-$(1)-$(TOOL_IMAGE_SUFFIX):$(TOOL_IMAGE_TAG)
 
-.PHONY: all build test lint docker-build docker-build-all docker-build-nmap docker-build-nmap-generic docker-build-nuclei docker-build-subfinder docker-build-httpx docker-build-masscan docker-build-naabu docker-build-naabu-nmap docker-smoke-all docker-smoke-nmap docker-smoke-nuclei docker-smoke-subfinder docker-smoke-httpx docker-smoke-masscan docker-smoke-naabu docker-smoke-naabu-nmap container-smoke tf-fmt tf-lint tf-security tf-validate clean
+.PHONY: all build test fmt fmt-check vet lint install-lint docker-build docker-build-all docker-build-nmap docker-build-nmap-generic docker-build-nuclei docker-build-subfinder docker-build-httpx docker-build-masscan docker-build-naabu docker-build-naabu-nmap docker-smoke-all docker-smoke-nmap docker-smoke-nuclei docker-smoke-subfinder docker-smoke-httpx docker-smoke-masscan docker-smoke-naabu docker-smoke-naabu-nmap container-smoke tf-fmt tf-lint tf-security tf-validate clean
 
 all: build test lint
 
@@ -37,8 +40,25 @@ build:
 test:
 	go test ./...
 
+fmt:
+	gofmt -w $(GO_FILES)
+
+fmt-check:
+	@files="$$(gofmt -l $(GO_FILES))"; \
+	if [ -n "$$files" ]; then \
+		echo "gofmt needed for:"; \
+		echo "$$files"; \
+		exit 1; \
+	fi
+
+vet:
+	go vet ./...
+
 lint:
 	golangci-lint run ./...
+
+install-lint:
+	GOTOOLCHAIN=$(GOLANGCI_LINT_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 docker-build:
 ifndef TOOL
