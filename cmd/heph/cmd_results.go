@@ -16,6 +16,7 @@ import (
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
+	resultfmt "heph4estus/internal/results"
 	"heph4estus/internal/worker"
 )
 
@@ -146,6 +147,7 @@ func runResultsExport(args []string, log logger.Logger, deps resultsDeps) error 
 	fs.StringVar(&jobID, "job", "", "Job ID to export results for")
 	fs.StringVar(&jobID, "job-id", "", "Job ID to export results for")
 	format := fs.String("format", "jsonl", "Output format: json, jsonl, or csv")
+	view := fs.String("view", "records", "Export view: records or findings")
 	cloudFlag := fs.String("cloud", "", "Override cloud provider used to read results")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -153,8 +155,13 @@ func runResultsExport(args []string, log logger.Logger, deps resultsDeps) error 
 	if strings.TrimSpace(jobID) == "" {
 		return fmt.Errorf("--job flag is required")
 	}
-	if *format != "json" && *format != "jsonl" && *format != "csv" {
-		return fmt.Errorf("--format must be json, jsonl, or csv")
+	exportFormat, err := resultfmt.ParseFormat(*format)
+	if err != nil {
+		return fmt.Errorf("--%s", err.Error())
+	}
+	viewValue := strings.ToLower(strings.TrimSpace(*view))
+	if viewValue != "records" && viewValue != "findings" {
+		return fmt.Errorf("--view must be records or findings")
 	}
 
 	ctx, err := loadResultsContext(context.Background(), jobID, *cloudFlag, log, deps)
@@ -164,6 +171,9 @@ func runResultsExport(args []string, log logger.Logger, deps resultsDeps) error 
 	results, err := loadWorkerResults(context.Background(), ctx.storage, ctx.bucket, ctx.resultPrefix)
 	if err != nil {
 		return err
+	}
+	if viewValue == "findings" {
+		return outputWorkerResultFindings(context.Background(), ctx.storage, ctx.bucket, ctx.tool, ctx.jobID, results, exportFormat)
 	}
 
 	switch *format {
@@ -393,6 +403,71 @@ func outputWorkerResultsCSV(results []keyedWorkerResult) error {
 	}
 	w.Flush()
 	return w.Error()
+}
+
+func outputWorkerResultFindings(ctx context.Context, storage cloud.Storage, bucket, tool, jobID string, results []keyedWorkerResult, format resultfmt.Format) error {
+	if _, ok := resultfmt.FormatterForTool(tool); !ok {
+		return fmt.Errorf("findings export is not available for tool %q; use --view records", tool)
+	}
+
+	records := make([]resultfmt.Record, 0)
+	for _, keyed := range results {
+		result := keyed.Result
+		toolName := firstNonEmptyString(result.ToolName, tool)
+		formatter, ok := resultfmt.FormatterForTool(toolName)
+		if !ok {
+			return fmt.Errorf("findings export is not available for tool %q in %s; use --view records", toolName, keyed.Key)
+		}
+		data, artifactKey, err := resultArtifactData(ctx, storage, bucket, keyed)
+		if err != nil {
+			return err
+		}
+		input := resultfmt.ArtifactInput{
+			ToolName:    toolName,
+			JobID:       firstNonEmptyString(result.JobID, jobID),
+			Target:      result.Target,
+			SourceKey:   keyed.Key,
+			ArtifactKey: artifactKey,
+			Data:        data,
+		}
+		formatted, err := formatter.Records(input)
+		if err != nil {
+			return fmt.Errorf("formatting %s: %w", keyed.Key, err)
+		}
+		records = append(records, formatted...)
+	}
+
+	out, err := resultfmt.RenderRecords(records, format)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(out)
+	return err
+}
+
+func resultArtifactData(ctx context.Context, storage cloud.Storage, bucket string, keyed keyedWorkerResult) ([]byte, string, error) {
+	outputKey := strings.TrimSpace(keyed.Result.OutputKey)
+	if outputKey != "" {
+		data, err := storage.Download(ctx, bucket, outputKey)
+		if err != nil {
+			return nil, outputKey, fmt.Errorf("downloading artifact %s for %s: %w", outputKey, keyed.Key, err)
+		}
+		return data, outputKey, nil
+	}
+	if strings.TrimSpace(keyed.Result.Output) != "" {
+		return []byte(keyed.Result.Output), "", nil
+	}
+	return nil, "", fmt.Errorf("result %s has no artifact output_key or inline output for findings export", keyed.Key)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func s3ObjectURI(bucket, key string) string {

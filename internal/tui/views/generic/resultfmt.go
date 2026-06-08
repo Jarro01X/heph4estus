@@ -5,12 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"sort"
 	"strings"
 
-	naabutool "heph4estus/internal/tools/naabu"
+	resultfmt "heph4estus/internal/results"
 	"heph4estus/internal/tui/core"
 	"heph4estus/internal/worker"
 )
@@ -97,13 +96,13 @@ func outputRef(bucket, key string) string {
 
 func formatToolArtifact(r worker.Result, artifact []byte) (string, string, error) {
 	switch strings.ToLower(strings.TrimSpace(r.ToolName)) {
-	case naabutool.ModuleNaabuNmap:
+	case resultfmt.ToolNaabuNmap:
 		body, err := formatNaabuNmapArtifact(r, artifact)
 		return "Naabu + Nmap Open Ports", body, err
-	case naabutool.ModuleNaabu:
+	case resultfmt.ToolNaabu:
 		body, err := formatNaabuDiscoveryArtifact(artifact)
 		return "Naabu Open Ports", body, err
-	case "nmap":
+	case resultfmt.ToolNmap:
 		body, err := formatNmapArtifact(r, artifact)
 		return "Nmap Open Ports", body, err
 	case "nuclei":
@@ -123,103 +122,42 @@ func formatToolArtifact(r worker.Result, artifact []byte) (string, string, error
 	}
 }
 
-type nmapXMLRun struct {
-	Hosts []nmapXMLHost `xml:"host"`
-}
-
-type nmapXMLHost struct {
-	Addresses []nmapXMLAddress `xml:"address"`
-	Ports     []nmapXMLPort    `xml:"ports>port"`
-}
-
-type nmapXMLAddress struct {
-	Addr     string `xml:"addr,attr"`
-	AddrType string `xml:"addrtype,attr"`
-}
-
-type nmapXMLPort struct {
-	Protocol string          `xml:"protocol,attr"`
-	PortID   string          `xml:"portid,attr"`
-	State    nmapXMLState    `xml:"state"`
-	Service  nmapXMLService  `xml:"service"`
-	Scripts  []nmapXMLScript `xml:"script"`
-}
-
-type nmapXMLState struct {
-	State string `xml:"state,attr"`
-}
-
-type nmapXMLService struct {
-	Name    string `xml:"name,attr"`
-	Product string `xml:"product,attr"`
-	Version string `xml:"version,attr"`
-}
-
-type nmapXMLScript struct {
-	ID     string `xml:"id,attr"`
-	Output string `xml:"output,attr"`
-}
-
 func formatNmapArtifact(r worker.Result, artifact []byte) (string, error) {
-	var parsed nmapXMLRun
-	if err := xml.Unmarshal(artifact, &parsed); err != nil {
+	ports, err := resultfmt.OpenPortsForArtifact(resultfmt.ArtifactInput{
+		ToolName: resultfmt.ToolNmap,
+		Target:   r.Target,
+		Data:     artifact,
+	})
+	if err != nil {
 		return "", err
 	}
-
-	lines := []string{
-		fmt.Sprintf("%-24s %-9s %s", "HOST", "PORT", "SERVICE"),
-		fmt.Sprintf("%-24s %-9s %s", strings.Repeat("-", 24), strings.Repeat("-", 9), strings.Repeat("-", 40)),
-	}
-	for _, host := range parsed.Hosts {
-		hostLabel := nmapHostLabel(host, r.Target)
-		for _, port := range host.Ports {
-			if !strings.EqualFold(port.State.State, "open") {
-				continue
-			}
-			service := strings.TrimSpace(strings.Join(nonEmpty(port.Service.Name, port.Service.Product, port.Service.Version), " "))
-			if service == "" {
-				service = "-"
-			}
-			lines = append(lines, fmt.Sprintf("%-24s %-9s %s", clipText(hostLabel, 24), port.Protocol+"/"+port.PortID, service))
-		}
-	}
-	if len(lines) == 2 {
-		return "No open ports found.", nil
-	}
-	return strings.Join(lines, "\n"), nil
-}
-
-func nmapHostLabel(host nmapXMLHost, fallback string) string {
-	for _, addr := range host.Addresses {
-		if addr.Addr != "" && (addr.AddrType == "" || addr.AddrType == "ipv4") {
-			return addr.Addr
-		}
-	}
-	for _, addr := range host.Addresses {
-		if addr.Addr != "" {
-			return addr.Addr
-		}
-	}
-	return fallback
+	return formatOpenPorts(ports, "No open ports found."), nil
 }
 
 func formatNaabuNmapArtifact(r worker.Result, artifact []byte) (string, error) {
-	ports, err := naabutool.ParseNmapXML(artifact, r.Target)
+	ports, err := resultfmt.OpenPortsForArtifact(resultfmt.ArtifactInput{
+		ToolName: resultfmt.ToolNaabuNmap,
+		Target:   r.Target,
+		Data:     artifact,
+	})
 	if err != nil {
 		return "", err
 	}
-	return formatNaabuOpenPorts(ports, "No open ports found."), nil
+	return formatOpenPorts(ports, "No open ports found."), nil
 }
 
 func formatNaabuDiscoveryArtifact(artifact []byte) (string, error) {
-	ports, err := naabutool.ParseDiscoveryJSONL(artifact)
+	ports, err := resultfmt.OpenPortsForArtifact(resultfmt.ArtifactInput{
+		ToolName: resultfmt.ToolNaabu,
+		Data:     artifact,
+	})
 	if err != nil {
 		return "", err
 	}
-	return formatNaabuOpenPorts(ports, "No naabu ports found."), nil
+	return formatOpenPorts(ports, "No naabu ports found."), nil
 }
 
-func formatNaabuOpenPorts(ports []naabutool.OpenPort, emptyMessage string) string {
+func formatOpenPorts(ports []resultfmt.OpenPort, emptyMessage string) string {
 	if len(ports) == 0 {
 		return emptyMessage
 	}
@@ -231,15 +169,15 @@ func formatNaabuOpenPorts(ports []naabutool.OpenPort, emptyMessage string) strin
 	for _, port := range ports {
 		lines = append(lines, fmt.Sprintf("%-24s %-9s %-30s %s",
 			clipText(firstNonEmpty(port.Host, port.IP, "-"), 24),
-			formatNaabuPort(port),
-			clipText(formatNaabuService(port), 30),
-			clipText(formatNaabuDetails(port), 80),
+			formatOpenPort(port),
+			clipText(formatOpenPortService(port), 30),
+			clipText(formatOpenPortDetails(port), 80),
 		))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func formatNaabuPort(port naabutool.OpenPort) string {
+func formatOpenPort(port resultfmt.OpenPort) string {
 	protocol := firstNonEmpty(port.Protocol, "tcp")
 	if port.Port <= 0 {
 		return protocol + "/-"
@@ -247,7 +185,7 @@ func formatNaabuPort(port naabutool.OpenPort) string {
 	return fmt.Sprintf("%s/%d", protocol, port.Port)
 }
 
-func formatNaabuService(port naabutool.OpenPort) string {
+func formatOpenPortService(port resultfmt.OpenPort) string {
 	service := strings.TrimSpace(strings.Join(nonEmpty(port.Service, port.Product, port.Version), " "))
 	if service == "" {
 		return "-"
@@ -255,7 +193,7 @@ func formatNaabuService(port naabutool.OpenPort) string {
 	return service
 }
 
-func formatNaabuDetails(port naabutool.OpenPort) string {
+func formatOpenPortDetails(port resultfmt.OpenPort) string {
 	parts := make([]string, 0, 4)
 	if port.Host != "" && port.IP != "" && port.Host != port.IP {
 		parts = append(parts, "ip="+port.IP)

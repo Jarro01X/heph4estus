@@ -88,6 +88,16 @@ func TestRunResultsInvalidFormats(t *testing.T) {
 	}
 }
 
+func TestRunResultsInvalidExportView(t *testing.T) {
+	err := runResultsWithDeps([]string{"export", "--job", "job-1", "--view", "raw"}, testLogger(), resultsDeps{})
+	if err == nil {
+		t.Fatal("expected invalid view error")
+	}
+	if !strings.Contains(err.Error(), "--view must be records or findings") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunResultsDownloadRequiresOutput(t *testing.T) {
 	err := runResultsWithDeps([]string{"download", "--job", "job-1"}, testLogger(), resultsDeps{})
 	if err == nil {
@@ -262,6 +272,107 @@ func TestRunResultsExportCSV(t *testing.T) {
 	}
 }
 
+func TestRunResultsExportFindingsJSON(t *testing.T) {
+	store := operator.NewJobStoreAt(t.TempDir())
+	createResultsJob(t, store, "job-1", "nmap")
+	resultKey := jobs.ResultKey("nmap", "job-1", "example.com", "", 0, 0, 100, "json")
+	artifactKey := jobs.ArtifactKey("nmap", "job-1", "example.com", "", 0, 0, 100, "xml")
+	storage := &resultsTestStorage{objects: map[string][]byte{
+		resultKey:          mustResultJSONWithOutput(t, "nmap", "job-1", "example.com", artifactKey, "", ""),
+		artifactKey:        []byte(`<nmaprun><host><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="example.com"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="nginx" version="1.25"/></port><port protocol="tcp" portid="25"><state state="filtered"/></port></ports></host></nmaprun>`),
+		resultKey + ".bak": []byte(`ignored`),
+	}}
+	deps := testResultsDeps(store, storage)
+
+	out, err := captureStdout(func() error {
+		return runResultsWithDeps([]string{"export", "--job", "job-1", "--view", "findings", "--format", "json"}, testLogger(), deps)
+	})
+	if err != nil {
+		t.Fatalf("runResults export findings json: %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal([]byte(out), &records); err != nil {
+		t.Fatalf("decode findings json: %v\n%s", err, out)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record["tool"] != "nmap" || record["target"] != "example.com" || record["service"] != "https" {
+		t.Fatalf("unexpected record: %#v", record)
+	}
+	if record["port"] != float64(443) || record["artifact_key"] != artifactKey || record["source_key"] != resultKey {
+		t.Fatalf("unexpected metadata: %#v", record)
+	}
+}
+
+func TestRunResultsExportFindingsCSV(t *testing.T) {
+	store := operator.NewJobStoreAt(t.TempDir())
+	createResultsJob(t, store, "job-1", "naabu")
+	resultKey := jobs.ResultKey("naabu", "job-1", "example.com", "", 0, 0, 100, "json")
+	artifactKey := jobs.ArtifactKey("naabu", "job-1", "example.com", "", 0, 0, 100, "jsonl")
+	storage := &resultsTestStorage{objects: map[string][]byte{
+		resultKey:   mustResultJSONWithOutput(t, "naabu", "job-1", "example.com", artifactKey, "", ""),
+		artifactKey: []byte(`{"host":"example.com","ip":"192.0.2.10","port":443,"tls":true,"cdn":true,"cdn-name":"cloudflare"}` + "\n"),
+	}}
+	deps := testResultsDeps(store, storage)
+
+	out, err := captureStdout(func() error {
+		return runResultsWithDeps([]string{"export", "--job", "job-1", "--view", "findings", "--format", "csv"}, testLogger(), deps)
+	})
+	if err != nil {
+		t.Fatalf("runResults export findings csv: %v", err)
+	}
+	rows, err := csv.NewReader(strings.NewReader(out)).ReadAll()
+	if err != nil {
+		t.Fatalf("decode findings csv: %v\n%s", err, out)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("csv rows = %d, want 2", len(rows))
+	}
+	if rows[0][0] != "tool" || rows[0][6] != "port" || rows[0][12] != "cdn_name" {
+		t.Fatalf("unexpected header: %#v", rows[0])
+	}
+	if rows[1][0] != "naabu" || rows[1][6] != "443" || rows[1][10] != "true" || rows[1][12] != "cloudflare" {
+		t.Fatalf("unexpected row: %#v", rows[1])
+	}
+}
+
+func TestRunResultsExportFindingsUnsupportedTool(t *testing.T) {
+	store := operator.NewJobStoreAt(t.TempDir())
+	createResultsJob(t, store, "job-1", "httpx")
+	deps := testResultsDeps(store, &resultsTestStorage{objects: resultObjects(t, "httpx", "job-1")})
+
+	_, err := captureStdout(func() error {
+		return runResultsWithDeps([]string{"export", "--job", "job-1", "--view", "findings"}, testLogger(), deps)
+	})
+	if err == nil {
+		t.Fatal("expected unsupported findings tool error")
+	}
+	if !strings.Contains(err.Error(), "findings export is not available for tool") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunResultsExportFindingsMissingArtifactData(t *testing.T) {
+	store := operator.NewJobStoreAt(t.TempDir())
+	createResultsJob(t, store, "job-1", "nmap")
+	resultKey := jobs.ResultKey("nmap", "job-1", "example.com", "", 0, 0, 100, "json")
+	deps := testResultsDeps(store, &resultsTestStorage{objects: map[string][]byte{
+		resultKey: mustResultJSONWithOutput(t, "nmap", "job-1", "example.com", "", "", ""),
+	}})
+
+	_, err := captureStdout(func() error {
+		return runResultsWithDeps([]string{"export", "--job", "job-1", "--view", "findings"}, testLogger(), deps)
+	})
+	if err == nil {
+		t.Fatal("expected missing artifact data error")
+	}
+	if !strings.Contains(err.Error(), "no artifact output_key or inline output") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunResultsExportMalformedJSON(t *testing.T) {
 	store := operator.NewJobStoreAt(t.TempDir())
 	createResultsJob(t, store, "job-1", "httpx")
@@ -359,11 +470,17 @@ func resultObjects(t *testing.T, tool, jobID string) map[string][]byte {
 
 func mustResultJSON(t *testing.T, tool, jobID, target, resultErr string) []byte {
 	t.Helper()
+	return mustResultJSONWithOutput(t, tool, jobID, target, jobs.ArtifactKey(tool, jobID, target, "", 0, 0, 100, "jsonl"), "", resultErr)
+}
+
+func mustResultJSONWithOutput(t *testing.T, tool, jobID, target, outputKey, output, resultErr string) []byte {
+	t.Helper()
 	data, err := json.Marshal(worker.Result{
 		ToolName:    tool,
 		JobID:       jobID,
 		Target:      target,
-		OutputKey:   jobs.ArtifactKey(tool, jobID, target, "", 0, 0, 100, "jsonl"),
+		Output:      output,
+		OutputKey:   outputKey,
 		Error:       resultErr,
 		Timestamp:   time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC),
 		ChunkIdx:    0,
