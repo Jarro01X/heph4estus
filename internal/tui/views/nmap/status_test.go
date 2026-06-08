@@ -49,6 +49,8 @@ func (t *mockTracker) CountResults(_ context.Context, _, _ string) (int, error) 
 func testInfra() core.InfraOutputs {
 	return core.InfraOutputs{
 		SQSQueueURL:       "https://sqs/q",
+		ECRRepoURL:        "123.dkr.ecr.us-east-1.amazonaws.com/nmap-worker",
+		ImageTag:          "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
 		S3BucketName:      "bucket",
 		ECSClusterName:    "cluster",
 		TaskDefinitionARN: "arn:td",
@@ -455,7 +457,6 @@ func TestUseSpot_EmptyDefaultsToAuto(t *testing.T) {
 func TestStatusModel_SpotLaunch(t *testing.T) {
 	infra := testInfra()
 	infra.ComputeMode = "spot"
-	infra.ECRRepoURL = "123.dkr.ecr.us-east-1.amazonaws.com/nmap-worker"
 	infra.AMIID = "ami-test"
 	infra.InstanceProfileARN = "arn:profile"
 
