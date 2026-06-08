@@ -25,7 +25,7 @@ Heph4estus is a TUI/CLI app that handles cloud infrastructure deployment and dis
 
 - **Go 1.26+**: For building the application
 - **Docker**: For building container images (managed by heph4estus)
-- **Terraform 1.0+**: For infrastructure provisioning (managed by heph4estus)
+- **Terraform 1.1+**: For infrastructure provisioning (managed by heph4estus)
 - **AWS CLI**: Configured with appropriate credentials and permissions (AWS path only)
 
 ## Quick Start
@@ -105,16 +105,21 @@ Both scan commands also accept provider/runtime flags including `--cloud`, `--wo
 ./bin/heph scan --tool httpx --file targets.txt --cloud hetzner --workers 25 --min-unique-ips 25
 ```
 
-#### AWS IPv6 Networking
+#### AWS IPv6 And Multi-NAT Networking
 
-The AWS generic Terraform environment supports optional dual-stack VPC networking. It is disabled by default, so existing AWS deployments keep the current IPv4/NAT behavior unless IPv6 is explicitly enabled.
+The AWS generic Terraform environment supports optional dual-stack VPC networking and optional multi-NAT IPv4 egress. Both are disabled by default, so existing AWS deployments keep the current single-NAT IPv4 behavior unless these features are explicitly enabled.
 
 ```bash
 cd deployments/aws/generic/environments/dev
 TF_VAR_tool_name=nmap TF_VAR_enable_ipv6=true terraform plan
+
+# IPv4 source diversity: one NAT gateway and EIP per AZ
+TF_VAR_tool_name=nmap TF_VAR_multi_nat=true terraform plan
 ```
 
 When `enable_ipv6` is true, Terraform assigns an AWS-generated IPv6 CIDR to the VPC, gives public and private subnets IPv6 `/64` blocks, routes public IPv6 egress through the internet gateway, and routes private IPv6 egress through an egress-only internet gateway. IPv4 NAT remains present and unchanged.
+
+When `multi_nat` is true, Terraform creates one NAT gateway and one Elastic IP per availability zone, then routes each private subnet through the NAT gateway in the same AZ. This improves IPv4 source IP diversity, but it also increases AWS NAT Gateway and Elastic IP costs.
 
 Before relying on IPv6 egress from ECS tasks, enable the ECS `dualStackIPv6` account setting in the target AWS account and region, for example:
 
@@ -122,7 +127,7 @@ Before relying on IPv6 egress from ECS tasks, enable the ECS `dualStackIPv6` acc
 aws ecs put-account-setting-default --name dualStackIPv6 --value enabled
 ```
 
-This networking support only provisions the IPv6-capable VPC path. CLI/TUI controls and network status display are tracked separately.
+This networking support only provisions the IPv6-capable VPC path and multi-NAT infrastructure. CLI/TUI controls and network status display are tracked separately.
 
 ### 5. VPS Scan Execution
 
