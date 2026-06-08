@@ -15,6 +15,11 @@ variable "force_destroy_bucket" {
   default     = false
 }
 
+variable "kms_key_arn" {
+  description = "ARN of the customer-managed KMS key used for result bucket encryption"
+  type        = string
+}
+
 variable "results_retention_days" {
   description = "Number of days to retain results before deletion"
   type        = number

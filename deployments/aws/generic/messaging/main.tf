@@ -12,6 +12,7 @@ terraform {
 # Main SQS queue for tasks
 resource "aws_sqs_queue" "tasks" {
   name                       = "${var.name_prefix}-tasks"
+  kms_master_key_id          = var.kms_key_arn
   visibility_timeout_seconds = 900   # 15 minutes
   message_retention_seconds  = 86400 # 1 day
 
@@ -30,6 +31,7 @@ resource "aws_sqs_queue" "tasks" {
 # Dead letter queue for failed tasks
 resource "aws_sqs_queue" "dlq" {
   name                      = "${var.name_prefix}-tasks-dlq"
+  kms_master_key_id         = var.kms_key_arn
   message_retention_seconds = 1209600 # 14 days
 
   tags = {
