@@ -4,6 +4,7 @@ CONTAINER_CONTEXT ?= .
 TOOL_IMAGE_PREFIX ?= heph
 TOOL_IMAGE_SUFFIX ?= worker
 TOOL_IMAGE_TAG ?= latest
+TFLINT_CONFIG ?= $(CURDIR)/.tflint.hcl
 
 TOOL_IMAGES := nmap nuclei subfinder httpx masscan naabu naabu-nmap
 
@@ -23,7 +24,7 @@ NAABU_SMOKE_ARGS := -version
 
 tool_image = $(TOOL_IMAGE_PREFIX)-$(1)-$(TOOL_IMAGE_SUFFIX):$(TOOL_IMAGE_TAG)
 
-.PHONY: all build test lint docker-build docker-build-all docker-build-nmap docker-build-nmap-generic docker-build-nuclei docker-build-subfinder docker-build-httpx docker-build-masscan docker-build-naabu docker-build-naabu-nmap docker-smoke-all docker-smoke-nmap docker-smoke-nuclei docker-smoke-subfinder docker-smoke-httpx docker-smoke-masscan docker-smoke-naabu docker-smoke-naabu-nmap container-smoke tf-validate clean
+.PHONY: all build test lint docker-build docker-build-all docker-build-nmap docker-build-nmap-generic docker-build-nuclei docker-build-subfinder docker-build-httpx docker-build-masscan docker-build-naabu docker-build-naabu-nmap docker-smoke-all docker-smoke-nmap docker-smoke-nuclei docker-smoke-subfinder docker-smoke-httpx docker-smoke-masscan docker-smoke-naabu docker-smoke-naabu-nmap container-smoke tf-fmt tf-lint tf-security tf-validate clean
 
 all: build test lint
 
@@ -114,6 +115,15 @@ docker-smoke-all: $(addprefix docker-smoke-,$(TOOL_IMAGES))
 
 container-smoke: docker-build-all
 	$(MAKE) docker-smoke-all
+
+tf-fmt:
+	terraform fmt -check -recursive deployments/aws
+
+tf-lint:
+	tflint --config "$(TFLINT_CONFIG)" --recursive --chdir deployments/aws
+
+tf-security:
+	trivy config deployments/aws
 
 tf-validate:
 	cd deployments/aws/generic/environments/dev && terraform init -backend=false && terraform validate
