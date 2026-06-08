@@ -105,6 +105,25 @@ Both scan commands also accept provider/runtime flags including `--cloud`, `--wo
 ./bin/heph scan --tool httpx --file targets.txt --cloud hetzner --workers 25 --min-unique-ips 25
 ```
 
+#### AWS IPv6 Networking
+
+The AWS generic Terraform environment supports optional dual-stack VPC networking. It is disabled by default, so existing AWS deployments keep the current IPv4/NAT behavior unless IPv6 is explicitly enabled.
+
+```bash
+cd deployments/aws/generic/environments/dev
+TF_VAR_tool_name=nmap TF_VAR_enable_ipv6=true terraform plan
+```
+
+When `enable_ipv6` is true, Terraform assigns an AWS-generated IPv6 CIDR to the VPC, gives public and private subnets IPv6 `/64` blocks, routes public IPv6 egress through the internet gateway, and routes private IPv6 egress through an egress-only internet gateway. IPv4 NAT remains present and unchanged.
+
+Before relying on IPv6 egress from ECS tasks, enable the ECS `dualStackIPv6` account setting in the target AWS account and region, for example:
+
+```bash
+aws ecs put-account-setting-default --name dualStackIPv6 --value enabled
+```
+
+This networking support only provisions the IPv6-capable VPC path. CLI/TUI controls and network status display are tracked separately.
+
 ### 5. VPS Scan Execution
 
 The VPS-family path is intentionally split in two:
