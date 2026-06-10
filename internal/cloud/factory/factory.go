@@ -13,6 +13,7 @@ import (
 	"heph4estus/internal/cloud"
 	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/cloud/selfhosted"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -251,47 +252,45 @@ func BuildForKind(ctx context.Context, kind cloud.Kind, log logger.Logger) (clou
 // controller endpoints and credentials come from deploy outputs rather than
 // operator environment variables.
 func SelfhostedConfigFromOutputs(outputs map[string]string) *SelfhostedConfig {
-	cfg := &SelfhostedConfig{
-		NATSURL:     outputs["nats_url"],
-		StreamName:  outputs["nats_stream"],
-		S3Endpoint:  outputs["s3_endpoint"],
-		S3Region:    outputs["s3_region"],
-		S3AccessKey: outputs["s3_access_key"],
-		S3Secret:    outputs["s3_secret_key"],
-		S3PathStyle: outputs["s3_path_style"] == "true",
-		QueueID:     outputs["sqs_queue_url"],
-		Bucket:      outputs["s3_bucket_name"],
-		DockerImage: registryHost(outputs["registry_url"]) + "/" + outputs["docker_image"],
+	typed := infra.DecodeTerraformOutputs(cloud.KindManual, outputs)
+	return SelfhostedConfigFromTypedOutputs(typed.Selfhosted)
+}
 
-		ControllerSecurityMode: outputs["controller_security_mode"],
-		NATSTLSEnabled:         parseOutputBool(outputs["nats_tls_enabled"]),
-		NATSAuthEnabled:        parseOutputBool(outputs["nats_auth_enabled"]),
-		MinIOTLSEnabled:        parseOutputBool(outputs["minio_tls_enabled"]),
-		MinIOAuthEnabled:       parseOutputBool(outputs["minio_auth_enabled"]),
-		RegistryTLSEnabled:     parseOutputBool(outputs["registry_tls_enabled"]),
-		RegistryAuthEnabled:    parseOutputBool(outputs["registry_auth_enabled"]),
-		ControllerCAPEM:        outputs["controller_ca_pem"],
-		ControllerServerName:   outputs["controller_host"],
-		NATSClientCertPEM:      outputs["nats_operator_client_cert_pem"],
-		NATSClientKeyPEM:       outputs["nats_operator_client_key_pem"],
+// SelfhostedConfigFromTypedOutputs constructs a SelfhostedConfig from the typed
+// provider-native Terraform output contract.
+func SelfhostedConfigFromTypedOutputs(outputs infra.SelfhostedRuntimeOutputs) *SelfhostedConfig {
+	cfg := &SelfhostedConfig{
+		NATSURL:     outputs.NATSURL,
+		StreamName:  outputs.NATSStream,
+		S3Endpoint:  outputs.S3Endpoint,
+		S3Region:    outputs.S3Region,
+		S3AccessKey: outputs.S3AccessKey,
+		S3Secret:    outputs.S3SecretKey,
+		S3PathStyle: outputs.S3PathStyle,
+		QueueID:     outputs.QueueURL,
+		Bucket:      outputs.S3BucketName,
+		DockerImage: registryHost(outputs.RegistryURL) + "/" + outputs.DockerImage,
+
+		ControllerSecurityMode: outputs.ControllerSecurityMode,
+		NATSTLSEnabled:         outputs.NATSTLSEnabled,
+		NATSAuthEnabled:        outputs.NATSAuthEnabled,
+		MinIOTLSEnabled:        outputs.MinIOTLSEnabled,
+		MinIOAuthEnabled:       outputs.MinIOAuthEnabled,
+		RegistryTLSEnabled:     outputs.RegistryTLSEnabled,
+		RegistryAuthEnabled:    outputs.RegistryAuthEnabled,
+		ControllerCAPEM:        outputs.ControllerCAPEM,
+		ControllerServerName:   outputs.ControllerHost,
+		NATSClientCertPEM:      outputs.NATSOperatorClientCertPEM,
+		NATSClientKeyPEM:       outputs.NATSOperatorClientKeyPEM,
 	}
-	if hosts := outputs["worker_hosts"]; hosts != "" {
-		cfg.WorkerHosts = splitCommaList(hosts)
+	if len(outputs.WorkerHosts) > 0 {
+		cfg.WorkerHosts = append([]string(nil), outputs.WorkerHosts...)
 	}
 	return cfg
 }
 
 func registryHost(registryURL string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(registryURL, "https://"), "http://")
-}
-
-func parseOutputBool(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true", "1", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 func envOr(key, fallback string) string {

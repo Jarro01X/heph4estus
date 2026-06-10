@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -382,6 +383,47 @@ func TestSelfhostedConfigFromOutputs(t *testing.T) {
 	}
 	if cfg.NATSTLSEnabled || cfg.MinIOTLSEnabled || cfg.RegistryTLSEnabled || cfg.RegistryAuthEnabled {
 		t.Fatalf("unexpected TLS/auth posture: natsTLS=%t minioTLS=%t registryTLS=%t registryAuth=%t", cfg.NATSTLSEnabled, cfg.MinIOTLSEnabled, cfg.RegistryTLSEnabled, cfg.RegistryAuthEnabled)
+	}
+}
+
+func TestSelfhostedConfigFromTypedOutputs(t *testing.T) {
+	cfg := SelfhostedConfigFromTypedOutputs(infra.SelfhostedRuntimeOutputs{
+		NATSURL:                   "nats://ctrl:4222",
+		NATSStream:                "heph-tasks",
+		S3Endpoint:                "https://ctrl:9000",
+		S3Region:                  "us-east-1",
+		S3AccessKey:               "ak",
+		S3SecretKey:               "sk",
+		S3PathStyle:               true,
+		QueueURL:                  "heph-tasks",
+		S3BucketName:              "heph-results",
+		RegistryURL:               "https://10.0.1.2:5000",
+		DockerImage:               "heph-nmap-worker:latest",
+		WorkerHosts:               []string{"203.0.113.10", "203.0.113.11"},
+		ControllerSecurityMode:    "private-auth",
+		NATSTLSEnabled:            true,
+		NATSAuthEnabled:           true,
+		MinIOTLSEnabled:           true,
+		MinIOAuthEnabled:          true,
+		RegistryTLSEnabled:        true,
+		RegistryAuthEnabled:       true,
+		ControllerCAPEM:           "ca",
+		ControllerHost:            "controller.heph.local",
+		NATSOperatorClientCertPEM: "operator-cert",
+		NATSOperatorClientKeyPEM:  "operator-key",
+	})
+
+	if cfg.DockerImage != "10.0.1.2:5000/heph-nmap-worker:latest" {
+		t.Fatalf("DockerImage = %q", cfg.DockerImage)
+	}
+	if !cfg.S3PathStyle || !cfg.NATSTLSEnabled || !cfg.NATSAuthEnabled || !cfg.MinIOTLSEnabled || !cfg.MinIOAuthEnabled || !cfg.RegistryTLSEnabled || !cfg.RegistryAuthEnabled {
+		t.Fatalf("expected typed security/storage booleans to be preserved")
+	}
+	if len(cfg.WorkerHosts) != 2 {
+		t.Fatalf("WorkerHosts = %v, want 2 entries", cfg.WorkerHosts)
+	}
+	if cfg.NATSClientCertPEM != "operator-cert" || cfg.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS client cert material = %q/%q", cfg.NATSClientCertPEM, cfg.NATSClientKeyPEM)
 	}
 }
 

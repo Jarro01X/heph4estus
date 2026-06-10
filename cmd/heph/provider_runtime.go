@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/fleet"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
 )
 
@@ -16,9 +16,10 @@ var waitForProviderNativeFleetFunc = waitForProviderNativeFleet
 
 func buildRuntimeProvider(ctx context.Context, kind cloud.Kind, outputs map[string]string, log logger.Logger) (cloud.Provider, error) {
 	if kind.IsProviderNative() && outputs != nil {
+		typed := infra.DecodeTerraformOutputs(kind, outputs)
 		return factory.Build(factory.Config{
 			Kind:       kind,
-			Selfhosted: factory.SelfhostedConfigFromOutputs(outputs),
+			Selfhosted: factory.SelfhostedConfigFromTypedOutputs(typed.Selfhosted),
 			Logger:     log,
 		})
 	}
@@ -26,12 +27,14 @@ func buildRuntimeProvider(ctx context.Context, kind cloud.Kind, outputs map[stri
 }
 
 func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs map[string]string, policy fleet.PlacementPolicy) (int, error) {
-	natsURL := outputs["nats_url"]
+	typed := infra.DecodeTerraformOutputs(kind, outputs)
+	runtime := typed.Selfhosted
+	natsURL := runtime.NATSURL
 	if natsURL == "" {
 		return 0, fmt.Errorf("terraform outputs missing nats_url")
 	}
 
-	desired := fleetWorkerCount(outputs)
+	desired := runtime.WorkerCount
 	if desired <= 0 {
 		desired = 1
 	}
@@ -39,15 +42,15 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 	mgr, err := fleet.NewNATSFleetManager(fleet.NATSFleetManagerConfig{
 		NATSURL:         natsURL,
 		DesiredWorkers:  desired,
-		ControllerIP:    outputs["controller_ip"],
-		GenerationID:    outputs["generation_id"],
+		ControllerIP:    runtime.ControllerIP,
+		GenerationID:    runtime.GenerationID,
 		Cloud:           string(kind.Canonical()),
 		Placement:       policy,
-		ExpectedVersion: outputs["docker_image"],
-		RootCAPEM:       outputs["controller_ca_pem"],
-		ServerName:      outputs["controller_host"],
-		ClientCertPEM:   outputs["nats_operator_client_cert_pem"],
-		ClientKeyPEM:    outputs["nats_operator_client_key_pem"],
+		ExpectedVersion: runtime.DockerImage,
+		RootCAPEM:       runtime.ControllerCAPEM,
+		ServerName:      runtime.ControllerHost,
+		ClientCertPEM:   runtime.NATSOperatorClientCertPEM,
+		ClientKeyPEM:    runtime.NATSOperatorClientKeyPEM,
 	}, logger.NewSimpleLogger())
 	if err != nil {
 		return 0, fmt.Errorf("starting provider-native fleet manager: %w", err)
@@ -67,18 +70,7 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 }
 
 func fleetWorkerCount(outputs map[string]string) int {
-	if outputs == nil {
-		return 0
-	}
-	raw := outputs["worker_count"]
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
+	return infra.OutputInt(outputs, infra.OutputWorkerCount)
 }
 
 func outputBool(value string) bool {
