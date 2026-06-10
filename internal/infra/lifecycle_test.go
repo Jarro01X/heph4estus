@@ -308,13 +308,13 @@ func TestRequiredOutputKeysForCloud_AWS(t *testing.T) {
 	}
 	// Spot check a few AWS-specific keys.
 	want := map[string]bool{
-		"sqs_queue_url":        true,
-		"ecr_repo_url":         true,
-		"image_tag":            true,
-		"docker_image":         true,
-		"ecs_cluster_name":     true,
-		"ami_id":               true,
-		"instance_profile_arn": true,
+		OutputSQSQueueURL:     true,
+		OutputECRRepoURL:      true,
+		OutputImageTag:        true,
+		OutputDockerImage:     true,
+		OutputECSClusterName:  true,
+		OutputAMIID:           true,
+		OutputInstanceProfile: true,
 	}
 	for _, k := range keys {
 		delete(want, k)
@@ -330,103 +330,75 @@ func TestRequiredOutputKeysForCloud_Selfhosted(t *testing.T) {
 		t.Fatalf("selfhosted keys length = %d, want %d", len(keys), len(SelfhostedRequiredOutputKeys))
 	}
 	// Selfhosted should only require tool_name for mismatch detection.
-	if keys[0] != "tool_name" {
+	if keys[0] != OutputToolName {
 		t.Fatalf("expected tool_name, got %q", keys[0])
 	}
 	// AWS-specific keys must NOT appear in selfhosted set.
 	for _, k := range keys {
-		if k == "sqs_queue_url" || k == "ecr_repo_url" || k == "ecs_cluster_name" {
+		if k == OutputSQSQueueURL || k == OutputECRRepoURL || k == OutputECSClusterName {
 			t.Fatalf("selfhosted should not require AWS key %q", k)
 		}
 	}
 }
 
-func TestRequiredOutputKeysForCloud_Hetzner(t *testing.T) {
-	keys := RequiredOutputKeysForCloud(cloud.KindHetzner)
-	if len(keys) != len(HetznerRequiredOutputKeys) {
-		t.Fatalf("Hetzner keys length = %d, want %d", len(keys), len(HetznerRequiredOutputKeys))
-	}
+func TestRequiredOutputKeysForCloud_ProviderNativeShared(t *testing.T) {
+	kinds := []cloud.Kind{cloud.KindHetzner, cloud.KindLinode, cloud.KindVultr}
 	want := map[string]bool{
-		"controller_security_mode":            true,
-		"credential_scope_version":            true,
-		"nats_url":                            true,
-		"nats_operator_user":                  true,
-		"nats_operator_password":              true,
-		"nats_tls_enabled":                    true,
-		"nats_mtls_enabled":                   true,
-		"nats_auth_enabled":                   true,
-		"nats_operator_client_cert_pem":       true,
-		"nats_operator_client_cert_not_after": true,
-		"nats_operator_client_key_pem":        true,
-		"nats_worker_client_cert_not_after":   true,
-		"minio_tls_enabled":                   true,
-		"minio_auth_enabled":                  true,
-		"s3_operator_access_key":              true,
-		"s3_operator_secret_key":              true,
-		"registry_username":                   true,
-		"registry_password":                   true,
-		"registry_publisher_username":         true,
-		"registry_publisher_password":         true,
-		"registry_tls_enabled":                true,
-		"registry_auth_enabled":               true,
-		"controller_ca_pem":                   true,
-		"controller_ca_fingerprint_sha256":    true,
-		"controller_cert_not_after":           true,
-		"controller_host":                     true,
-		"controller_ip":                       true,
-		"generation_id":                       true,
-		"worker_hosts":                        true,
+		OutputControllerSecurityMode:         true,
+		OutputCredentialScopeVersion:         true,
+		OutputNATSURL:                        true,
+		OutputNATSOperatorUser:               true,
+		OutputNATSOperatorPassword:           true,
+		OutputNATSTLSEnabled:                 true,
+		OutputNATSMTLSEnabled:                true,
+		OutputNATSAuthEnabled:                true,
+		OutputNATSOperatorClientCertPEM:      true,
+		OutputNATSOperatorClientCertNotAfter: true,
+		OutputNATSOperatorClientKeyPEM:       true,
+		OutputNATSWorkerClientCertNotAfter:   true,
+		OutputMinIOTLSEnabled:                true,
+		OutputMinIOAuthEnabled:               true,
+		OutputS3OperatorAccessKey:            true,
+		OutputS3OperatorSecretKey:            true,
+		OutputRegistryUsername:               true,
+		OutputRegistryPassword:               true,
+		OutputRegistryPublisherUsername:      true,
+		OutputRegistryPublisherPassword:      true,
+		OutputRegistryTLSEnabled:             true,
+		OutputRegistryAuthEnabled:            true,
+		OutputControllerCAPEM:                true,
+		OutputControllerCAFingerprintSHA256:  true,
+		OutputControllerCertNotAfter:         true,
+		OutputControllerHost:                 true,
+		OutputControllerIP:                   true,
+		OutputGenerationID:                   true,
+		OutputWorkerHosts:                    true,
 	}
-	for _, k := range keys {
-		delete(want, k)
-	}
-	if len(want) > 0 {
-		t.Fatalf("missing expected Hetzner keys: %v", want)
+
+	for _, kind := range kinds {
+		keys := RequiredOutputKeysForCloud(kind)
+		if len(keys) != len(ProviderNativeRequiredOutputKeys) {
+			t.Fatalf("%s keys length = %d, want %d", kind, len(keys), len(ProviderNativeRequiredOutputKeys))
+		}
+		if &keys[0] != &ProviderNativeRequiredOutputKeys[0] {
+			t.Fatalf("%s should reuse shared provider-native key set", kind)
+		}
+		missing := copyBoolMap(want)
+		for _, k := range keys {
+			delete(missing, k)
+		}
+		if len(missing) > 0 {
+			t.Fatalf("missing expected %s keys: %v", kind, missing)
+		}
 	}
 }
 
-func TestRequiredOutputKeysForCloud_Linode(t *testing.T) {
-	keys := RequiredOutputKeysForCloud(cloud.KindLinode)
-	if len(keys) != len(LinodeRequiredOutputKeys) {
-		t.Fatalf("Linode keys length = %d, want %d", len(keys), len(LinodeRequiredOutputKeys))
+func copyBoolMap(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for k, v := range src {
+		dst[k] = v
 	}
-	want := map[string]bool{
-		"controller_security_mode":            true,
-		"credential_scope_version":            true,
-		"nats_url":                            true,
-		"nats_operator_user":                  true,
-		"nats_operator_password":              true,
-		"nats_tls_enabled":                    true,
-		"nats_mtls_enabled":                   true,
-		"nats_auth_enabled":                   true,
-		"nats_operator_client_cert_pem":       true,
-		"nats_operator_client_cert_not_after": true,
-		"nats_operator_client_key_pem":        true,
-		"nats_worker_client_cert_not_after":   true,
-		"minio_tls_enabled":                   true,
-		"minio_auth_enabled":                  true,
-		"s3_operator_access_key":              true,
-		"s3_operator_secret_key":              true,
-		"registry_username":                   true,
-		"registry_password":                   true,
-		"registry_publisher_username":         true,
-		"registry_publisher_password":         true,
-		"registry_tls_enabled":                true,
-		"registry_auth_enabled":               true,
-		"controller_ca_pem":                   true,
-		"controller_ca_fingerprint_sha256":    true,
-		"controller_cert_not_after":           true,
-		"controller_host":                     true,
-		"controller_ip":                       true,
-		"generation_id":                       true,
-		"worker_hosts":                        true,
-	}
-	for _, k := range keys {
-		delete(want, k)
-	}
-	if len(want) > 0 {
-		t.Fatalf("missing expected Linode keys: %v", want)
-	}
+	return dst
 }
 
 func TestRequiredOutputKeysForCloud_UnknownFallsToAWS(t *testing.T) {
