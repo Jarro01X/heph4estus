@@ -3,7 +3,6 @@ package deploy
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -417,7 +416,7 @@ func (m *Model) advanceStage(completed string) tea.Cmd {
 }
 
 func (m *Model) emitNavigateToStatus() tea.Cmd {
-	outputs := m.outputs
+	outputs := infra.DecodeTerraformOutputs(m.config.Cloud, m.outputs)
 	cfg := m.config
 
 	target := cfg.PostDeployView
@@ -429,55 +428,7 @@ func (m *Model) emitNavigateToStatus() tea.Cmd {
 	return func() tea.Msg {
 		return core.NavigateWithDataMsg{
 			Target: target,
-			Data: core.InfraOutputs{
-				Cloud:                 cfg.Cloud,
-				FleetWorkerCount:      parseInt(outputs["worker_count"]),
-				SQSQueueURL:           outputs["sqs_queue_url"],
-				ECRRepoURL:            outputs["ecr_repo_url"],
-				ImageTag:              outputs["image_tag"],
-				S3BucketName:          outputs["s3_bucket_name"],
-				S3Endpoint:            outputs["s3_endpoint"],
-				S3Region:              outputs["s3_region"],
-				S3AccessKey:           outputs["s3_access_key"],
-				S3SecretKey:           outputs["s3_secret_key"],
-				S3PathStyle:           parseBool(outputs["s3_path_style"]),
-				ECSClusterName:        outputs["ecs_cluster_name"],
-				TaskDefinitionARN:     outputs["task_definition_arn"],
-				SubnetIDs:             splitCSV(outputs["subnet_ids"]),
-				SecurityGroupID:       outputs["security_group_id"],
-				TargetsContent:        cfg.TargetsContent,
-				TargetsPath:           cfg.TargetsPath,
-				TargetCount:           cfg.TargetCount,
-				TargetChunks:          cfg.TargetChunks,
-				NmapOptions:           cfg.NmapOptions,
-				WorkerCount:           cfg.WorkerCount,
-				ComputeMode:           cfg.ComputeMode,
-				Placement:             cfg.Placement,
-				JitterMaxSeconds:      cfg.JitterMaxSeconds,
-				NmapTimingTemplate:    cfg.NmapTimingTemplate,
-				DNSServers:            cfg.DNSServers,
-				NoRDNS:                cfg.NoRDNS,
-				InstanceProfileARN:    outputs["instance_profile_arn"],
-				AMIID:                 outputs["ami_id"],
-				ToolName:              cfg.ToolName,
-				ToolOptions:           cfg.ToolOptions,
-				WordlistPath:          cfg.WordlistPath,
-				WordlistContent:       cfg.WordlistContent,
-				RuntimeTarget:         cfg.RuntimeTarget,
-				ChunkCount:            cfg.ChunkCount,
-				CleanupPolicy:         cfg.CleanupPolicy,
-				Reused:                reused,
-				OutputDir:             cfg.OutputDir,
-				TerraformDir:          cfg.TerraformDir,
-				ControllerIP:          outputs["controller_ip"],
-				GenerationID:          outputs["generation_id"],
-				NATSUrl:               outputs["nats_url"],
-				ControllerCAPEM:       outputs["controller_ca_pem"],
-				ControllerHost:        outputs["controller_host"],
-				NATSClientCertPEM:     outputs["nats_operator_client_cert_pem"],
-				NATSClientKeyPEM:      outputs["nats_operator_client_key_pem"],
-				ExpectedWorkerVersion: outputs["docker_image"],
-			},
+			Data:   coreInfraOutputsFromTerraform(cfg, outputs, reused),
 		}
 	}
 }
@@ -518,38 +469,68 @@ func mergeOutputs(existing, new map[string]string) map[string]string {
 	return existing
 }
 
-func splitCSV(s string) []string {
-	if s == "" {
-		return nil
+func coreInfraOutputsFromTerraform(cfg core.DeployConfig, outputs infra.TerraformOutputs, reused bool) core.InfraOutputs {
+	aws := outputs.AWS
+	selfhosted := outputs.Selfhosted
+
+	return core.InfraOutputs{
+		Cloud:                 cfg.Cloud,
+		FleetWorkerCount:      selfhosted.WorkerCount,
+		SQSQueueURL:           firstNonEmpty(aws.SQSQueueURL, selfhosted.QueueURL),
+		ECRRepoURL:            aws.ECRRepoURL,
+		ImageTag:              aws.ImageTag,
+		S3BucketName:          firstNonEmpty(aws.S3BucketName, selfhosted.S3BucketName),
+		S3Endpoint:            firstNonEmpty(aws.S3Endpoint, selfhosted.S3Endpoint),
+		S3Region:              firstNonEmpty(aws.S3Region, selfhosted.S3Region),
+		S3AccessKey:           firstNonEmpty(aws.S3AccessKey, selfhosted.S3AccessKey),
+		S3SecretKey:           firstNonEmpty(aws.S3SecretKey, selfhosted.S3SecretKey),
+		S3PathStyle:           aws.S3PathStyle || selfhosted.S3PathStyle,
+		ECSClusterName:        aws.ECSClusterName,
+		TaskDefinitionARN:     aws.TaskDefinitionARN,
+		SubnetIDs:             aws.SubnetIDs,
+		SecurityGroupID:       aws.SecurityGroupID,
+		TargetsContent:        cfg.TargetsContent,
+		TargetsPath:           cfg.TargetsPath,
+		TargetCount:           cfg.TargetCount,
+		TargetChunks:          cfg.TargetChunks,
+		NmapOptions:           cfg.NmapOptions,
+		WorkerCount:           cfg.WorkerCount,
+		ComputeMode:           cfg.ComputeMode,
+		Placement:             cfg.Placement,
+		JitterMaxSeconds:      cfg.JitterMaxSeconds,
+		NmapTimingTemplate:    cfg.NmapTimingTemplate,
+		DNSServers:            cfg.DNSServers,
+		NoRDNS:                cfg.NoRDNS,
+		InstanceProfileARN:    aws.InstanceProfileARN,
+		AMIID:                 aws.AMIID,
+		ToolName:              cfg.ToolName,
+		ToolOptions:           cfg.ToolOptions,
+		WordlistPath:          cfg.WordlistPath,
+		WordlistContent:       cfg.WordlistContent,
+		RuntimeTarget:         cfg.RuntimeTarget,
+		ChunkCount:            cfg.ChunkCount,
+		CleanupPolicy:         cfg.CleanupPolicy,
+		Reused:                reused,
+		OutputDir:             cfg.OutputDir,
+		TerraformDir:          cfg.TerraformDir,
+		ControllerIP:          selfhosted.ControllerIP,
+		GenerationID:          selfhosted.GenerationID,
+		NATSUrl:               selfhosted.NATSURL,
+		ControllerCAPEM:       selfhosted.ControllerCAPEM,
+		ControllerHost:        selfhosted.ControllerHost,
+		NATSClientCertPEM:     selfhosted.NATSOperatorClientCertPEM,
+		NATSClientKeyPEM:      selfhosted.NATSOperatorClientKeyPEM,
+		ExpectedWorkerVersion: firstNonEmpty(selfhosted.DockerImage, aws.DockerImage),
 	}
-	// Handle terraform list output format like [subnet-xxx subnet-yyy]
-	s = strings.Trim(s, "[]")
-	parts := strings.Split(s, " ")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
-	return result
-}
-
-func parseInt(s string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
-}
-
-func parseBool(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "1", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
+	return ""
 }
 
 // simpleLogger satisfies logger.Logger for the default deployer.
