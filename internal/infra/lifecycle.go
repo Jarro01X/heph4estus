@@ -69,9 +69,10 @@ func Probe(ctx context.Context, tf *TerraformClient, kind cloud.Kind, terraformD
 	if len(outputs) == 0 {
 		return ProbeResult{Status: StatusMissing}
 	}
+	typed := DecodeTerraformOutputs(kind, outputs)
 
 	// Check for tool mismatch.
-	deployedTool := outputs["tool_name"]
+	deployedTool := typed.ToolName
 	if deployedTool != "" && deployedTool != requestedTool {
 		return ProbeResult{
 			Status:       StatusMismatch,
@@ -83,8 +84,8 @@ func Probe(ctx context.Context, tf *TerraformClient, kind cloud.Kind, terraformD
 	// For provider-native clouds, verify the deployed cloud matches. This
 	// prevents silently reusing Hetzner infra when Vultr was requested.
 	if kind.IsProviderNative() {
-		deployedCloud := outputs["cloud"]
-		if deployedCloud != "" && cloud.Kind(deployedCloud).Canonical() != kind.Canonical() {
+		deployedCloud := typed.Cloud
+		if deployedCloud != "" && deployedCloud != kind.Canonical() {
 			return ProbeResult{
 				Status:       StatusMismatch,
 				Outputs:      outputs,
@@ -94,12 +95,7 @@ func Probe(ctx context.Context, tf *TerraformClient, kind cloud.Kind, terraformD
 	}
 
 	// Check for missing required keys.
-	var missing []string
-	for _, key := range RequiredOutputKeysForCloud(kind) {
-		if outputs[key] == "" {
-			missing = append(missing, key)
-		}
-	}
+	missing := typed.ValidateRequired(kind)
 	if len(missing) > 0 {
 		return ProbeResult{
 			Status:       StatusStale,
