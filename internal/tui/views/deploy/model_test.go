@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"heph4estus/internal/cloud"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/tui/core"
 )
 
@@ -136,6 +137,88 @@ func TestDeployModel_LifecycleReuse(t *testing.T) {
 		if infraOut.ImageTag != outputs["image_tag"] {
 			t.Fatalf("ImageTag = %q, want %q", infraOut.ImageTag, outputs["image_tag"])
 		}
+	}
+}
+
+func TestCoreInfraOutputsFromTerraform_AWS(t *testing.T) {
+	decoded := infra.DecodeTerraformOutputs(cloud.KindAWS, map[string]string{
+		"sqs_queue_url":        "https://sqs.example.com/q",
+		"ecr_repo_url":         "123.dkr.ecr.us-east-1.amazonaws.com/nmap",
+		"image_tag":            "heph-nmap-worker-20260608T032422Z-a1b2c3d4",
+		"docker_image":         "123.dkr.ecr.us-east-1.amazonaws.com/nmap:tag",
+		"s3_bucket_name":       "bucket",
+		"ecs_cluster_name":     "cluster",
+		"task_definition_arn":  "arn:aws:ecs:td",
+		"subnet_ids":           "[subnet-a subnet-b]",
+		"security_group_id":    "sg-123",
+		"instance_profile_arn": "arn:aws:iam::role",
+		"ami_id":               "ami-123",
+	})
+	cfg := core.DeployConfig{
+		Cloud:          cloud.KindAWS,
+		TargetsContent: "1.1.1.1\n",
+		WorkerCount:    5,
+		ComputeMode:    "spot",
+		CleanupPolicy:  "destroy-after",
+		OutputDir:      "/tmp/out",
+	}
+
+	infraOut := coreInfraOutputsFromTerraform(cfg, decoded, true)
+	if infraOut.SQSQueueURL != "https://sqs.example.com/q" || infraOut.ECRRepoURL == "" || infraOut.S3BucketName != "bucket" {
+		t.Fatalf("AWS runtime outputs not mapped: %#v", infraOut)
+	}
+	if len(infraOut.SubnetIDs) != 2 || infraOut.SubnetIDs[0] != "subnet-a" || infraOut.SubnetIDs[1] != "subnet-b" {
+		t.Fatalf("SubnetIDs = %#v", infraOut.SubnetIDs)
+	}
+	if infraOut.ExpectedWorkerVersion != "123.dkr.ecr.us-east-1.amazonaws.com/nmap:tag" {
+		t.Fatalf("ExpectedWorkerVersion = %q", infraOut.ExpectedWorkerVersion)
+	}
+	if !infraOut.Reused || infraOut.CleanupPolicy != "destroy-after" || infraOut.OutputDir != "/tmp/out" {
+		t.Fatalf("lifecycle fields not preserved: reused=%t cleanup=%q out=%q", infraOut.Reused, infraOut.CleanupPolicy, infraOut.OutputDir)
+	}
+}
+
+func TestCoreInfraOutputsFromTerraform_ProviderNative(t *testing.T) {
+	decoded := infra.DecodeTerraformOutputs(cloud.KindHetzner, map[string]string{
+		"cloud":                         "hetzner",
+		"sqs_queue_url":                 "heph-tasks",
+		"s3_bucket_name":                "heph-results",
+		"s3_endpoint":                   "https://ctrl:9000",
+		"s3_region":                     "us-east-1",
+		"s3_access_key":                 "ak",
+		"s3_secret_key":                 "sk",
+		"s3_path_style":                 "true",
+		"worker_count":                  "3",
+		"controller_ip":                 "203.0.113.10",
+		"generation_id":                 "gen-1",
+		"nats_url":                      "nats://ctrl:4222",
+		"controller_ca_pem":             "ca",
+		"controller_host":               "controller.heph.local",
+		"nats_operator_client_cert_pem": "operator-cert",
+		"nats_operator_client_key_pem":  "operator-key",
+		"docker_image":                  "registry/heph-httpx-worker:latest",
+	})
+	cfg := core.DeployConfig{
+		Cloud:       cloud.KindHetzner,
+		ToolName:    "httpx",
+		WorkerCount: 10,
+	}
+
+	infraOut := coreInfraOutputsFromTerraform(cfg, decoded, false)
+	if infraOut.FleetWorkerCount != 3 || infraOut.SQSQueueURL != "heph-tasks" || infraOut.S3BucketName != "heph-results" {
+		t.Fatalf("provider-native runtime outputs not mapped: %#v", infraOut)
+	}
+	if !infraOut.S3PathStyle || infraOut.S3Endpoint != "https://ctrl:9000" || infraOut.S3AccessKey != "ak" || infraOut.S3SecretKey != "sk" {
+		t.Fatalf("provider-native storage outputs not mapped: %#v", infraOut)
+	}
+	if infraOut.ControllerIP != "203.0.113.10" || infraOut.GenerationID != "gen-1" || infraOut.NATSUrl != "nats://ctrl:4222" {
+		t.Fatalf("fleet metadata not mapped: %#v", infraOut)
+	}
+	if infraOut.NATSClientCertPEM != "operator-cert" || infraOut.NATSClientKeyPEM != "operator-key" {
+		t.Fatalf("NATS identity not mapped: %q/%q", infraOut.NATSClientCertPEM, infraOut.NATSClientKeyPEM)
+	}
+	if infraOut.ExpectedWorkerVersion != "registry/heph-httpx-worker:latest" {
+		t.Fatalf("ExpectedWorkerVersion = %q", infraOut.ExpectedWorkerVersion)
 	}
 }
 
