@@ -8,25 +8,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"heph4estus/internal/cloud"
-	awscloud "heph4estus/internal/cloud/aws"
-	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/operator"
+	"heph4estus/internal/scanruntime"
 	"heph4estus/internal/tools/nmap"
 	"heph4estus/internal/worker"
-)
-
-const (
-	spotThreshold  = 50
-	pollInterval   = 2 * time.Second
-	enqueueTimeout = 5 * time.Minute
-	launchTimeout  = 5 * time.Minute
 )
 
 func runNmap(args []string, log logger.Logger) error {
@@ -143,187 +134,91 @@ func runNmap(args []string, log logger.Logger) error {
 	}
 
 	ctx := mainContext()
+	env, err := scanruntime.Setup(ctx, scanruntime.SetupOptions{
+		ToolName:  "nmap",
+		CloudKind: cloudKind,
+		Workers:   *workers,
+		LifecyclePolicy: infra.LifecyclePolicy{
+			NoDeploy:     *noDeploy,
+			AutoApprove:  *autoApprove,
+			DestroyAfter: *destroyAfter,
+		},
+		PromptFunc: deployPrompt,
+		Stream:     os.Stderr,
+		Log:        log,
+	})
+	if err != nil {
+		return err
+	}
 
 	// Track the job.
 	tracker := newTracker()
-	cleanupPolicy := "reuse"
-	if *destroyAfter {
-		cleanupPolicy = "destroy-after"
-	}
-
-	var (
-		outputs map[string]string
-		bucket  string
-		reused  bool
-		toolCfg *infra.ToolConfig
-	)
-
-	if cloudKind.IsProviderNative() {
-		// Provider-native (Hetzner): Terraform deploy + selfhosted runtime.
-		toolCfg, err = infra.ResolveToolConfig("nmap", cloudKind)
-		if err != nil {
-			return err
-		}
-		toolCfg.TerraformVars["worker_count"] = strconv.Itoa(*workers)
-		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
-			NoDeploy:     *noDeploy,
-			AutoApprove:  *autoApprove,
-			DestroyAfter: *destroyAfter,
-		}, "", os.Stderr, deployPrompt, log)
-		if ensureErr != nil {
-			return ensureErr
-		}
-		outputs = ensureResult.Outputs
-		reused = ensureResult.Reused
-		bucket = outputs["s3_bucket_name"]
-	} else if cloudKind.IsSelfhostedFamily() {
-		// Manual selfhosted: no Terraform/deploy — read queue ID and bucket from env.
-		shCfg := factory.SelfhostedConfigFromEnv()
-		if shCfg.QueueID == "" || shCfg.Bucket == "" {
-			return fmt.Errorf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
-		}
-		bucket = shCfg.Bucket
-		outputs = map[string]string{
-			"sqs_queue_url":  shCfg.QueueID,
-			"s3_bucket_name": shCfg.Bucket,
-		}
-	} else {
-		// AWS: resolve tool config and ensure infrastructure.
-		toolCfg, err = infra.ResolveToolConfig("nmap")
-		if err != nil {
-			return err
-		}
-		region := infra.AWSRegion()
-		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
-			NoDeploy:     *noDeploy,
-			AutoApprove:  *autoApprove,
-			DestroyAfter: *destroyAfter,
-		}, region, os.Stderr, deployPrompt, log)
-		if ensureErr != nil {
-			return ensureErr
-		}
-		outputs = ensureResult.Outputs
-		reused = ensureResult.Reused
-		bucket = outputs["s3_bucket_name"]
-	}
-
-	_ = tracker.Create(&operator.JobRecord{
-		JobID:                 jobID,
-		ToolName:              "nmap",
-		Phase:                 operator.PhaseEnqueuing,
-		TotalTasks:            len(tasks),
-		WorkerCount:           *workers,
-		ComputeMode:           *computeMode,
-		Cloud:                 string(cloudKind),
-		CleanupPolicy:         cleanupPolicy,
-		Bucket:                bucket,
-		S3Endpoint:            outputs["s3_endpoint"],
-		S3Region:              outputs["s3_region"],
-		S3AccessKey:           outputs["s3_access_key"],
-		S3SecretKey:           outputs["s3_secret_key"],
-		S3PathStyle:           outputBool(outputs["s3_path_style"]),
-		Placement:             placementPolicy,
-		ExpectedWorkerVersion: outputs["docker_image"],
-		NATSUrl:               outputs["nats_url"],
-		ControllerIP:          outputs["controller_ip"],
-		GenerationID:          outputs["generation_id"],
-		ControllerCAPEM:       outputs["controller_ca_pem"],
-		ControllerHost:        outputs["controller_host"],
-		NATSClientCertPEM:     outputs["nats_operator_client_cert_pem"],
-		NATSClientKeyPEM:      outputs["nats_operator_client_key_pem"],
+	cleanupPolicy := scanruntime.CleanupPolicy(*destroyAfter)
+	_ = scanruntime.CreateJobRecord(scanruntime.JobRecordOptions{
+		Tracker:       tracker,
+		JobID:         jobID,
+		ToolName:      "nmap",
+		TotalTasks:    len(tasks),
+		Workers:       *workers,
+		ComputeMode:   *computeMode,
+		CloudKind:     cloudKind,
+		CleanupPolicy: cleanupPolicy,
+		Bucket:        env.Bucket,
+		Outputs:       env.Outputs,
+		Placement:     placementPolicy,
 	})
 
 	// Run the scan.
-	started, scanErr := runNmapScan(ctx, tasks, *workers, *computeMode, *jitterMax, *format, outputs, log, tracker, jobID, placementPolicy, cloudKind)
-
-	if scanErr != nil {
-		_ = tracker.Fail(jobID, scanErr)
-	} else if started {
-		_ = tracker.Complete(jobID)
+	var (
+		provider cloud.Provider
+		scanErr  error
+		started  bool
+	)
+	provider, err = scanruntime.BuildProvider(ctx, scanruntime.ProviderOptions{
+		CloudKind:       cloudKind,
+		Outputs:         env.Outputs,
+		Log:             log,
+		ProviderBuilder: buildRuntimeProvider,
+	})
+	if err != nil {
+		scanErr = fmt.Errorf("building cloud provider: %w", err)
+	} else {
+		started, scanErr = runNmapScanWithDeps(ctx, tasks, *workers, *computeMode, *jitterMax, *format, env.Outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, placementPolicy, cloudKind)
 	}
 
-	// Export results locally before any cleanup.
-	var exportDir string
-	if *outDir != "" && scanErr == nil && started {
-		logStatus("Exporting results to %s...", *outDir)
-
-		exportProvider, provErr := buildRuntimeProvider(ctx, cloudKind, outputs, log)
-		if provErr != nil {
-			return fmt.Errorf("building cloud provider for export: %w", provErr)
-		}
-		storage := exportProvider.Storage()
-
-		result, exportErr := operator.ExportJob(ctx, storage, bucket, "nmap", jobID, *outDir)
-		if exportErr != nil {
-			return fmt.Errorf("export failed: %w", exportErr)
-		}
-		exportDir = result.Dir
-		logStatus("Exported %d results, %d artifacts to %s", result.ResultCount, result.ArtifactCount, result.Dir)
-
-		// Record the local output path in the job record.
-		if store := tracker.Store(); store != nil {
-			if rec, loadErr := store.Load(jobID); loadErr == nil {
-				rec.LocalOutputDir = result.Dir
-				_ = store.Update(rec)
-			}
-		}
+	var storage cloud.Storage
+	if provider != nil {
+		storage = provider.Storage()
 	}
-
-	// Destroy only after execution has actually started and export is done.
-	if *destroyAfter && started {
-		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
-			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
-		} else if toolCfg != nil {
-			logStatus("Destroying infrastructure (--destroy-after)...")
-			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
-				if scanErr != nil {
-					return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
-				}
-				return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
-			}
-		}
+	finalized, finalizeErr := scanruntime.Finalize(ctx, scanruntime.FinalizeOptions{
+		JobID:        jobID,
+		ToolName:     "nmap",
+		Tracker:      tracker,
+		Started:      started,
+		ScanErr:      scanErr,
+		OutDir:       *outDir,
+		Storage:      storage,
+		Bucket:       env.Bucket,
+		DestroyAfter: *destroyAfter,
+		CloudKind:    cloudKind,
+		ToolConfig:   env.ToolConfig,
+		Stream:       os.Stderr,
+		Log:          log,
+		Statusf:      logStatus,
+	})
+	if finalizeErr != nil {
+		return finalizeErr
 	}
 
 	// Print run summary.
 	if started {
-		printRunSummary(jobID, "nmap", reused, cleanupPolicy, exportDir)
+		printRunSummary(jobID, "nmap", env.Reused, cleanupPolicy, finalized.ExportDir)
 	}
 
 	return scanErr
 }
 
-func runNmapScan(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, log logger.Logger, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind cloud.Kind) (bool, error) {
-	queueURL := outputs["sqs_queue_url"]
-	bucket := outputs["s3_bucket_name"]
-	if queueURL == "" || bucket == "" {
-		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-	}
-
-	// Build the cloud provider. For provider-native paths, use Terraform
-	// outputs as the config source rather than environment variables.
-	var (
-		provider cloud.Provider
-		provErr  error
-	)
-	provider, provErr = buildRuntimeProvider(ctx, cloudKind, outputs, log)
-	if provErr != nil {
-		return false, fmt.Errorf("building cloud provider: %w", provErr)
-	}
-	return runNmapScanWithDeps(ctx, tasks, workers, computeMode, jitterMax, format, outputs, provider.Queue(), provider.Storage(), provider.Compute(), tracker, jobID, placementPolicy, cloudKind)
-}
-
-func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs map[string]string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind ...cloud.Kind) (bool, error) {
-	queueURL := outputs["sqs_queue_url"]
-	bucket := outputs["s3_bucket_name"]
-	if queueURL == "" || bucket == "" {
-		return false, fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-	}
-
-	// Enqueue targets.
-	logStatus("Enqueueing %d targets...", len(tasks))
-	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
-	defer enqueueCancel()
-
+func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs infra.TerraformOutputs, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind ...cloud.Kind) (bool, error) {
 	genericTasks := make([]worker.Task, len(tasks))
 	for i, t := range tasks {
 		genericTasks[i] = worker.Task{
@@ -336,111 +231,49 @@ func runNmapScanWithDeps(ctx context.Context, tasks []nmap.ScanTask, workers int
 			TotalChunks: t.TotalChunks,
 		}
 	}
-	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, genericTasks, jobs.EnqueueOptions{})
-	if err != nil {
-		return false, fmt.Errorf("enqueueing targets: %w", err)
+
+	kind := cloud.KindAWS
+	if len(cloudKind) > 0 {
+		kind = cloudKind[0]
 	}
-	logStatus("Enqueued %d targets", enqueueResult.SentTasks)
-
-	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
-
-	// Launch workers.
-	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
-	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
-	defer launchCancel()
-
-	if len(cloudKind) > 0 && cloudKind[0].IsProviderNative() {
-		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind[0], outputs, placementPolicy)
-		if err != nil {
-			return false, err
-		}
-		logStatus("Using provider-native %s fleet (%d eligible workers, policy: %s)", cloudKind[0].Canonical(), ready, placementPolicy.Summary())
-	} else {
-		containerName := "nmap-worker"
-		workerEnv := map[string]string{
+	queueURL := outputs.AWS.SQSQueueURL
+	if queueURL == "" {
+		queueURL = outputs.Selfhosted.QueueURL
+	}
+	bucket := outputs.AWS.S3BucketName
+	if bucket == "" {
+		bucket = outputs.Selfhosted.S3BucketName
+	}
+	return scanruntime.ExecuteQueuedScan(ctx, scanruntime.ExecuteOptions{
+		ToolName:     "nmap",
+		JobID:        jobID,
+		Tasks:        genericTasks,
+		EnqueueLabel: "targets",
+		Workers:      workers,
+		ComputeMode:  computeMode,
+		Queue:        queue,
+		Storage:      storage,
+		Compute:      compute,
+		Outputs:      outputs,
+		QueueURL:     queueURL,
+		Bucket:       bucket,
+		CloudKind:    kind,
+		Placement:    placementPolicy,
+		Tracker:      tracker,
+		WorkerEnv: map[string]string{
 			"QUEUE_URL":          queueURL,
 			"S3_BUCKET":          bucket,
 			"JITTER_MAX_SECONDS": strconv.Itoa(jitterMax),
 			"TOOL_NAME":          "nmap",
-		}
-
-		// Selfhosted only supports RunContainer (no spot instances).
-		isSelfhosted := len(cloudKind) > 0 && cloudKind[0].IsSelfhostedFamily()
-		useSpot := !isSelfhosted && resolveComputeMode(computeMode, workers)
-		if useSpot {
-			ecrURL := outputs["ecr_repo_url"]
-			imageTag, err := awsImageTagFromOutputs(outputs)
-			if err != nil {
-				return false, err
-			}
-			userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
-				ECRRepoURL: ecrURL,
-				ImageTag:   imageTag,
-				Region:     regionFromECR(ecrURL),
-				EnvVars:    workerEnv,
-			})
-			ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
-				AMI:             outputs["ami_id"],
-				Count:           workers,
-				SecurityGroups:  []string{outputs["security_group_id"]},
-				SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
-				InstanceProfile: outputs["instance_profile_arn"],
-				UserData:        userData,
-				Tags: map[string]string{
-					"Project": "heph4estus",
-					"Tool":    "nmap",
-				},
-			})
-			if err != nil {
-				return false, fmt.Errorf("launching spot instances: %w", err)
-			}
-			logStatus("Launched %d spot instances", len(ids))
-		} else {
-			_, err := compute.RunContainer(launchCtx, cloud.ContainerOpts{
-				Cluster:        outputs["ecs_cluster_name"],
-				TaskDefinition: outputs["task_definition_arn"],
-				ContainerName:  containerName,
-				Subnets:        splitOutputList(outputs["subnet_ids"]),
-				SecurityGroups: []string{outputs["security_group_id"]},
-				Env:            workerEnv,
-				Count:          workers,
-			})
-			if err != nil {
-				return false, fmt.Errorf("launching workers: %w", err)
-			}
-			logStatus("Launched %d workers", workers)
-		}
-	}
-
-	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
-
-	// Poll for progress.
-	logStatus("Scanning...")
-	startTime := time.Now()
-	totalTargets := len(tasks)
-	scanPrefix := jobs.ResultPrefix("nmap", jobID)
-
-	for {
-		count, err := storage.Count(ctx, bucket, scanPrefix)
-		if err != nil {
-			logStatus("Warning: progress check failed: %v", err)
-		} else {
-			elapsed := time.Since(startTime).Truncate(time.Second)
-			pct := float64(count) / float64(totalTargets) * 100
-			logStatus("Progress: %d/%d (%.1f%%) — elapsed %s", count, totalTargets, pct, elapsed)
-
-			if count >= totalTargets {
-				break
-			}
-		}
-		time.Sleep(pollInterval)
-	}
-
-	elapsed := time.Since(startTime).Truncate(time.Second)
-	logStatus("Scan complete: %d targets in %s", totalTargets, elapsed)
-
-	// Output results.
-	return true, outputResults(ctx, storage, bucket, scanPrefix, format)
+		},
+		ContainerName: "nmap-worker",
+		CompleteLabel: "targets",
+		RenderResults: func(renderCtx context.Context, renderStorage cloud.Storage, renderBucket, prefix string) error {
+			return outputResults(renderCtx, renderStorage, renderBucket, prefix, format)
+		},
+		Statusf:     logStatus,
+		FleetWaiter: waitForProviderNativeFleetFunc,
+	})
 }
 
 func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string) error {
@@ -486,25 +319,12 @@ func outputResults(ctx context.Context, storage cloud.Storage, bucket, prefix, f
 }
 
 func resolveComputeMode(mode string, workers int) bool {
-	switch mode {
-	case "spot":
-		return true
-	case "fargate":
-		return false
-	default: // "auto"
-		return workers >= spotThreshold
-	}
+	return scanruntime.ResolveComputeMode(mode, workers)
 }
 
 // regionFromECR extracts the AWS region from an ECR repo URL.
 func regionFromECR(url string) string {
-	parts := strings.Split(url, ".")
-	for i, p := range parts {
-		if p == "ecr" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return "us-east-1"
+	return scanruntime.RegionFromECR(url)
 }
 
 func extractTargetFromKey(key string) string {
@@ -522,16 +342,7 @@ func countGroups(tasks []nmap.ScanTask) int {
 }
 
 func splitOutputList(s string) []string {
-	s = strings.Trim(s, "[]")
-	parts := strings.Split(s, " ")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
+	return scanruntime.SplitOutputList(s)
 }
 
 // logStatus prints a status line to stderr (keeps stdout clean for results).

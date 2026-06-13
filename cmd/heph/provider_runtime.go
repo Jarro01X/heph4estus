@@ -3,27 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"heph4estus/internal/cloud"
-	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/logger"
+	"heph4estus/internal/scanruntime"
 )
 
 var waitForProviderNativeFleetFunc = waitForProviderNativeFleet
 
 func buildRuntimeProvider(ctx context.Context, kind cloud.Kind, outputs map[string]string, log logger.Logger) (cloud.Provider, error) {
-	if kind.IsProviderNative() && outputs != nil {
-		typed := infra.DecodeTerraformOutputs(kind, outputs)
-		return factory.Build(factory.Config{
-			Kind:       kind,
-			Selfhosted: factory.SelfhostedConfigFromTypedOutputs(typed.Selfhosted),
-			Logger:     log,
-		})
-	}
-	return factory.BuildForKind(ctx, kind, log)
+	return scanruntime.DefaultProviderBuilder(ctx, kind, outputs, log)
 }
 
 func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs map[string]string, policy fleet.PlacementPolicy) (int, error) {
@@ -71,13 +62,4 @@ func waitForProviderNativeFleet(ctx context.Context, kind cloud.Kind, outputs ma
 
 func fleetWorkerCount(outputs map[string]string) int {
 	return infra.OutputInt(outputs, infra.OutputWorkerCount)
-}
-
-func outputBool(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true", "1", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
 }

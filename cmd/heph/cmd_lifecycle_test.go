@@ -13,6 +13,7 @@ import (
 
 	"heph4estus/internal/cloud"
 	"heph4estus/internal/fleet"
+	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
 	nmaptool "heph4estus/internal/tools/nmap"
@@ -102,6 +103,10 @@ func testOutputs() map[string]string {
 		"ami_id":               "ami-123",
 		"instance_profile_arn": "profile-arn",
 	}
+}
+
+func testRuntimeOutputs(kind cloud.Kind, outputs map[string]string) infra.TerraformOutputs {
+	return infra.DecodeTerraformOutputs(kind, outputs)
 }
 
 func writeTargetFile(t *testing.T, content string) string {
@@ -241,7 +246,7 @@ func TestRunTargetListScanStartedFalseOnLaunchFailure(t *testing.T) {
 		&mockQueue{},
 		&mockStorage{},
 		&mockCompute{runContainerErr: errors.New("launch failed")},
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		"results-bucket",
 		"queue-url",
 		operator.NoopTracker(),
@@ -276,7 +281,7 @@ func TestRunTargetListScanStartedTrueOnOutputFailure(t *testing.T) {
 		&mockQueue{},
 		&mockStorage{count: 1, listErr: errors.New("list failed")},
 		&mockCompute{},
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		"results-bucket",
 		"queue-url",
 		operator.NoopTracker(),
@@ -314,7 +319,7 @@ func TestRunTargetListScanUploadsChunksForInputModules(t *testing.T) {
 		queue,
 		storage,
 		&mockCompute{},
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		"results-bucket",
 		"queue-url",
 		operator.NoopTracker(),
@@ -359,7 +364,7 @@ func TestRunNmapScanWithDepsStartedFalseOnLaunchFailure(t *testing.T) {
 		"fargate",
 		0,
 		"text",
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		&mockQueue{},
 		&mockStorage{},
 		&mockCompute{runContainerErr: errors.New("launch failed")},
@@ -393,7 +398,7 @@ func TestRunNmapScanWithDepsBatchesLargeEnqueue(t *testing.T) {
 		"fargate",
 		0,
 		"text",
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		queue,
 		&mockStorage{count: len(tasks)},
 		&mockCompute{},
@@ -451,7 +456,7 @@ func TestRunNmapScanWithDepsStartedTrueOnOutputFailure(t *testing.T) {
 		"fargate",
 		0,
 		"text",
-		testOutputs(),
+		testRuntimeOutputs(cloud.KindAWS, testOutputs()),
 		&mockQueue{},
 		&mockStorage{count: 1, listErr: errors.New("list failed")},
 		&mockCompute{},
@@ -488,10 +493,10 @@ func TestRunNmapScanWithDeps_ProviderNativeSkipsRunContainer(t *testing.T) {
 		"auto", // auto on VPS providers should NOT use spot
 		0,
 		"text",
-		map[string]string{
+		testRuntimeOutputs(cloud.KindHetzner, map[string]string{
 			"sqs_queue_url":  "nats-stream",
 			"s3_bucket_name": "minio-bucket",
-		},
+		}),
 		&mockQueue{},
 		&mockStorage{count: 1},
 		comp,
@@ -530,10 +535,10 @@ func TestRunNmapScanWithDeps_SelfhostedNeverCallsSpot(t *testing.T) {
 		"auto",
 		0,
 		"text",
-		map[string]string{
+		testRuntimeOutputs(cloud.KindManual, map[string]string{
 			"sqs_queue_url":  "nats-stream",
 			"s3_bucket_name": "minio-bucket",
-		},
+		}),
 		&mockQueue{},
 		&mockStorage{count: 1},
 		comp,
@@ -580,12 +585,12 @@ func TestRunTargetListScan_ProviderNativeSkipsRunContainer(t *testing.T) {
 		&mockQueue{},
 		&mockStorage{count: 1},
 		comp,
-		map[string]string{
+		testRuntimeOutputs(cloud.KindHetzner, map[string]string{
 			"sqs_queue_url":  "heph-tasks",
 			"s3_bucket_name": "heph-results",
 			"nats_url":       "nats://10.0.1.2:4222",
 			"worker_count":   "3",
-		},
+		}),
 		"heph-results",
 		"heph-tasks",
 		operator.NoopTracker(),
