@@ -8,17 +8,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"heph4estus/internal/cloud"
-	awscloud "heph4estus/internal/cloud/aws"
-	"heph4estus/internal/cloud/factory"
 	"heph4estus/internal/fleet"
 	"heph4estus/internal/infra"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/logger"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	"heph4estus/internal/scanruntime"
 	targetlisttool "heph4estus/internal/tools/targetlist"
 	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/worker"
@@ -144,73 +142,29 @@ func runScan(args []string, log logger.Logger) error {
 	}
 
 	ctx := mainContext()
-
-	var (
-		queueURL string
-		bucket   string
-		outputs  map[string]string
-		reused   bool
-		toolCfg  *infra.ToolConfig
-	)
-
-	if cloudKind.IsProviderNative() {
-		// Provider-native (Hetzner): Terraform deploy + selfhosted runtime.
-		toolCfg, err = infra.ResolveToolConfig(*tool, cloudKind)
-		if err != nil {
-			return err
-		}
-		toolCfg.TerraformVars["worker_count"] = strconv.Itoa(*workers)
-		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
+	env, err := scanruntime.Setup(ctx, scanruntime.SetupOptions{
+		ToolName:  *tool,
+		CloudKind: cloudKind,
+		Workers:   *workers,
+		LifecyclePolicy: infra.LifecyclePolicy{
 			NoDeploy:     *noDeploy,
 			AutoApprove:  *autoApprove,
 			DestroyAfter: *destroyAfter,
-		}, "", os.Stderr, deployPrompt, log)
-		if ensureErr != nil {
-			return ensureErr
-		}
-		outputs = ensureResult.Outputs
-		reused = ensureResult.Reused
-		queueURL = outputs["sqs_queue_url"]
-		bucket = outputs["s3_bucket_name"]
-		if queueURL == "" || bucket == "" {
-			return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-		}
-	} else if cloudKind.IsSelfhostedFamily() {
-		// Manual selfhosted: no Terraform/deploy — read queue ID and bucket from env.
-		shCfg := factory.SelfhostedConfigFromEnv()
-		queueURL = shCfg.QueueID
-		bucket = shCfg.Bucket
-		if queueURL == "" || bucket == "" {
-			return fmt.Errorf("%s requires SELFHOSTED_QUEUE_ID and SELFHOSTED_BUCKET environment variables", cloudKind.Canonical())
-		}
-	} else {
-		// AWS: resolve tool config and ensure infrastructure.
-		toolCfg, err = infra.ResolveToolConfig(*tool)
-		if err != nil {
-			return err
-		}
-		region := infra.AWSRegion()
-		ensureResult, ensureErr := infra.EnsureInfra(ctx, toolCfg, infra.LifecyclePolicy{
-			NoDeploy:     *noDeploy,
-			AutoApprove:  *autoApprove,
-			DestroyAfter: *destroyAfter,
-		}, region, os.Stderr, deployPrompt, log)
-		if ensureErr != nil {
-			return ensureErr
-		}
-		outputs = ensureResult.Outputs
-		reused = ensureResult.Reused
-		queueURL = outputs["sqs_queue_url"]
-		bucket = outputs["s3_bucket_name"]
-		if queueURL == "" || bucket == "" {
-			return fmt.Errorf("terraform outputs missing sqs_queue_url or s3_bucket_name")
-		}
+		},
+		PromptFunc: deployPrompt,
+		Stream:     os.Stderr,
+		Log:        log,
+	})
+	if err != nil {
+		return err
 	}
 
-	// Build the cloud provider. For provider-native paths, use Terraform
-	// outputs as the config source rather than environment variables.
-	var provider cloud.Provider
-	provider, err = buildRuntimeProvider(ctx, cloudKind, outputs, log)
+	provider, err := scanruntime.BuildProvider(ctx, scanruntime.ProviderOptions{
+		CloudKind:       cloudKind,
+		Outputs:         env.Outputs,
+		Log:             log,
+		ProviderBuilder: buildRuntimeProvider,
+	})
 	if err != nil {
 		return fmt.Errorf("building cloud provider: %w", err)
 	}
@@ -222,33 +176,18 @@ func runScan(args []string, log logger.Logger) error {
 
 	// Track the job.
 	tracker := newTracker()
-	cleanupPolicy := "reuse"
-	if *destroyAfter {
-		cleanupPolicy = "destroy-after"
-	}
-	_ = tracker.Create(&operator.JobRecord{
-		JobID:                 jobID,
-		ToolName:              *tool,
-		Phase:                 operator.PhaseEnqueuing,
-		WorkerCount:           *workers,
-		ComputeMode:           *computeMode,
-		Cloud:                 string(cloudKind),
-		CleanupPolicy:         cleanupPolicy,
-		Bucket:                bucket,
-		S3Endpoint:            outputs["s3_endpoint"],
-		S3Region:              outputs["s3_region"],
-		S3AccessKey:           outputs["s3_access_key"],
-		S3SecretKey:           outputs["s3_secret_key"],
-		S3PathStyle:           outputBool(outputs["s3_path_style"]),
-		Placement:             placementPolicy,
-		ExpectedWorkerVersion: outputs["docker_image"],
-		NATSUrl:               outputs["nats_url"],
-		ControllerIP:          outputs["controller_ip"],
-		GenerationID:          outputs["generation_id"],
-		ControllerCAPEM:       outputs["controller_ca_pem"],
-		ControllerHost:        outputs["controller_host"],
-		NATSClientCertPEM:     outputs["nats_operator_client_cert_pem"],
-		NATSClientKeyPEM:      outputs["nats_operator_client_key_pem"],
+	cleanupPolicy := scanruntime.CleanupPolicy(*destroyAfter)
+	_ = scanruntime.CreateJobRecord(scanruntime.JobRecordOptions{
+		Tracker:       tracker,
+		JobID:         jobID,
+		ToolName:      *tool,
+		Workers:       *workers,
+		ComputeMode:   *computeMode,
+		CloudKind:     cloudKind,
+		CleanupPolicy: cleanupPolicy,
+		Bucket:        env.Bucket,
+		Outputs:       env.Outputs,
+		Placement:     placementPolicy,
 	})
 
 	var (
@@ -256,61 +195,40 @@ func runScan(args []string, log logger.Logger) error {
 		started bool
 	)
 	if mod.InputType == modules.InputTypeWordlist {
-		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistMeta, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
+		started, scanErr = runWordlistScan(ctx, *tool, jobID, *wordlistFile, wordlistMeta, *runtimeTarget, *options, *chunks, *workers, *computeMode, *format, queue, storage, compute, env.Outputs, env.Bucket, env.QueueURL, tracker, cloudKind, placementPolicy)
 	} else {
-		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetMeta, mod, *options, *workers, *computeMode, *format, queue, storage, compute, outputs, bucket, queueURL, tracker, cloudKind, placementPolicy)
+		started, scanErr = runTargetListScan(ctx, *tool, jobID, *inputFile, targetMeta, mod, *options, *workers, *computeMode, *format, queue, storage, compute, env.Outputs, env.Bucket, env.QueueURL, tracker, cloudKind, placementPolicy)
 	}
 
-	if scanErr != nil {
-		_ = tracker.Fail(jobID, scanErr)
-	} else if started {
-		_ = tracker.Complete(jobID)
-	}
-
-	// Export results locally before any cleanup.
-	var exportDir string
-	if *outDir != "" && scanErr == nil && started {
-		logStatus("Exporting results to %s...", *outDir)
-		result, exportErr := operator.ExportJob(ctx, storage, bucket, *tool, jobID, *outDir)
-		if exportErr != nil {
-			return fmt.Errorf("export failed: %w", exportErr)
-		}
-		exportDir = result.Dir
-		logStatus("Exported %d results, %d artifacts to %s", result.ResultCount, result.ArtifactCount, result.Dir)
-
-		// Record the local output path in the job record.
-		if store := tracker.Store(); store != nil {
-			if rec, loadErr := store.Load(jobID); loadErr == nil {
-				rec.LocalOutputDir = result.Dir
-				_ = store.Update(rec)
-			}
-		}
-	}
-
-	// Destroy only after execution has actually started and export is done.
-	if *destroyAfter && started {
-		if cloudKind.IsSelfhostedFamily() && !cloudKind.IsProviderNative() {
-			logStatus("Skipping destroy: %s does not support auto-destroy", cloudKind.Canonical())
-		} else if toolCfg != nil {
-			logStatus("Destroying infrastructure (--destroy-after)...")
-			if destroyErr := infra.RunDestroy(ctx, toolCfg, os.Stderr, log); destroyErr != nil {
-				if scanErr != nil {
-					return fmt.Errorf("scan failed: %w; additionally, destroy failed: %v", scanErr, destroyErr)
-				}
-				return fmt.Errorf("scan completed but destroy failed: %w", destroyErr)
-			}
-		}
+	finalized, finalizeErr := scanruntime.Finalize(ctx, scanruntime.FinalizeOptions{
+		JobID:        jobID,
+		ToolName:     *tool,
+		Tracker:      tracker,
+		Started:      started,
+		ScanErr:      scanErr,
+		OutDir:       *outDir,
+		Storage:      storage,
+		Bucket:       env.Bucket,
+		DestroyAfter: *destroyAfter,
+		CloudKind:    cloudKind,
+		ToolConfig:   env.ToolConfig,
+		Stream:       os.Stderr,
+		Log:          log,
+		Statusf:      logStatus,
+	})
+	if finalizeErr != nil {
+		return finalizeErr
 	}
 
 	// Print run summary.
 	if started {
-		printRunSummary(jobID, *tool, reused, cleanupPolicy, exportDir)
+		printRunSummary(jobID, *tool, env.Reused, cleanupPolicy, finalized.ExportDir)
 	}
 
 	return scanErr
 }
 
-func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, preflight *targetlisttool.Metadata, mod *modules.ModuleDefinition, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, preflight *targetlisttool.Metadata, mod *modules.ModuleDefinition, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs infra.TerraformOutputs, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
 	fileBacked := targetListUsesFileInput(mod)
 	var (
 		tempDir string
@@ -362,24 +280,13 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, prefl
 	if plan.FileBacked {
 		_ = tracker.UpdatePhase(jobID, operator.PhaseUploading)
 		logStatus("Uploading %d target-list chunks to s3://%s/...", plan.EffectiveChunks, bucket)
-		uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
+		uploadCtx, uploadCancel := context.WithTimeout(ctx, scanruntime.EnqueueTimeout)
 		defer uploadCancel()
 		if err := jobs.UploadTargetListChunks(uploadCtx, storage, bucket, plan); err != nil {
 			return false, fmt.Errorf("uploading target-list chunks: %w", err)
 		}
 	}
 
-	// Enqueue targets.
-	_ = tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
-	logStatus("Enqueueing %d target tasks...", len(plan.Tasks))
-	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
-	defer enqueueCancel()
-
-	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, plan.Tasks, jobs.EnqueueOptions{})
-	if err != nil {
-		return false, fmt.Errorf("enqueueing targets: %w", err)
-	}
-	logStatus("Enqueued %d target tasks", enqueueResult.SentTasks)
 	if plan.FileBacked {
 		if err := plan.Cleanup(); err != nil {
 			logStatus("Warning: failed to clean temporary target-list chunks: %v", err)
@@ -394,24 +301,38 @@ func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, prefl
 			_ = store.Update(rec)
 		}
 	}
-	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
 
-	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind, placementPolicy); err != nil {
-		return false, err
-	}
-
-	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
-
-	// Poll for progress.
 	unitLabel := "targets"
 	if plan.FileBacked {
 		unitLabel = "chunks"
 	}
-	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), unitLabel, format)
+	return scanruntime.ExecuteQueuedScan(ctx, scanruntime.ExecuteOptions{
+		ToolName:      tool,
+		JobID:         jobID,
+		Tasks:         plan.Tasks,
+		EnqueueLabel:  "target tasks",
+		Workers:       workers,
+		ComputeMode:   computeMode,
+		Queue:         queue,
+		Storage:       storage,
+		Compute:       compute,
+		Outputs:       outputs,
+		QueueURL:      queueURL,
+		Bucket:        bucket,
+		CloudKind:     cloudKind,
+		Placement:     placementPolicy,
+		Tracker:       tracker,
+		ProgressLabel: unitLabel,
+		CompleteLabel: unitLabel,
+		RenderResults: func(renderCtx context.Context, renderStorage cloud.Storage, renderBucket, prefix string) error {
+			return outputGenericResults(renderCtx, renderStorage, renderBucket, prefix, format)
+		},
+		Statusf:     logStatus,
+		FleetWaiter: waitForProviderNativeFleetFunc,
+	})
 }
 
-func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, preflight *wordlisttool.Metadata, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs map[string]string, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, preflight *wordlisttool.Metadata, runtimeTarget, options string, chunks, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs infra.TerraformOutputs, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
 	if err := wordlisttool.CleanupStaleTempDirs(wordlisttool.DefaultStaleTempAge); err != nil {
 		logStatus("Warning: failed to clean stale wordlist temp dirs: %v", err)
 	}
@@ -471,38 +392,40 @@ func runWordlistScan(ctx context.Context, tool, jobID, wordlistFile string, pref
 
 	// Upload chunks.
 	logStatus("Uploading %d chunks to s3://%s/...", plan.EffectiveChunks, bucket)
-	uploadCtx, uploadCancel := context.WithTimeout(ctx, enqueueTimeout)
+	uploadCtx, uploadCancel := context.WithTimeout(ctx, scanruntime.EnqueueTimeout)
 	defer uploadCancel()
 	if err := jobs.UploadChunks(uploadCtx, storage, bucket, plan); err != nil {
 		return false, fmt.Errorf("uploading wordlist chunks: %w", err)
 	}
 
-	// Enqueue tasks.
-	_ = tracker.UpdatePhase(jobID, operator.PhaseEnqueuing)
-	logStatus("Enqueueing %d chunk tasks...", len(plan.Tasks))
-	enqueueCtx, enqueueCancel := context.WithTimeout(ctx, enqueueTimeout)
-	defer enqueueCancel()
-
-	enqueueResult, err := jobs.EnqueueTasks(enqueueCtx, queue, queueURL, plan.Tasks, jobs.EnqueueOptions{})
-	if err != nil {
-		return false, fmt.Errorf("enqueueing chunk tasks: %w", err)
-	}
-	logStatus("Enqueued %d chunk tasks", enqueueResult.SentTasks)
 	if err := plan.Cleanup(); err != nil {
 		logStatus("Warning: failed to clean temporary wordlist chunks: %v", err)
 	}
 
-	_ = tracker.UpdatePhase(jobID, operator.PhaseLaunching)
-
-	// Launch workers.
-	if err := launchGenericWorkers(ctx, tool, workers, computeMode, compute, outputs, queueURL, bucket, cloudKind, placementPolicy); err != nil {
-		return false, err
-	}
-
-	_ = tracker.UpdatePhase(jobID, operator.PhaseScanning)
-
-	// Poll for progress.
-	return true, pollAndOutput(ctx, storage, bucket, tool, jobID, len(plan.Tasks), "chunks", format)
+	return scanruntime.ExecuteQueuedScan(ctx, scanruntime.ExecuteOptions{
+		ToolName:      tool,
+		JobID:         jobID,
+		Tasks:         plan.Tasks,
+		EnqueueLabel:  "chunk tasks",
+		Workers:       workers,
+		ComputeMode:   computeMode,
+		Queue:         queue,
+		Storage:       storage,
+		Compute:       compute,
+		Outputs:       outputs,
+		QueueURL:      queueURL,
+		Bucket:        bucket,
+		CloudKind:     cloudKind,
+		Placement:     placementPolicy,
+		Tracker:       tracker,
+		ProgressLabel: "chunks",
+		CompleteLabel: "chunks",
+		RenderResults: func(renderCtx context.Context, renderStorage cloud.Storage, renderBucket, prefix string) error {
+			return outputGenericResults(renderCtx, renderStorage, renderBucket, prefix, format)
+		},
+		Statusf:     logStatus,
+		FleetWaiter: waitForProviderNativeFleetFunc,
+	})
 }
 
 func preflightTargetListFile(path string, workers int) (*targetlisttool.Metadata, error) {
@@ -530,103 +453,6 @@ func formatByteSize(n int64) string {
 		return fmt.Sprintf("%d MiB", n/mib)
 	}
 	return fmt.Sprintf("%d bytes", n)
-}
-
-func launchGenericWorkers(ctx context.Context, tool string, workers int, computeMode string, compute cloud.Compute, outputs map[string]string, queueURL, bucket string, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) error {
-	logStatus("Launching %d workers (mode: %s)...", workers, computeMode)
-	launchCtx, launchCancel := context.WithTimeout(ctx, launchTimeout)
-	defer launchCancel()
-
-	if cloudKind.IsProviderNative() {
-		ready, err := waitForProviderNativeFleetFunc(launchCtx, cloudKind, outputs, placementPolicy)
-		if err != nil {
-			return err
-		}
-		logStatus("Using provider-native %s fleet (%d eligible workers, policy: %s)", cloudKind.Canonical(), ready, placementPolicy.Summary())
-		return nil
-	}
-
-	containerName := fmt.Sprintf("%s-worker", tool)
-	workerEnv := map[string]string{
-		"QUEUE_URL": queueURL,
-		"S3_BUCKET": bucket,
-		"TOOL_NAME": tool,
-	}
-
-	// Selfhosted only supports RunContainer (no spot instances).
-	useSpot := !cloudKind.IsSelfhostedFamily() && resolveComputeMode(computeMode, workers)
-	if useSpot {
-		ecrURL := outputs["ecr_repo_url"]
-		imageTag, err := awsImageTagFromOutputs(outputs)
-		if err != nil {
-			return err
-		}
-		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
-			ECRRepoURL: ecrURL,
-			ImageTag:   imageTag,
-			Region:     regionFromECR(ecrURL),
-			EnvVars:    workerEnv,
-		})
-		ids, err := compute.RunSpotInstances(launchCtx, cloud.SpotOpts{
-			AMI:             outputs["ami_id"],
-			Count:           workers,
-			SecurityGroups:  []string{outputs["security_group_id"]},
-			SubnetIDs:       splitOutputList(outputs["subnet_ids"]),
-			InstanceProfile: outputs["instance_profile_arn"],
-			UserData:        userData,
-			Tags: map[string]string{
-				"Project": "heph4estus",
-				"Tool":    tool,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("launching spot instances: %w", err)
-		}
-		logStatus("Launched %d spot instances", len(ids))
-	} else {
-		_, err := compute.RunContainer(launchCtx, cloud.ContainerOpts{
-			Cluster:        outputs["ecs_cluster_name"],
-			TaskDefinition: outputs["task_definition_arn"],
-			ContainerName:  containerName,
-			Subnets:        splitOutputList(outputs["subnet_ids"]),
-			SecurityGroups: []string{outputs["security_group_id"]},
-			Env:            workerEnv,
-			Count:          workers,
-		})
-		if err != nil {
-			return fmt.Errorf("launching workers: %w", err)
-		}
-		logStatus("Launched %d workers", workers)
-	}
-	return nil
-}
-
-func pollAndOutput(ctx context.Context, storage cloud.Storage, bucket, tool, jobID string, totalTasks int, unitLabel, format string) error {
-	logStatus("Scanning...")
-	startTime := time.Now()
-	scanPrefix := jobs.ResultPrefix(tool, jobID)
-
-	for {
-		count, err := storage.Count(ctx, bucket, scanPrefix)
-		if err != nil {
-			logStatus("Warning: progress check failed: %v", err)
-		} else {
-			elapsed := time.Since(startTime).Truncate(time.Second)
-			pct := float64(count) / float64(totalTasks) * 100
-			logStatus("Progress: %d/%d %s (%.1f%%) — elapsed %s", count, totalTasks, unitLabel, pct, elapsed)
-
-			if count >= totalTasks {
-				break
-			}
-		}
-		time.Sleep(pollInterval)
-	}
-
-	elapsed := time.Since(startTime).Truncate(time.Second)
-	logStatus("Scan complete: %d %s in %s", totalTasks, unitLabel, elapsed)
-
-	// Output results.
-	return outputGenericResults(ctx, storage, bucket, scanPrefix, format)
 }
 
 func outputGenericResults(ctx context.Context, storage cloud.Storage, bucket, prefix, format string) error {
