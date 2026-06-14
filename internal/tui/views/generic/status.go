@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,26 +12,26 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"heph4estus/internal/cloud"
-	awscloud "heph4estus/internal/cloud/aws"
 	"heph4estus/internal/jobs"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
 	targetlisttool "heph4estus/internal/tools/targetlist"
 	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/tui/core"
+	"heph4estus/internal/tui/statuscore"
 	"heph4estus/internal/worker"
 )
 
-type statusPhase int
+type statusPhase = statuscore.Phase
 
 const (
-	phaseUploading statusPhase = iota // wordlist only: uploading chunks
-	phaseEnqueuing
-	phaseLaunching
-	phaseScanning
-	phaseExporting  // exporting results locally before cleanup
-	phaseDestroying // auto-destroying infrastructure after export
-	phaseComplete
+	phaseUploading  = statuscore.PhaseUploading // wordlist only: uploading chunks
+	phaseEnqueuing  = statuscore.PhaseEnqueuing
+	phaseLaunching  = statuscore.PhaseLaunching
+	phaseScanning   = statuscore.PhaseScanning
+	phaseExporting  = statuscore.PhaseExporting  // exporting results locally before cleanup
+	phaseDestroying = statuscore.PhaseDestroying // auto-destroying infrastructure after export
+	phaseComplete   = statuscore.PhaseComplete
 )
 
 type enqueueProgressMsg struct {
@@ -75,7 +74,7 @@ type uploadCompleteMsg struct {
 	err     error
 }
 
-const SpotThreshold = 50
+const SpotThreshold = statuscore.SpotThreshold
 
 // GenericSubmitter abstracts target enqueueing and worker launching for generic tools.
 type GenericSubmitter interface {
@@ -179,7 +178,7 @@ type StatusModel struct {
 	errMsg               string
 
 	spotInstanceIDs []string
-	rateSamples     []rateSample
+	rateSamples     []statuscore.RateSample
 
 	// Cleanup / export state
 	cleanupWarning string
@@ -187,11 +186,6 @@ type StatusModel struct {
 	help   help.Model
 	width  int
 	height int
-}
-
-type rateSample struct {
-	time  time.Time
-	count int
 }
 
 // NewStatus creates a status view with real cloud clients.
@@ -245,16 +239,12 @@ func NewStatusWithDeps(infra core.InfraOutputs, sub GenericSubmitter, tracker Ge
 }
 
 func (m *StatusModel) trackPhase(phase operator.Phase) {
-	if m.jobTracker != nil && m.infra.JobID != "" {
-		_ = m.jobTracker.UpdatePhase(m.infra.JobID, phase)
-	}
+	statuscore.TrackPhase(m.jobTracker, m.infra.JobID, phase)
 }
 
 // trackFail marks the job as failed if a tracker is available.
 func (m *StatusModel) trackFail(err error) {
-	if m.jobTracker != nil && m.infra.JobID != "" {
-		_ = m.jobTracker.Fail(m.infra.JobID, err)
-	}
+	statuscore.TrackFail(m.jobTracker, m.infra.JobID, err)
 }
 
 func (m *StatusModel) trackCreate() {
@@ -557,27 +547,20 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("Progress check failed: %v", msg.err)
 		} else {
 			m.completed = msg.completed
-			m.rateSamples = append(m.rateSamples, rateSample{time: time.Now(), count: msg.completed})
-			cutoff := time.Now().Add(-30 * time.Second)
-			for len(m.rateSamples) > 1 && m.rateSamples[0].time.Before(cutoff) {
-				m.rateSamples = m.rateSamples[1:]
-			}
+			m.rateSamples = statuscore.UpdateRateSamples(m.rateSamples, msg.completed, time.Now())
 		}
 
 		if m.completed >= m.totalTargets {
 			if m.jobTracker != nil && m.infra.JobID != "" {
 				_ = m.jobTracker.Complete(m.infra.JobID)
 			}
-			if m.shouldExport() {
+			result := statuscore.CompleteScan(m.infra, m.storage)
+			if result.Warning != "" {
+				m.cleanupWarning = result.Warning
+			}
+			if result.Action == statuscore.CompletionExport {
 				m.phase = phaseExporting
 				return m, m.exportResults()
-			}
-			if m.infra.CleanupPolicy == "destroy-after" {
-				if m.infra.Cloud.IsSelfhostedFamily() && !m.infra.Cloud.IsProviderNative() {
-					m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
-				} else if m.infra.OutputDir == "" {
-					m.cleanupWarning = "destroy-after skipped: no output directory configured"
-				}
 			}
 			m.phase = phaseComplete
 			return m, m.navigateToResults()
@@ -585,33 +568,24 @@ func (m *StatusModel) Update(msg tea.Msg) (core.View, tea.Cmd) {
 		return m, m.pollProgress()
 
 	case exportCompleteMsg:
-		if msg.err != nil {
-			m.cleanupWarning = fmt.Sprintf("destroy-after skipped: export failed (%v)", msg.err)
-			m.phase = phaseComplete
-			return m, m.navigateToResults()
+		result := statuscore.CompleteExport(&m.infra, m.destroyer, statuscore.ExportResult{
+			Dir:   msg.dir,
+			Count: msg.count,
+			Err:   msg.err,
+		})
+		if result.Warning != "" {
+			m.cleanupWarning = result.Warning
 		}
-		m.infra.Exported = true
-		m.infra.ExportDir = msg.dir
-		// Auto-destroy if destroy-after policy and destroyer is available.
-		if m.infra.Cloud.IsSelfhostedFamily() && !m.infra.Cloud.IsProviderNative() {
-			m.cleanupWarning = "destroy-after skipped: selfhosted does not support auto-destroy"
-			m.phase = phaseComplete
-			return m, m.navigateToResults()
-		}
-		if m.destroyer != nil {
+		if result.Action == statuscore.CompletionDestroy {
 			m.phase = phaseDestroying
 			return m, m.runAutoDestroy()
 		}
-		m.cleanupWarning = "destroy-after skipped: no terraform directory"
 		m.phase = phaseComplete
 		return m, m.navigateToResults()
 
 	case autoDestroyCompleteMsg:
-		if msg.err != nil {
-			m.infra.DestroyErr = msg.err.Error()
-			m.cleanupWarning = fmt.Sprintf("destroy failed: %v", msg.err)
-		} else {
-			m.infra.Destroyed = true
+		if warning := statuscore.CompleteDestroy(&m.infra, statuscore.DestroyResult{Err: msg.err}); warning != "" {
+			m.cleanupWarning = warning
 		}
 		m.phase = phaseComplete
 		return m, m.navigateToResults()
@@ -630,18 +604,7 @@ func (m *StatusModel) View() string {
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
 	labelStyle := lipgloss.NewStyle().Foreground(core.Gold).Width(14)
 
-	// Lifecycle summary — shown in all phases.
-	infraLabel := "freshly deployed"
-	if m.infra.Reused {
-		infraLabel = "reused"
-	}
-	fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Infra:"), infraLabel)
-	if m.infra.CleanupPolicy != "" {
-		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Cleanup:"), m.infra.CleanupPolicy)
-	}
-	if m.infra.Placement.Summary() != "" {
-		fmt.Fprintf(&b, "  %s%s\n", labelStyle.Render("Placement:"), m.infra.Placement.Summary())
-	}
+	b.WriteString(statuscore.LifecycleSummary(m.infra, labelStyle))
 	b.WriteString("\n")
 
 	unitLabel := "targets"
@@ -733,7 +696,7 @@ func (m *StatusModel) View() string {
 	}
 
 	if m.cleanupWarning != "" {
-		b.WriteString("\n  " + core.MutedStyle.Render(m.cleanupWarning) + "\n")
+		b.WriteString(statuscore.WarningText(m.cleanupWarning))
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n  " + core.ErrorStyle.Render(m.errMsg) + "\n")
@@ -751,180 +714,64 @@ func (m *StatusModel) View() string {
 }
 
 func useSpot(infra core.InfraOutputs) bool {
-	// Selfhosted only supports RunContainer (no spot instances).
-	if infra.Cloud.IsSelfhostedFamily() {
-		return false
-	}
-	switch infra.ComputeMode {
-	case "spot":
-		return true
-	case "fargate":
-		return false
-	default:
-		return infra.WorkerCount >= SpotThreshold
-	}
+	return statuscore.UseSpot(infra)
 }
 
 func (m *StatusModel) launchWorkers() tea.Cmd {
 	infra := m.infra
 	sub := m.submitter
-
-	if useSpot(infra) {
-		return m.launchSpotWorkers()
-	}
-	if infra.Cloud.IsProviderNative() {
-		return func() tea.Msg {
-			launched := infra.FleetWorkerCount
-			if launched <= 0 {
-				launched = infra.WorkerCount
-			}
-			if launched <= 0 {
-				launched = 1
-			}
-			return launchProgressMsg{launched: launched, total: launched}
-		}
-	}
-
 	return func() tea.Msg {
-		_, err := sub.LaunchWorkers(context.Background(), cloud.ContainerOpts{
-			Cluster:        infra.ECSClusterName,
-			TaskDefinition: infra.TaskDefinitionARN,
-			ContainerName:  fmt.Sprintf("%s-worker", infra.ToolName),
-			Subnets:        infra.SubnetIDs,
-			SecurityGroups: []string{infra.SecurityGroupID},
-			Env: map[string]string{
-				"QUEUE_URL":          infra.SQSQueueURL,
-				"S3_BUCKET":          infra.S3BucketName,
-				"TOOL_NAME":          infra.ToolName,
-				"JITTER_MAX_SECONDS": strconv.Itoa(infra.JitterMaxSeconds),
-			},
-			Count: infra.WorkerCount,
+		result := statuscore.Launch(context.Background(), statuscore.LaunchOptions{
+			Infra:         infra,
+			Launcher:      sub,
+			ContainerName: fmt.Sprintf("%s-worker", infra.ToolName),
+			ToolName:      infra.ToolName,
+			WorkerEnv:     statuscore.DefaultWorkerEnv(infra, infra.ToolName),
 		})
-		return launchProgressMsg{launched: infra.WorkerCount, total: infra.WorkerCount, err: err}
-	}
-}
-
-func (m *StatusModel) launchSpotWorkers() tea.Cmd {
-	infra := m.infra
-	sub := m.submitter
-	return func() tea.Msg {
-		imageTag := strings.TrimSpace(infra.ImageTag)
-		if imageTag == "" {
-			return spotLaunchMsg{launchProgressMsg: launchProgressMsg{
-				total: infra.WorkerCount,
-				err:   fmt.Errorf("terraform outputs missing image_tag"),
-			}}
+		msg := launchProgressMsg{launched: result.Launched, total: result.Total, err: result.Err}
+		if result.Spot {
+			return spotLaunchMsg{launchProgressMsg: msg, instanceIDs: result.InstanceIDs}
 		}
-		userData := awscloud.GenerateUserData(awscloud.UserDataOpts{
-			ECRRepoURL: infra.ECRRepoURL,
-			ImageTag:   imageTag,
-			Region:     regionFromECR(infra.ECRRepoURL),
-			EnvVars: map[string]string{
-				"QUEUE_URL":          infra.SQSQueueURL,
-				"S3_BUCKET":          infra.S3BucketName,
-				"TOOL_NAME":          infra.ToolName,
-				"JITTER_MAX_SECONDS": strconv.Itoa(infra.JitterMaxSeconds),
-			},
-		})
-		ids, err := sub.LaunchSpotWorkers(context.Background(), cloud.SpotOpts{
-			AMI:             infra.AMIID,
-			Count:           infra.WorkerCount,
-			SecurityGroups:  []string{infra.SecurityGroupID},
-			SubnetIDs:       infra.SubnetIDs,
-			InstanceProfile: infra.InstanceProfileARN,
-			UserData:        userData,
-			Tags: map[string]string{
-				"Project": "heph4estus",
-				"Tool":    infra.ToolName,
-			},
-		})
-		msg := launchProgressMsg{launched: len(ids), total: infra.WorkerCount, err: err}
-		return spotLaunchMsg{launchProgressMsg: msg, instanceIDs: ids}
+		return msg
 	}
-}
-
-func (m *StatusModel) shouldExport() bool {
-	return m.infra.CleanupPolicy == "destroy-after" && m.infra.OutputDir != "" && m.storage != nil
 }
 
 func (m *StatusModel) exportResults() tea.Cmd {
 	storage := m.storage
 	infra := m.infra
 	return func() tea.Msg {
-		result, err := operator.ExportJob(
-			context.Background(), storage,
-			infra.S3BucketName, infra.ToolName, infra.JobID, infra.OutputDir,
-		)
-		if err != nil {
-			return exportCompleteMsg{err: err}
-		}
-		return exportCompleteMsg{dir: result.Dir, count: result.ResultCount + result.ArtifactCount}
+		result := statuscore.ExportResults(context.Background(), storage, infra, infra.ToolName)
+		return exportCompleteMsg{dir: result.Dir, count: result.Count, err: result.Err}
 	}
 }
 
 func (m *StatusModel) runAutoDestroy() tea.Cmd {
 	d := m.destroyer
 	return func() tea.Msg {
-		err := d.Destroy(context.Background())
-		return autoDestroyCompleteMsg{err: err}
+		result := statuscore.RunAutoDestroy(context.Background(), d)
+		return autoDestroyCompleteMsg{err: result.Err}
 	}
 }
 
 func (m *StatusModel) navigateToResults() tea.Cmd {
-	infra := m.infra
-	return func() tea.Msg {
-		return core.NavigateWithDataMsg{
-			Target: core.ViewGenericResults,
-			Data:   infra,
-		}
-	}
+	return statuscore.NavigateToResults(core.ViewGenericResults, m.infra)
 }
 
 func (m *StatusModel) pollProgress() tea.Cmd {
 	infra := m.infra
 	tracker := m.tracker
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		count, err := tracker.CountResults(context.Background(), infra.S3BucketName, jobs.ResultPrefix(infra.ToolName, infra.JobID))
-		return scanProgressMsg{completed: count, err: err}
+	return tea.Tick(statuscore.PollInterval, func(time.Time) tea.Msg {
+		result := statuscore.PollProgress(context.Background(), tracker, infra, infra.ToolName)
+		return scanProgressMsg{completed: result.Completed, err: result.Err}
 	})
 }
 
 func (m *StatusModel) calcRateETA() (targetsPerMin float64, remaining time.Duration) {
-	if len(m.rateSamples) < 2 {
-		return 0, 0
-	}
-	first := m.rateSamples[0]
-	last := m.rateSamples[len(m.rateSamples)-1]
-	dt := last.time.Sub(first.time).Minutes()
-	if dt <= 0 {
-		return 0, 0
-	}
-	dc := float64(last.count - first.count)
-	rate := dc / dt
-	if rate <= 0 {
-		return 0, 0
-	}
-	left := float64(m.totalTargets - m.completed)
-	eta := time.Duration(left/rate*60) * time.Second
-	return rate, eta
+	return statuscore.CalcRateETA(m.rateSamples, m.totalTargets, m.completed)
 }
 
 func progressBar(current, total, width int) string {
-	if total <= 0 {
-		return strings.Repeat("░", width)
-	}
-	filled := min(current*width/total, width)
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
-}
-
-func regionFromECR(url string) string {
-	parts := strings.Split(url, ".")
-	for i, p := range parts {
-		if p == "ecr" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return "us-east-1"
+	return statuscore.ProgressBar(current, total, width)
 }
 
 // parseTargetLines splits content into non-empty, non-comment target lines.
