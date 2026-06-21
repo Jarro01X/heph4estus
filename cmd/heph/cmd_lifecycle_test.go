@@ -16,7 +16,10 @@ import (
 	"heph4estus/internal/infra"
 	"heph4estus/internal/modules"
 	"heph4estus/internal/operator"
+	"heph4estus/internal/scanapp"
 	nmaptool "heph4estus/internal/tools/nmap"
+	targetlisttool "heph4estus/internal/tools/targetlist"
+	wordlisttool "heph4estus/internal/tools/wordlist"
 	"heph4estus/internal/worker"
 )
 
@@ -133,6 +136,63 @@ func targetListModule(fileInput bool) *modules.ModuleDefinition {
 		DefaultMemory: 512,
 		Timeout:       "1m",
 	}
+}
+
+func preflightTargetListFile(path string, workers int) (*targetlisttool.Metadata, error) {
+	return scanapp.PreflightTargetListFile(path, workers)
+}
+
+func preflightWordlistFile(tool, path, runtimeTarget, options string, chunks, workers int) (*wordlisttool.Metadata, error) {
+	return scanapp.PreflightWordlistFile(tool, path, runtimeTarget, options, chunks, workers)
+}
+
+func runTargetListScan(ctx context.Context, tool, jobID, inputFile string, preflight *targetlisttool.Metadata, mod *modules.ModuleDefinition, options string, workers int, computeMode, format string, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, outputs infra.TerraformOutputs, bucket, queueURL string, tracker *operator.Tracker, cloudKind cloud.Kind, placementPolicy fleet.PlacementPolicy) (bool, error) {
+	return scanapp.RunTargetListScan(ctx, scanapp.TargetListOptions{
+		ToolName:    tool,
+		JobID:       jobID,
+		InputFile:   inputFile,
+		Preflight:   preflight,
+		Module:      mod,
+		ToolOptions: options,
+		Workers:     workers,
+		ComputeMode: computeMode,
+		Format:      format,
+		Queue:       queue,
+		Storage:     storage,
+		Compute:     compute,
+		Outputs:     outputs,
+		Bucket:      bucket,
+		QueueURL:    queueURL,
+		Tracker:     tracker,
+		CloudKind:   cloudKind,
+		Placement:   placementPolicy,
+		Statusf:     logStatus,
+		FleetWaiter: waitForProviderNativeFleetFunc,
+	})
+}
+
+func runNmapScanWithDeps(ctx context.Context, tasks []nmaptool.ScanTask, workers int, computeMode string, jitterMax int, format string, outputs infra.TerraformOutputs, queue cloud.Queue, storage cloud.Storage, compute cloud.Compute, tracker *operator.Tracker, jobID string, placementPolicy fleet.PlacementPolicy, cloudKind ...cloud.Kind) (bool, error) {
+	kind := cloud.KindAWS
+	if len(cloudKind) > 0 {
+		kind = cloudKind[0]
+	}
+	return scanapp.RunNmapScan(ctx, scanapp.NmapScanOptions{
+		Tasks:       tasks,
+		Workers:     workers,
+		ComputeMode: computeMode,
+		JitterMax:   jitterMax,
+		Format:      format,
+		Outputs:     outputs,
+		Queue:       queue,
+		Storage:     storage,
+		Compute:     compute,
+		Tracker:     tracker,
+		JobID:       jobID,
+		Placement:   placementPolicy,
+		CloudKind:   kind,
+		Statusf:     logStatus,
+		FleetWaiter: waitForProviderNativeFleetFunc,
+	})
 }
 
 func TestPreflightTargetListFileRejectsEmptyTargets(t *testing.T) {
