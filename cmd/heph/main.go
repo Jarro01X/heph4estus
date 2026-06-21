@@ -71,17 +71,6 @@ func run(args []string, log logger.Logger) error {
 	}
 }
 
-// newTracker returns a job tracker backed by the default store.
-// If the config directory is unavailable, returns a noop tracker
-// so CLI commands still work without job persistence.
-func newTracker() *operator.Tracker {
-	store, err := operator.NewJobStore()
-	if err != nil {
-		return operator.NoopTracker()
-	}
-	return operator.NewTracker(store)
-}
-
 func main() {
 	log := logger.NewSimpleLogger()
 
